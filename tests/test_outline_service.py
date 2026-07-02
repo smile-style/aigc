@@ -38,8 +38,21 @@ def test_generate_outlines_returns_six_candidates():
 
 
 def test_validate_outlines_rejects_wrong_count():
-    with pytest.raises(ValueError, match="6"):
+    with pytest.raises(ValueError, match="Expected 6 outlines, got 1"):
         validate_outlines({"outlines": [make_outline(1)]})
+
+
+@pytest.mark.parametrize("payload", [None, {"outlines": "not-a-list"}])
+def test_validate_outlines_rejects_missing_or_non_list_payload(payload):
+    with pytest.raises(ValueError, match="outlines list"):
+        validate_outlines(payload)
+
+
+def test_validate_outlines_rejects_non_object_outline():
+    outlines = [123] + [make_outline(i) for i in range(2, 7)]
+
+    with pytest.raises(ValueError, match="object"):
+        validate_outlines({"outlines": outlines})
 
 
 def test_validate_outlines_rejects_missing_field():

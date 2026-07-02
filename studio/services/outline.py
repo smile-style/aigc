@@ -43,7 +43,7 @@ def validate_outlines(payload):
     if not isinstance(outlines, list):
         raise ValueError("Model response must include an outlines list")
     if len(outlines) != OUTLINE_CANDIDATE_COUNT:
-        raise ValueError(f"Expected {OUTLINE_CANDIDATE_COUNT} outlines")
+        raise ValueError(f"Expected {OUTLINE_CANDIDATE_COUNT} outlines, got {len(outlines)}")
 
     seen_ids = set()
     for index, outline in enumerate(outlines, start=1):
