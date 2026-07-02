@@ -38,7 +38,11 @@ class FakeClient:
         return self.response
 
 
-def test_config_from_env_requires_all_values():
+def test_config_from_env_requires_all_values(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "https://env.test/v1")
+    monkeypatch.setenv("LLM_API_KEY", "env-key")
+    monkeypatch.setenv("LLM_MODEL", "env-model")
+
     with pytest.raises(LLMConfigurationError):
         LLMConfig.from_env({})
 

@@ -27,7 +27,8 @@ class LLMConfig:
 
     @classmethod
     def from_env(cls, environ=None):
-        environ = environ or os.environ
+        if environ is None:
+            environ = os.environ
         base_url = environ.get("LLM_BASE_URL", "").strip()
         api_key = environ.get("LLM_API_KEY", "").strip()
         model = environ.get("LLM_MODEL", "").strip()
