@@ -9,6 +9,7 @@ REQUIRED_OUTLINE_FIELDS = {
     "hook",
     "arc_summary",
 }
+REQUIRED_OUTLINE_FIELD_LIST = ", ".join(sorted(REQUIRED_OUTLINE_FIELDS))
 
 
 def generate_outlines(provider, genre):
@@ -27,7 +28,7 @@ def generate_outlines(provider, genre):
                     f"题材：{genre}\n"
                     f"目标：生成{OUTLINE_CANDIDATE_COUNT}个AI漫剧大纲候选。\n"
                     f"固定规格：{EPISODE_COUNT}集，每集{EPISODE_DURATION_MINUTES}分钟。\n"
-                    "每个候选必须包含 id、title、core_premise、protagonist、hook、arc_summary。"
+                    f"每个候选必须包含 {REQUIRED_OUTLINE_FIELD_LIST}。"
                     "核心设定由你随机生成，要适合短视频漫剧。"
                 ),
             },
@@ -44,10 +45,20 @@ def validate_outlines(payload):
     if len(outlines) != OUTLINE_CANDIDATE_COUNT:
         raise ValueError(f"Expected {OUTLINE_CANDIDATE_COUNT} outlines")
 
+    seen_ids = set()
     for index, outline in enumerate(outlines, start=1):
         if not isinstance(outline, dict):
             raise ValueError(f"Outline {index} must be an object")
         missing = REQUIRED_OUTLINE_FIELDS - set(outline)
         if missing:
             raise ValueError(f"Outline {index} missing fields: {', '.join(sorted(missing))}")
+        for field in sorted(REQUIRED_OUTLINE_FIELDS):
+            value = outline[field]
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"Outline {index} field {field} must be a non-empty string")
+
+        outline_id = outline["id"]
+        if outline_id in seen_ids:
+            raise ValueError(f"Outline {index} has duplicate id: {outline_id}")
+        seen_ids.add(outline_id)
     return outlines

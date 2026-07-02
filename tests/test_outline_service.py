@@ -48,3 +48,29 @@ def test_validate_outlines_rejects_missing_field():
 
     with pytest.raises(ValueError, match="hook"):
         validate_outlines({"outlines": [bad_outline for _ in range(6)]})
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_validate_outlines_rejects_blank_required_field(value):
+    outlines = [make_outline(i) for i in range(1, 7)]
+    outlines[0]["title"] = value
+
+    with pytest.raises(ValueError, match="title"):
+        validate_outlines({"outlines": outlines})
+
+
+@pytest.mark.parametrize("value", [123, None])
+def test_validate_outlines_rejects_non_string_required_field(value):
+    outlines = [make_outline(i) for i in range(1, 7)]
+    outlines[0]["hook"] = value
+
+    with pytest.raises(ValueError, match="hook"):
+        validate_outlines({"outlines": outlines})
+
+
+def test_validate_outlines_rejects_duplicate_id():
+    outlines = [make_outline(i) for i in range(1, 7)]
+    outlines[1]["id"] = outlines[0]["id"]
+
+    with pytest.raises(ValueError, match="duplicate|id"):
+        validate_outlines({"outlines": outlines})
