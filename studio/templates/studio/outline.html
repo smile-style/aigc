@@ -1,0 +1,16 @@
+{% extends "studio/base.html" %}
+
+{% block content %}
+<h1>AI漫剧生成工具</h1>
+<form method="post">
+  {% csrf_token %}
+  <label for="genre">题材/类型</label>
+  <select id="genre" name="genre">
+    {% for genre in genres %}
+      <option value="{{ genre }}">{{ genre }}</option>
+    {% endfor %}
+  </select>
+  <p>目标集数：{{ episode_count }} 集</p>
+  <p>每集时长：{{ episode_duration_minutes }} 分钟</p>
+</form>
+{% endblock %}

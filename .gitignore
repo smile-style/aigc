@@ -1,1 +1,9 @@
 .worktrees/
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+db.sqlite3
+workspace/*.json
