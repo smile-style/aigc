@@ -1,4 +1,6 @@
 import json
+import re
+import uuid
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -6,6 +8,12 @@ from zoneinfo import ZoneInfo
 from django.conf import settings
 
 from studio.constants import EPISODE_COUNT, EPISODE_DURATION_MINUTES, GENRES
+
+WORKSPACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+class WorkspaceCorruptError(Exception):
+    pass
 
 
 class JsonWorkspaceRepository:
@@ -19,7 +27,7 @@ class JsonWorkspaceRepository:
 
         now = self._now()
         workspace = {
-            "id": workspace_id or now.replace(":", "").replace("-", "").replace("+", "")[:15],
+            "id": workspace_id or uuid.uuid4().hex,
             "genre": genre,
             "episode_count": EPISODE_COUNT,
             "episode_duration_minutes": EPISODE_DURATION_MINUTES,
@@ -37,15 +45,25 @@ class JsonWorkspaceRepository:
         path = self.path_for(workspace_id)
         if not path.exists():
             raise FileNotFoundError(f"Workspace not found: {workspace_id}")
-        return json.loads(path.read_text(encoding="utf-8"))
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise WorkspaceCorruptError(f"Workspace corrupt: {workspace_id}") from exc
 
     def save_workspace(self, workspace):
         workspace = dict(workspace)
         workspace["updated_at"] = self._now()
-        self.path_for(workspace["id"]).write_text(
-            json.dumps(workspace, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        path = self.path_for(workspace["id"])
+        temp_path = path.with_name(f"{path.stem}.{uuid.uuid4().hex}.tmp")
+        try:
+            temp_path.write_text(
+                json.dumps(workspace, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            temp_path.replace(path)
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
         return workspace
 
     def update_workspace(self, workspace_id, **fields):
@@ -54,8 +72,10 @@ class JsonWorkspaceRepository:
         return self.save_workspace(workspace)
 
     def path_for(self, workspace_id):
-        safe_id = str(workspace_id).replace("/", "").replace("\\", "")
-        return self.workspace_dir / f"{safe_id}.json"
+        workspace_id = str(workspace_id)
+        if not WORKSPACE_ID_PATTERN.fullmatch(workspace_id):
+            raise ValueError(f"Invalid workspace id: {workspace_id}")
+        return self.workspace_dir / f"{workspace_id}.json"
 
     @staticmethod
     def _now():
