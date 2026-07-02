@@ -53,8 +53,19 @@ class LLMProvider:
         self.timeout = timeout
 
     @classmethod
-    def from_env(cls):
-        return cls(LLMConfig.from_env())
+    def from_env(cls, environ=None):
+        return cls(LLMConfig.from_env(environ))
+
+    def close(self):
+        close = getattr(self.client, "close", None)
+        if close is not None:
+            close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.close()
 
     def generate_text(self, messages, temperature=None):
         payload = {
@@ -79,7 +90,7 @@ class LLMProvider:
             return data["choices"][0]["message"]["content"]
         except httpx.HTTPError as exc:
             raise LLMAPIError(str(exc)) from exc
-        except (KeyError, IndexError, TypeError) as exc:
+        except (json.JSONDecodeError, ValueError, KeyError, IndexError, TypeError) as exc:
             raise LLMAPIError("Model response did not include message content") from exc
 
     def generate_json(self, messages, temperature=None):
