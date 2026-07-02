@@ -48,10 +48,46 @@ def test_generate_script_returns_plan_and_episode_1_script():
 
     payload = generate_script(provider, make_outline())
 
+    prompt = provider.messages[-1]["content"]
     assert len(payload["script_plan"]) == 60
     assert payload["episode_1_script"] == "第1集完整剧本样稿"
-    assert "爆款短剧标题" in provider.messages[-1]["content"]
+    assert "爆款短剧标题" in prompt
+    assert "60" in prompt
+    assert "2" in prompt
+    assert "episode_1_script" in prompt
+    assert "title" in prompt
+    assert "summary" in prompt
+    assert "key_conflict" in prompt
+    assert "cliffhanger" in prompt
+    assert "JSON" in provider.messages[0]["content"]
     assert provider.temperature == 0.7
+
+
+@pytest.mark.parametrize("outline", [None, [], "outline"])
+def test_generate_script_rejects_non_dict_outline(outline):
+    provider = FakeProvider(make_payload())
+
+    with pytest.raises(ValueError, match="outline|object|dict"):
+        generate_script(provider, outline)
+
+
+def test_generate_script_rejects_outline_missing_field():
+    outline = make_outline()
+    del outline["hook"]
+    provider = FakeProvider(make_payload())
+
+    with pytest.raises(ValueError, match="hook"):
+        generate_script(provider, outline)
+
+
+@pytest.mark.parametrize("value", ["", "   ", None, 123])
+def test_generate_script_rejects_invalid_outline_text_field(value):
+    outline = make_outline()
+    outline["title"] = value
+    provider = FakeProvider(make_payload())
+
+    with pytest.raises(ValueError, match="title"):
+        generate_script(provider, outline)
 
 
 def test_validate_script_payload_rejects_wrong_episode_count():
@@ -110,6 +146,26 @@ def test_validate_script_payload_rejects_missing_episode_field():
                 "episode_1_script": "第1集完整剧本样稿",
             }
         )
+
+
+@pytest.mark.parametrize("value", [1.0, True])
+def test_validate_script_payload_rejects_non_int_episode_number(value):
+    script_plan = [make_episode(i) for i in range(1, 61)]
+    script_plan[0]["episode"] = value
+
+    with pytest.raises(ValueError, match="Episode 1 episode|number"):
+        validate_script_payload(
+            {
+                "script_plan": script_plan,
+                "episode_1_script": "第1集完整剧本样稿",
+            }
+        )
+
+
+def test_validate_script_payload_accepts_int_episode_number():
+    payload = validate_script_payload(make_payload())
+
+    assert payload["script_plan"][0]["episode"] == 1
 
 
 def test_validate_script_payload_rejects_wrong_episode_number():

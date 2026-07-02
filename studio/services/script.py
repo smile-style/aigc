@@ -2,12 +2,18 @@ from studio.constants import EPISODE_COUNT, EPISODE_DURATION_MINUTES
 
 
 REQUIRED_EPISODE_FIELDS = {"episode", "title", "summary", "key_conflict", "cliffhanger"}
-REQUIRED_EPISODE_FIELD_LIST = ", ".join(
-    ["episode", "title", "summary", "key_conflict", "cliffhanger"]
-)
+REQUIRED_EPISODE_FIELD_LIST = ", ".join(sorted(REQUIRED_EPISODE_FIELDS))
+REQUIRED_OUTLINE_FIELDS = {
+    "title",
+    "core_premise",
+    "protagonist",
+    "hook",
+    "arc_summary",
+}
 
 
 def generate_script(provider, outline):
+    validated_outline = validate_outline(outline)
     payload = provider.generate_json(
         [
             {
@@ -20,16 +26,16 @@ def generate_script(provider, outline):
             {
                 "role": "user",
                 "content": (
-                    f"请基于以下大纲生成完整分集规划和第1集完整剧本样稿。\n"
-                    f"标题：{outline['title']}\n"
-                    f"核心设定：{outline['core_premise']}\n"
-                    f"主角：{outline['protagonist']}\n"
-                    f"钩子：{outline['hook']}\n"
-                    f"主线梗概：{outline['arc_summary']}\n"
+                    "请基于以下大纲生成完整分集规划和第1集完整剧本样稿。\n"
+                    f"标题：{validated_outline['title']}\n"
+                    f"核心设定：{validated_outline['core_premise']}\n"
+                    f"主角：{validated_outline['protagonist']}\n"
+                    f"钩子：{validated_outline['hook']}\n"
+                    f"主线梗概：{validated_outline['arc_summary']}\n"
                     f"固定规格：共{EPISODE_COUNT}集，每集{EPISODE_DURATION_MINUTES}分钟。\n"
                     f"script_plan 必须包含 {EPISODE_COUNT} 条，每条都必须包含字段："
                     f"{REQUIRED_EPISODE_FIELD_LIST}。\n"
-                    "episode 字段必须按 1 到 60 递增。"
+                    f"episode 字段必须按 1 到 {EPISODE_COUNT} 递增，且必须是整数。\n"
                     "同时输出第1集完整剧本样稿 episode_1_script，内容要完整、可直接用于创作。"
                 ),
             },
@@ -37,6 +43,24 @@ def generate_script(provider, outline):
         temperature=0.7,
     )
     return validate_script_payload(payload)
+
+
+def validate_outline(outline):
+    if not isinstance(outline, dict):
+        raise ValueError("Outline must be an object")
+
+    missing = REQUIRED_OUTLINE_FIELDS - set(outline)
+    if missing:
+        raise ValueError(f"Outline missing fields: {', '.join(sorted(missing))}")
+
+    validated_outline = {}
+    for field in sorted(REQUIRED_OUTLINE_FIELDS):
+        value = outline[field]
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"Outline field {field} must be a non-empty string")
+        validated_outline[field] = value
+
+    return validated_outline
 
 
 def validate_script_payload(payload):
@@ -63,7 +87,10 @@ def validate_script_payload(payload):
         if missing:
             raise ValueError(f"Episode {index} missing fields: {', '.join(sorted(missing))}")
 
-        if episode["episode"] != index:
+        episode_number = episode["episode"]
+        if not isinstance(episode_number, int) or isinstance(episode_number, bool):
+            raise ValueError(f"Episode {index} episode must be an integer number")
+        if episode_number != index:
             raise ValueError(f"Episode {index} field episode must equal {index}")
 
         for field in sorted(REQUIRED_EPISODE_FIELDS - {"episode"}):
