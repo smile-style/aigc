@@ -1,0 +1,110 @@
+{% extends "studio/base.html" %}
+
+{% block title %}剧本工作台 | AI漫剧生成工具{% endblock %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">工作流 2 / 3</p>
+    <h1>剧本工作台</h1>
+    <p class="page-copy">确认大纲后，生成 60 集剧本规划和第一集样稿。</p>
+  </div>
+</section>
+
+<section class="panel stack-lg">
+  <div class="section-heading">
+    <div>
+      <p class="eyebrow">已选大纲</p>
+      <h2>当前加工对象</h2>
+    </div>
+  </div>
+  {% if selected_outline %}
+    <div class="detail-panel">
+      <h3>{{ selected_outline.title }}</h3>
+      <p class="muted">主角：{{ selected_outline.protagonist }}</p>
+      <dl class="detail-list">
+        <div>
+          <dt>核心设定</dt>
+          <dd>{{ selected_outline.core_premise }}</dd>
+        </div>
+        <div>
+          <dt>钩子</dt>
+          <dd>{{ selected_outline.hook }}</dd>
+        </div>
+        <div>
+          <dt>长线梗概</dt>
+          <dd>{{ selected_outline.arc_summary }}</dd>
+        </div>
+      </dl>
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <p>当前工作区还没有选中的大纲，请返回上一页先选择候选方案。</p>
+    </div>
+  {% endif %}
+  {% if workspace %}
+    <form method="post" action="{% url 'studio:generate_script' workspace.id %}" data-submit-guard>
+      {% csrf_token %}
+      <div class="actions">
+        <button type="submit" class="button button-primary" data-loading-text="生成中...">生成剧本</button>
+      </div>
+    </form>
+  {% endif %}
+</section>
+
+<section class="panel stack-lg">
+  <div class="section-heading section-heading-split">
+    <div>
+      <p class="eyebrow">分集规划</p>
+      <h2>60 集节奏表</h2>
+    </div>
+    {% if workspace and workspace.script_plan %}
+      <a class="button button-secondary" href="{% url 'studio:storyboard' workspace.id %}">进入分镜页</a>
+    {% endif %}
+  </div>
+  {% if workspace and workspace.script_plan %}
+    <div class="card-list">
+      {% for episode in workspace.script_plan %}
+        <article class="item-card">
+          <div class="item-kicker">第 {{ episode.episode }} 集</div>
+          <h3>{{ episode.title }}</h3>
+          <dl class="detail-list">
+            <div>
+              <dt>摘要</dt>
+              <dd>{{ episode.summary }}</dd>
+            </div>
+            <div>
+              <dt>冲突</dt>
+              <dd>{{ episode.key_conflict }}</dd>
+            </div>
+            <div>
+              <dt>悬念</dt>
+              <dd>{{ episode.cliffhanger }}</dd>
+            </div>
+          </dl>
+        </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <p>还没有剧本规划，点击上方按钮生成 60 集结构。</p>
+    </div>
+  {% endif %}
+</section>
+
+<section class="panel stack-lg">
+  <div class="section-heading">
+    <div>
+      <p class="eyebrow">第一集样稿</p>
+      <h2>可直接继续加工</h2>
+    </div>
+  </div>
+  {% if workspace and workspace.episode_1_script %}
+    <pre class="script-block">{{ workspace.episode_1_script }}</pre>
+  {% else %}
+    <div class="empty-state">
+      <p>生成剧本后，这里会显示第一集完整样稿。</p>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

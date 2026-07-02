@@ -5,10 +5,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}AI漫剧生成工具{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'studio/app.css' %}">
+  <script src="{% static 'studio/app.js' %}" defer></script>
 </head>
 <body>
-  <main>
-    {% block content %}{% endblock %}
+  <main class="app-shell">
+    <div class="page-shell">
+      {% if error %}
+        <div class="alert" role="alert">{{ error }}</div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </div>
   </main>
 </body>
 </html>

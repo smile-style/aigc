@@ -1,0 +1,76 @@
+{% extends "studio/base.html" %}
+
+{% block title %}分镜工作台 | AI漫剧生成工具{% endblock %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">工作流 3 / 3</p>
+    <h1>分镜工作台</h1>
+    <p class="page-copy">基于第一集剧本，继续生成可投喂图像和视频模型的分镜 Prompt。</p>
+  </div>
+</section>
+
+<section class="panel stack-lg">
+  {% if workspace %}
+    <form method="post" action="{% url 'studio:generate_storyboard' workspace.id %}" data-submit-guard>
+      {% csrf_token %}
+      <div class="actions">
+        <button type="submit" class="button button-primary" data-loading-text="生成中...">生成分镜 Prompt</button>
+      </div>
+    </form>
+  {% endif %}
+</section>
+
+<section class="panel stack-lg">
+  <div class="section-heading">
+    <div>
+      <p class="eyebrow">镜头清单</p>
+      <h2>分镜 Prompt 结果</h2>
+    </div>
+  </div>
+  {% if workspace and workspace.storyboard_prompts %}
+    <div class="card-list">
+      {% for shot in workspace.storyboard_prompts %}
+        <article class="item-card">
+          <div class="item-kicker">镜头 {{ shot.shot_number }}</div>
+          <dl class="detail-list">
+            <div>
+              <dt>时长</dt>
+              <dd>{{ shot.duration }}</dd>
+            </div>
+            <div>
+              <dt>画面描述</dt>
+              <dd>{{ shot.visual_description }}</dd>
+            </div>
+            <div>
+              <dt>角色动作</dt>
+              <dd>{{ shot.character_action }}</dd>
+            </div>
+            <div>
+              <dt>台词 / 旁白</dt>
+              <dd>{{ shot.dialogue_or_narration }}</dd>
+            </div>
+            <div>
+              <dt>镜头语言</dt>
+              <dd>{{ shot.camera_language }}</dd>
+            </div>
+            <div>
+              <dt>图片 Prompt</dt>
+              <dd>{{ shot.image_prompt }}</dd>
+            </div>
+            <div>
+              <dt>视频 Prompt</dt>
+              <dd>{{ shot.video_prompt }}</dd>
+            </div>
+          </dl>
+        </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <p>还没有分镜结果，先生成第一集剧本，再继续生成 Prompt。</p>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

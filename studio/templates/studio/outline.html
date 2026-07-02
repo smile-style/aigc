@@ -1,16 +1,95 @@
 {% extends "studio/base.html" %}
 
+{% block title %}大纲工作台 | AI漫剧生成工具{% endblock %}
+
 {% block content %}
-<h1>AI漫剧生成工具</h1>
-<form method="post">
-  {% csrf_token %}
-  <label for="genre">题材/类型</label>
-  <select id="genre" name="genre">
-    {% for genre in genres %}
-      <option value="{{ genre }}">{{ genre }}</option>
-    {% endfor %}
-  </select>
-  <p>目标集数：{{ episode_count }} 集</p>
-  <p>每集时长：{{ episode_duration_minutes }} 分钟</p>
-</form>
+<section class="page-header">
+  <div>
+    <p class="eyebrow">工作流 1 / 3</p>
+    <h1>AI漫剧生成工具</h1>
+    <p class="page-copy">先生成候选大纲，再挑一个进入剧本加工。</p>
+  </div>
+</section>
+
+<section class="panel stack-lg">
+  <form class="stack-lg" method="post" action="{% url 'studio:generate_outlines' %}" data-submit-guard>
+    {% csrf_token %}
+    <div class="form-grid">
+      <label class="field" for="genre">
+        <span class="field-label">题材类型</span>
+        <select id="genre" name="genre">
+          {% for genre in genres %}
+            <option value="{{ genre }}" {% if genre == selected_genre %}selected{% endif %}>{{ genre }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    <div class="meta-grid">
+      <div class="meta-item">
+        <span class="meta-label">目标集数</span>
+        <strong>{{ episode_count }} 集</strong>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">单集时长</span>
+        <strong>{{ episode_duration_minutes }} 分钟</strong>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">AI随机核心设定</span>
+        <strong>开启</strong>
+      </div>
+    </div>
+    <div class="actions">
+      <button type="submit" class="button button-primary" data-loading-text="刷新中...">刷新大纲</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel stack-lg">
+  <div class="section-heading">
+    <div>
+      <p class="eyebrow">候选大纲</p>
+      <h2>选择一个进入剧本阶段</h2>
+    </div>
+  </div>
+  {% if workspace and workspace.outlines %}
+    <form class="stack-lg" method="post" action="{% url 'studio:select_outline' %}" data-submit-guard>
+      {% csrf_token %}
+      <input type="hidden" name="workspace_id" value="{{ workspace.id }}">
+      <div class="card-list">
+        {% for outline in workspace.outlines %}
+          <label class="choice-card">
+            <div class="choice-head">
+              <input type="radio" name="outline_id" value="{{ outline.id }}" {% if outline.id == workspace.selected_outline_id %}checked{% endif %}>
+              <div>
+                <h3>{{ outline.title }}</h3>
+                <p class="muted">主角：{{ outline.protagonist }}</p>
+              </div>
+            </div>
+            <dl class="detail-list">
+              <div>
+                <dt>核心设定</dt>
+                <dd>{{ outline.core_premise }}</dd>
+              </div>
+              <div>
+                <dt>钩子</dt>
+                <dd>{{ outline.hook }}</dd>
+              </div>
+              <div>
+                <dt>长线梗概</dt>
+                <dd>{{ outline.arc_summary }}</dd>
+              </div>
+            </dl>
+          </label>
+        {% endfor %}
+      </div>
+      <div class="actions">
+        <button type="submit" class="button button-primary" data-loading-text="加工中...">AI加工</button>
+      </div>
+    </form>
+  {% else %}
+    <div class="empty-state">
+      <p>还没有候选大纲，先选择题材并刷新一轮。</p>
+    </div>
+  {% endif %}
+</section>
 {% endblock %}
