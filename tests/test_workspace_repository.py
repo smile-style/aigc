@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from studio.constants import GENRES
 from studio.repositories.workspace import JsonWorkspaceRepository, WorkspaceCorruptError
 
 
@@ -36,6 +37,31 @@ def test_create_workspace_generates_unique_ids_in_same_second(tmp_path, monkeypa
     assert first["id"] != second["id"]
     assert (tmp_path / f"{first['id']}.json").exists()
     assert (tmp_path / f"{second['id']}.json").exists()
+
+
+def test_replace_current_outline_set_overwrites_previous_outlines(tmp_path):
+    repo = JsonWorkspaceRepository(tmp_path)
+    first_outlines = [{"id": f"old-{index}", "title": "old"} for index in range(6)]
+    second_outlines = [{"id": f"new-{index}", "title": "new"} for index in range(6)]
+
+    repo.replace_current_outline_set(GENRES[0], first_outlines)
+    repo.update_workspace(
+        "current",
+        selected_outline_id="old-1",
+        script_plan=[{"episode": 1}],
+        episode_1_script="old script",
+        storyboard_prompts=[{"shot_number": 1}],
+    )
+    saved = repo.replace_current_outline_set(GENRES[1], second_outlines)
+
+    assert saved["id"] == "current"
+    assert saved["genre"] == GENRES[1]
+    assert saved["outlines"] == second_outlines
+    assert saved["selected_outline_id"] is None
+    assert saved["script_plan"] == []
+    assert saved["episode_1_script"] == ""
+    assert saved["storyboard_prompts"] == []
+    assert sorted(path.name for path in tmp_path.glob("*.json")) == ["current.json"]
 
 
 def test_update_workspace_preserves_unrelated_fields(tmp_path):

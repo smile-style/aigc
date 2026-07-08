@@ -1,0 +1,2 @@
+-- Add project-specific MySQL initialization SQL here.
+-- The default application database and user are created from deploy/.env.

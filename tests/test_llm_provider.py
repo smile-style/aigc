@@ -1,4 +1,5 @@
 import json
+import logging
 
 import httpx
 import pytest
@@ -17,6 +18,8 @@ class FakeResponse:
         self.status_code = status_code
         self._payload = payload or {}
         self.text = text or json.dumps(self._payload)
+        self.content = self.text.encode("utf-8")
+        self.headers = {"content-type": "application/json"}
 
     def json(self):
         return self._payload
@@ -45,6 +48,20 @@ class ClosingFakeClient(FakeClient):
 
     def close(self):
         self.closed = True
+
+
+class FakeStreamingResponse(FakeResponse):
+    text = (
+        'data: {"choices":[{"delta":{"content":"hello"}}]}'
+        '\n\n'
+        'data: {"choices":[{"delta":{"content":" world"}}]}'
+        '\n\n'
+        'data: [DONE]'
+    )
+
+    def __init__(self):
+        super().__init__(payload={}, text=self.text)
+        self.headers = {"content-type": "text/event-stream"}
 
 
 class MalformedJSONResponse(FakeResponse):
@@ -77,6 +94,56 @@ def test_provider_from_env_uses_supplied_mapping():
     )
 
 
+def test_provider_default_client_ignores_environment_proxy(monkeypatch):
+    created = {}
+
+    class CapturingClient:
+        def __init__(self, **kwargs):
+            created.update(kwargs)
+
+    monkeypatch.setattr(httpx, "Client", CapturingClient)
+
+    provider = LLMProvider(LLMConfig(base_url="https://example.test/v1", api_key="key", model="model-a"))
+
+    assert isinstance(provider.client, CapturingClient)
+    assert created["trust_env"] is False
+
+
+def test_provider_default_timeout_is_long_for_generation(monkeypatch):
+    monkeypatch.delenv("LLM_TIMEOUT_SECONDS", raising=False)
+
+    provider = LLMProvider(LLMConfig(base_url="https://example.test/v1", api_key="key", model="model-a"))
+
+    assert provider.timeout == 300
+
+
+def test_provider_timeout_can_be_configured(monkeypatch):
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "120.5")
+
+    provider = LLMProvider(LLMConfig(base_url="https://example.test/v1", api_key="key", model="model-a"))
+
+    assert provider.timeout == 120.5
+
+
+def test_generate_text_writes_request_log_without_api_key(tmp_path, monkeypatch):
+    logging.getLogger("studio.llm").handlers.clear()
+    log_path = tmp_path / "llm.log"
+    monkeypatch.setenv("LLM_LOG_PATH", str(log_path))
+    response = FakeResponse(payload={"choices": [{"message": {"content": "hello"}}]})
+    provider = LLMProvider(
+        LLMConfig(base_url="https://example.test/v1", api_key="secret-key", model="model-a"),
+        client=FakeClient(response),
+    )
+
+    assert provider.generate_text([{"role": "user", "content": "Hi"}]) == "hello"
+
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "request.start" in log_text
+    assert "request.end" in log_text
+    assert "response.parsed" in log_text
+    assert "https://example.test/v1/chat/completions" in log_text
+    assert "secret-key" not in log_text
+
 def test_generate_text_calls_chat_completions():
     response = FakeResponse(
         payload={"choices": [{"message": {"content": "hello"}}]},
@@ -94,6 +161,7 @@ def test_generate_text_calls_chat_completions():
     assert client.calls[0]["headers"]["Authorization"] == "Bearer key"
     assert client.calls[0]["json"]["model"] == "model-a"
     assert client.calls[0]["json"]["temperature"] == 0.2
+    assert client.calls[0]["json"]["stream"] is False
 
 
 def test_close_closes_client_when_supported():
@@ -118,6 +186,15 @@ def test_context_manager_closes_client_on_exit():
         assert provider.client is client
 
     assert client.closed is True
+
+
+def test_generate_text_parses_streaming_response_chunks():
+    provider = LLMProvider(
+        LLMConfig(base_url="https://example.test/v1", api_key="key", model="model-a"),
+        client=FakeClient(FakeStreamingResponse()),
+    )
+
+    assert provider.generate_text([{"role": "user", "content": "Hi"}]) == "hello world"
 
 
 def test_generate_json_parses_text_response():
@@ -162,3 +239,5 @@ def test_generate_text_wraps_malformed_api_json():
 
     with pytest.raises(LLMAPIError):
         provider.generate_text([{"role": "user", "content": "Hi"}])
+
+

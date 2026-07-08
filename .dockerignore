@@ -1,0 +1,13 @@
+.git
+.worktrees
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.env
+deploy/.env
+db.sqlite3
+workspace/*.json
+logs/*.log
+.tmp

@@ -10,6 +10,7 @@ from django.conf import settings
 from studio.constants import EPISODE_COUNT, EPISODE_DURATION_MINUTES, GENRES
 
 WORKSPACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+CURRENT_WORKSPACE_ID = "current"
 
 
 class WorkspaceCorruptError(Exception):
@@ -65,6 +66,20 @@ class JsonWorkspaceRepository:
             temp_path.unlink(missing_ok=True)
             raise
         return workspace
+
+    def get_current_workspace(self):
+        return self.get_workspace(CURRENT_WORKSPACE_ID)
+
+    def replace_current_outline_set(self, genre, outlines):
+        workspace = self.create_workspace(genre, workspace_id=CURRENT_WORKSPACE_ID)
+        return self.update_workspace(
+            workspace["id"],
+            outlines=outlines,
+            selected_outline_id=None,
+            script_plan=[],
+            episode_1_script="",
+            storyboard_prompts=[],
+        )
 
     def update_workspace(self, workspace_id, **fields):
         workspace = self.get_workspace(workspace_id)

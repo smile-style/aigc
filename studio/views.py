@@ -30,16 +30,14 @@ def outline_page(request):
 def generate_outlines_view(request):
     genre = request.POST.get("genre", "")
     repository = JsonWorkspaceRepository()
-    workspace = None
+    try:
+        workspace = repository.get_current_workspace()
+    except FileNotFoundError:
+        workspace = None
 
     try:
-        workspace = repository.create_workspace(genre)
         outlines = generate_outlines(LLMProvider.from_env(), genre)
-        workspace = repository.update_workspace(
-            workspace["id"],
-            outlines=outlines,
-            selected_outline_id=None,
-        )
+        workspace = repository.replace_current_outline_set(genre, outlines)
     except EXPECTED_GENERATION_ERRORS as exc:
         return _render_outline(request, workspace=workspace, error=str(exc), genre=genre)
 

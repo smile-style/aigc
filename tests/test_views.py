@@ -123,6 +123,33 @@ def test_generate_outlines_writes_workspace(client, settings, monkeypatch, tmp_p
     assert workspace["selected_outline_id"] is None
 
 
+def test_generate_outlines_reuses_current_workspace_file(client, settings, monkeypatch, tmp_path):
+    settings.WORKSPACE_DIR = tmp_path
+    provider = object()
+    calls = []
+
+    def fake_generate_outlines(llm, genre):
+        calls.append(genre)
+        prefix = "first" if len(calls) == 1 else "second"
+        return [{**outline, "id": f"{prefix}-{outline['id']}", "title": prefix} for outline in outline_payload()]
+
+    monkeypatch.setattr("studio.views.LLMProvider.from_env", lambda: provider)
+    monkeypatch.setattr("studio.views.generate_outlines", fake_generate_outlines)
+
+    first_response = client.post(reverse("studio:generate_outlines"), {"genre": GENRES[0]})
+    second_response = client.post(reverse("studio:generate_outlines"), {"genre": GENRES[1]})
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    workspace_files = sorted(path.name for path in tmp_path.glob("*.json"))
+    assert workspace_files == ["current.json"]
+    workspace = read_workspace(tmp_path, "current")
+    assert workspace["genre"] == GENRES[1]
+    assert len(workspace["outlines"]) == 6
+    assert {outline["title"] for outline in workspace["outlines"]} == {"second"}
+    assert workspace["selected_outline_id"] is None
+
+
 def test_select_outline_redirects_to_script_page(client, settings, tmp_path):
     settings.WORKSPACE_DIR = tmp_path
     workspace = write_workspace(tmp_path, outlines=outline_payload())
