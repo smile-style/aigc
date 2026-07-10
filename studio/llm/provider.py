@@ -51,11 +51,14 @@ class LLMConfig:
 class LLMProvider:
     DEFAULT_TIMEOUT_SECONDS = 300
     DEFAULT_LOG_PATH = "logs/llm.log"
+    DEFAULT_MAX_RETRIES = 3
+    RETRYABLE_STATUS_CODES = {502, 503, 504}
 
     def __init__(self, config, client=None, timeout=None):
         self.config = config
         self.client = client or httpx.Client(trust_env=self._trust_env_from_env())
         self.timeout = timeout or self._timeout_from_env()
+        self.max_retries = self._max_retries_from_env()
 
     @classmethod
     def from_env(cls, environ=None):
@@ -63,7 +66,7 @@ class LLMProvider:
 
     @classmethod
     def _trust_env_from_env(cls):
-        raw_value = os.environ.get("LLM_TRUST_ENV", "true").strip().lower()
+        raw_value = os.environ.get("LLM_TRUST_ENV", "false").strip().lower()
         return raw_value not in {"0", "false", "no", "off"}
 
     @classmethod
@@ -78,6 +81,17 @@ class LLMProvider:
         if timeout <= 0:
             raise LLMConfigurationError("LLM_TIMEOUT_SECONDS must be greater than 0")
         return timeout
+
+    @classmethod
+    def _max_retries_from_env(cls):
+        raw_value = os.environ.get("LLM_MAX_RETRIES", str(cls.DEFAULT_MAX_RETRIES)).strip()
+        try:
+            retries = int(raw_value)
+        except ValueError as exc:
+            raise LLMConfigurationError("LLM_MAX_RETRIES must be an integer") from exc
+        if retries < 0:
+            raise LLMConfigurationError("LLM_MAX_RETRIES must be zero or greater")
+        return retries
 
     def close(self):
         close = getattr(self.client, "close", None)
@@ -112,7 +126,7 @@ class LLMProvider:
         )
 
         try:
-            response = self.client.post(
+            response = self._post_with_retry(
                 url,
                 headers={
                     "Authorization": f"Bearer {self.config.api_key}",
@@ -190,9 +204,35 @@ class LLMProvider:
             )
             raise LLMAPIError("Model response did not include message content") from exc
 
+    def _post_with_retry(self, url, **kwargs):
+        for attempt in range(self.max_retries + 1):
+            response = self.client.post(url, **kwargs)
+            if (
+                response.status_code not in self.RETRYABLE_STATUS_CODES
+                or attempt >= self.max_retries
+            ):
+                return response
+            delay_seconds = 2 ** attempt
+            self._log_event(
+                "request.retry",
+                url=url,
+                model=self.config.model,
+                status_code=response.status_code,
+                attempt=attempt + 1,
+                max_retries=self.max_retries,
+                delay_seconds=delay_seconds,
+            )
+            time.sleep(delay_seconds)
+        raise RuntimeError("Unreachable retry state")
+
     @staticmethod
     def _friendly_http_error(exc):
         message = str(exc)
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        if status_code in {502, 503, 504}:
+            return (
+                f"模型网关暂时不可用（HTTP {status_code}），请稍后重试；如果持续失败，请检查网关服务状态。"
+            )
         if "WinError 10013" in message:
             return (
                 "模型服务连接被 Windows 拒绝。请检查 LLM_BASE_URL 是否可访问、"

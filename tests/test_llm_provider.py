@@ -93,7 +93,7 @@ def test_provider_from_env_uses_supplied_mapping():
     )
 
 
-def test_provider_default_client_uses_environment_proxy_by_default(monkeypatch):
+def test_provider_default_client_bypasses_environment_proxy(monkeypatch):
     created = {}
 
     class CapturingClient:
@@ -105,7 +105,7 @@ def test_provider_default_client_uses_environment_proxy_by_default(monkeypatch):
     provider = LLMProvider(LLMConfig(base_url="https://example.test/v1", api_key="key", model="model-a"))
 
     assert isinstance(provider.client, CapturingClient)
-    assert created["trust_env"] is True
+    assert created["trust_env"] is False
 
 
 def test_provider_default_timeout_is_long_for_generation(monkeypatch):
@@ -228,6 +228,21 @@ def test_generate_text_wraps_http_errors():
 
     with pytest.raises(LLMAPIError):
         provider.generate_text([{"role": "user", "content": "Hi"}])
+
+
+@pytest.mark.parametrize("status_code", [502, 503, 504])
+def test_generate_text_explains_temporary_gateway_errors(status_code):
+    response = FakeResponse(status_code=status_code)
+    provider = LLMProvider(
+        LLMConfig(base_url="https://example.test/v1", api_key="key", model="model-a"),
+        client=FakeClient(response),
+    )
+
+    with pytest.raises(LLMAPIError) as exc_info:
+        provider.generate_text([{"role": "user", "content": "Hi"}])
+
+    assert f"HTTP {status_code}" in str(exc_info.value)
+    assert "请稍后重试" in str(exc_info.value)
 
 
 def test_generate_text_wraps_malformed_api_json():

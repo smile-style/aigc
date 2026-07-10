@@ -8,6 +8,7 @@ from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
 from .constants import EPISODE_COUNT, EPISODE_DURATION_MINUTES, GENRES
+from .llm.image_provider import ImageProvider
 from .llm.provider import (
     LLMAPIError,
     LLMConfigurationError,
@@ -16,6 +17,7 @@ from .llm.provider import (
 )
 from .models import GenerationTask
 from .repositories.workspace import CURRENT_WORKSPACE_ID, WorkspaceRepository
+from .services.characters import generate_character_profiles
 from .services.outline import generate_outlines
 from .services.script import generate_episode_script, generate_script
 from .services.storyboard import generate_storyboard
@@ -184,6 +186,34 @@ def generate_episode_script_view(request, workspace_id, episode_number):
     )
 
 
+
+@require_POST
+def generate_characters_view(request, workspace_id):
+    repository = WorkspaceRepository()
+    try:
+        task = repository.create_character_profile_task(workspace_id)
+        if task["created"]:
+            _start_background_character_profile_generation(task["id"])
+    except EXPECTED_GENERATION_ERRORS as exc:
+        return _render_script(request, repository.get_workspace(workspace_id), error=str(exc))
+    return redirect("studio:script", workspace_id=workspace_id)
+
+
+@require_POST
+def generate_character_image_view(request, workspace_id, character_id):
+    repository = WorkspaceRepository()
+    try:
+        task = repository.create_character_image_task(
+            workspace_id,
+            character_id,
+            request.POST.get("image_prompt", ""),
+        )
+        if task["created"]:
+            _start_background_character_image_generation(task["id"])
+    except EXPECTED_GENERATION_ERRORS as exc:
+        return _render_script(request, repository.get_workspace(workspace_id), error=str(exc))
+    return redirect("studio:script", workspace_id=workspace_id)
+
 def storyboard_page(request, workspace_id):
     return storyboard_episode_page(request, workspace_id, 1)
 
@@ -222,18 +252,92 @@ def task_status_view(request, task_id):
         return JsonResponse({"error": "任务不存在"}, status=404)
 
     if task["status"] == GenerationTask.STATUS_SUCCEEDED:
-        episode_number = int(task["target_id"] or 1)
-        if task["task_type"] == GenerationTask.TYPE_STORYBOARD:
+        if task["task_type"] in {
+            GenerationTask.TYPE_CHARACTER_PROFILE,
+            GenerationTask.TYPE_CHARACTER_IMAGE,
+        }:
+            task["result_url"] = request.build_absolute_uri(
+                reverse("studio:script", args=[task["workspace_id"]])
+            )
+        elif task["task_type"] == GenerationTask.TYPE_STORYBOARD:
+            episode_number = int(task["target_id"] or 1)
             route_name = "studio:storyboard_episode"
         elif task["task_type"] == GenerationTask.TYPE_EPISODE_SCRIPT:
+            episode_number = int(task["target_id"] or 1)
             route_name = "studio:episode_script"
         else:
             route_name = None
-        if route_name:
+        if task["task_type"] not in {GenerationTask.TYPE_CHARACTER_PROFILE, GenerationTask.TYPE_CHARACTER_IMAGE} and route_name:
             task["result_url"] = request.build_absolute_uri(
                 reverse(route_name, args=[task["workspace_id"], episode_number])
             )
     return JsonResponse(task)
+
+def _start_background_character_profile_generation(task_id):
+    worker = threading.Thread(
+        target=_run_character_profile_generation,
+        args=(task_id,),
+        daemon=True,
+    )
+    worker.start()
+    return worker
+
+
+def _run_character_profile_generation(task_id):
+    close_old_connections()
+    repository = WorkspaceRepository()
+    try:
+        task = repository.start_task(task_id)
+        workspace = repository.get_workspace(task["workspace_id"])
+        profiles = generate_character_profiles(
+            LLMProvider.from_env(),
+            workspace["selected_outline"],
+            workspace.get("episodes", []),
+        )
+        repository.save_character_profiles(task["workspace_id"], profiles)
+        repository.finish_task(task_id, result={"character_count": len(profiles)})
+    except Exception as exc:
+        logger.exception("Character profile generation task %s failed", task_id)
+        try:
+            repository.fail_task(task_id, exc)
+        except Exception:
+            logger.exception("Could not mark character profile task %s failed", task_id)
+    finally:
+        close_old_connections()
+
+
+def _start_background_character_image_generation(task_id):
+    worker = threading.Thread(
+        target=_run_character_image_generation,
+        args=(task_id,),
+        daemon=True,
+    )
+    worker.start()
+    return worker
+
+
+def _run_character_image_generation(task_id):
+    close_old_connections()
+    repository = WorkspaceRepository()
+    try:
+        task = repository.start_task(task_id)
+        character_id = int(task["target_id"])
+        character = repository.get_character(task["workspace_id"], character_id)
+        result = ImageProvider.from_env().generate_image(character["image_prompt"])
+        asset = repository.save_character_asset(task["workspace_id"], character_id, result)
+        repository.finish_task(
+            task_id,
+            result={"character_id": character_id, "image_url": asset["image_url"]},
+        )
+    except Exception as exc:
+        logger.exception("Character image generation task %s failed", task_id)
+        try:
+            repository.fail_task(task_id, exc)
+        except Exception:
+            logger.exception("Could not mark character image task %s failed", task_id)
+    finally:
+        close_old_connections()
+
 
 
 def _start_background_episode_script_generation(task_id):
@@ -410,15 +514,6 @@ def _render_script_library(request, data, error=None):
 
 
 def _render_script(request, workspace, error=None, selected_episode=None):
-    if selected_episode is None:
-        selected_episode = next(
-            (
-                episode
-                for episode in (workspace or {}).get("episodes", [])
-                if episode.get("episode") == 1
-            ),
-            None,
-        )
     return render(
         request,
         "studio/script.html",

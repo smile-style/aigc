@@ -37,6 +37,7 @@ services:
     environment:
       DJANGO_DEBUG: "false"
       DJANGO_STATIC_ROOT: /app/staticfiles
+      DJANGO_MEDIA_ROOT: /app/media
       WORKSPACE_DIR: /app/workspace
       LLM_LOG_PATH: /app/logs/llm.log
       DB_ENGINE: mysql
@@ -50,6 +51,7 @@ services:
     volumes:
       - aigc_workspace:/app/workspace
       - aigc_logs:/app/logs
+      - aigc_media:/app/media
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/"]
       interval: 30s
@@ -61,3 +63,4 @@ volumes:
   mysql_data:
   aigc_workspace:
   aigc_logs:
+  aigc_media:

@@ -1,10 +1,12 @@
 import uuid
+from django.core.files.base import ContentFile
 
 from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
 
 from studio.constants import EPISODE_COUNT, EPISODE_DURATION_MINUTES, GENRES
-from studio.models import Episode, GenerationTask, Outline, Project, Script, StoryboardPrompt
+from studio.models import Character, CharacterAsset, Episode, GenerationTask, Outline, Project, Script, StoryboardPrompt
 
 CURRENT_WORKSPACE_ID = "current"
 
@@ -461,6 +463,115 @@ class WorkspaceRepository:
         task = project.generation_tasks.filter(task_type=task_type).order_by("-created_at", "-id").first()
         return self._task_to_dict(task) if task else None
 
+    def create_character_profile_task(self, workspace_id):
+        with transaction.atomic():
+            project = Project.objects.select_for_update().get(workspace_id=workspace_id)
+            script = self._script_for_selected_outline(project)
+            if script is None:
+                raise ValueError("请先生成剧集规划，再生成角色设定。")
+            target_id = f"script:{script.id}"
+            running = project.generation_tasks.filter(
+                task_type=GenerationTask.TYPE_CHARACTER_PROFILE,
+                target_id=target_id,
+                status__in=[GenerationTask.STATUS_PENDING, GenerationTask.STATUS_RUNNING],
+            ).first()
+            if running:
+                data = self._task_to_dict(running)
+                data["created"] = False
+                return data
+            task = GenerationTask.objects.create(
+                project=project,
+                task_type=GenerationTask.TYPE_CHARACTER_PROFILE,
+                target_id=target_id,
+                input_snapshot={"script_id": script.id},
+            )
+            data = self._task_to_dict(task)
+            data["created"] = True
+            return data
+
+    def save_character_profiles(self, workspace_id, profiles):
+        with transaction.atomic():
+            project = Project.objects.select_for_update().get(workspace_id=workspace_id)
+            script = self._script_for_selected_outline(project)
+            if script is None:
+                raise ValueError("Script is required")
+            names = []
+            for position, profile in enumerate(profiles, start=1):
+                names.append(profile["name"])
+                Character.objects.update_or_create(
+                    script=script,
+                    name=profile["name"],
+                    defaults={
+                        "role": profile["role"],
+                        "appearance": profile["appearance"],
+                        "personality": profile["personality"],
+                        "costume": profile["costume"],
+                        "image_prompt": profile["image_prompt"],
+                        "position": position,
+                    },
+                )
+            script.characters.exclude(name__in=names).filter(assets__isnull=True).delete()
+        return self.get_workspace(workspace_id)
+
+    def create_character_image_task(self, workspace_id, character_id, prompt):
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("角色图片 Prompt 不能为空。")
+        with transaction.atomic():
+            project = Project.objects.select_for_update().get(workspace_id=workspace_id)
+            character = Character.objects.select_for_update().get(
+                pk=character_id,
+                script__outline_id=project.selected_outline_id,
+            )
+            character.image_prompt = prompt.strip()
+            character.save(update_fields=["image_prompt", "updated_at"])
+            running = project.generation_tasks.filter(
+                task_type=GenerationTask.TYPE_CHARACTER_IMAGE,
+                target_id=str(character.id),
+                status__in=[GenerationTask.STATUS_PENDING, GenerationTask.STATUS_RUNNING],
+            ).first()
+            if running:
+                data = self._task_to_dict(running)
+                data["created"] = False
+                return data
+            task = GenerationTask.objects.create(
+                project=project,
+                task_type=GenerationTask.TYPE_CHARACTER_IMAGE,
+                target_id=str(character.id),
+                input_snapshot={"prompt": character.image_prompt, "character_name": character.name},
+            )
+            data = self._task_to_dict(task)
+            data["created"] = True
+            return data
+
+    def get_character(self, workspace_id, character_id):
+        try:
+            character = Character.objects.select_related("script__project").prefetch_related("assets").get(
+                pk=character_id,
+                script__project__workspace_id=workspace_id,
+            )
+        except Character.DoesNotExist as exc:
+            raise FileNotFoundError(f"Character not found: {character_id}") from exc
+        return self._character_to_dict(character)
+
+    def save_character_asset(self, workspace_id, character_id, result):
+        with transaction.atomic():
+            character = Character.objects.select_for_update().get(
+                pk=character_id,
+                script__project__workspace_id=workspace_id,
+            )
+            version = (character.assets.aggregate(value=Max("version"))["value"] or 0) + 1
+            asset = CharacterAsset(
+                character=character,
+                model=result.model,
+                prompt_snapshot=character.image_prompt,
+                source_url=result.source_url,
+                version=version,
+            )
+            filename = f"{uuid.uuid4().hex}{result.extension}"
+            asset.image.save(filename, ContentFile(result.content), save=False)
+            asset.save()
+        return self.get_character(workspace_id, character_id)
+
     def mark_outline_usable(self, workspace_id, outline_id):
         with transaction.atomic():
             try:
@@ -546,6 +657,7 @@ class WorkspaceRepository:
         usable_outlines = project.outlines.filter(is_usable=True).order_by("-usable_at", "-id")
         script = self._script_for_selected_outline(project)
         episodes = list(script.episodes.select_related("storyboard_prompt").order_by("episode_number")) if script else []
+        characters = list(script.characters.prefetch_related("assets")) if script else []
         episode_1 = next(
             (episode for episode in episodes if episode.episode_number == 1),
             None,
@@ -568,6 +680,12 @@ class WorkspaceRepository:
             ),
             "script_plan": script.plan_payload if script else [],
             "episodes": [self._episode_to_dict(episode) for episode in episodes],
+            "characters": [self._character_to_dict(character) for character in characters],
+            "character_profile_task": self._latest_task_dict(
+                project,
+                GenerationTask.TYPE_CHARACTER_PROFILE,
+                target_id=f"script:{script.id}" if script else "",
+            ) if script else None,
             "episode_1_script": episode_1.full_script if episode_1 else "",
             "storyboard_prompts": (
                 storyboard_prompt.prompts_payload if storyboard_prompt else []
@@ -717,7 +835,30 @@ class WorkspaceRepository:
             ),
         }
 
+    def _character_to_dict(self, character):
+        assets = list(character.assets.all())
+        latest_asset = assets[0] if assets else None
+        project = character.script.project
+        return {
+            "id": character.id,
+            "name": character.name,
+            "role": character.role,
+            "appearance": character.appearance,
+            "personality": character.personality,
+            "costume": character.costume,
+            "image_prompt": character.image_prompt,
+            "image_url": latest_asset.image.url if latest_asset else "",
+            "image_model": latest_asset.model if latest_asset else "",
+            "version": latest_asset.version if latest_asset else 0,
+            "image_task": self._latest_task_dict(
+                project,
+                GenerationTask.TYPE_CHARACTER_IMAGE,
+                target_id=str(character.id),
+            ),
+        }
+
     def _latest_task_dict(self, project, task_type, target_id=None):
+
         tasks = project.generation_tasks.filter(task_type=task_type)
         if target_id is not None:
             tasks = tasks.filter(target_id=str(target_id))
@@ -733,6 +874,7 @@ class WorkspaceRepository:
             "status": task.status,
             "workspace_id": task.project.workspace_id,
             "target_id": task.target_id,
+            "input_snapshot": task.input_snapshot,
             "result_snapshot": task.result_snapshot,
             "error_message": task.error_message,
             "created_at": self._format_datetime(task.created_at),

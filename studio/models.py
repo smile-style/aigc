@@ -154,16 +154,67 @@ class StoryboardPrompt(models.Model):
         return f"Storyboard prompts for episode {self.episode.episode_number}"
 
 
+class Character(models.Model):
+    script = models.ForeignKey(Script, on_delete=models.CASCADE, related_name="characters")
+    name = models.CharField(max_length=120)
+    role = models.CharField(max_length=255)
+    appearance = models.TextField()
+    personality = models.TextField(blank=True)
+    costume = models.TextField(blank=True)
+    image_prompt = models.TextField()
+    position = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["position", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["script", "name"],
+                name="unique_character_name_per_script",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class CharacterAsset(models.Model):
+    character = models.ForeignKey(Character, on_delete=models.CASCADE, related_name="assets")
+    model = models.CharField(max_length=120)
+    prompt_snapshot = models.TextField()
+    image = models.FileField(upload_to="characters/%Y/%m/%d")
+    source_url = models.URLField(blank=True, max_length=1000)
+    version = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-version", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["character", "version"],
+                name="unique_character_asset_version",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.character} v{self.version}"
+
+
 class GenerationTask(models.Model):
     TYPE_OUTLINE = "outline"
     TYPE_SCRIPT = "script"
     TYPE_EPISODE_SCRIPT = "episode_script"
     TYPE_STORYBOARD = "storyboard"
+    TYPE_CHARACTER_PROFILE = "character_profile"
+    TYPE_CHARACTER_IMAGE = "character_image"
     TYPE_CHOICES = [
         (TYPE_OUTLINE, "Outline"),
         (TYPE_SCRIPT, "Script"),
         (TYPE_EPISODE_SCRIPT, "Episode script"),
         (TYPE_STORYBOARD, "Storyboard"),
+        (TYPE_CHARACTER_PROFILE, "Character profile"),
+        (TYPE_CHARACTER_IMAGE, "Character image"),
     ]
 
     STATUS_PENDING = "pending"

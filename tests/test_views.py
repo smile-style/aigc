@@ -55,6 +55,19 @@ def storyboard_payload():
     ]
 
 
+def character_profiles():
+    return [
+        {
+            "name": "Chen Mo",
+            "role": "Protagonist",
+            "appearance": "Black hair and sharp features",
+            "personality": "Calm and decisive",
+            "costume": "Black coat",
+            "image_prompt": "Full body character sheet on a plain background",
+        }
+    ]
+
+
 def write_workspace(**overrides):
     repo = WorkspaceRepository()
     workspace_id = overrides.pop("id", "workspace-1")
@@ -614,3 +627,94 @@ def test_script_page_links_every_episode_to_its_own_workflow(client):
     assert response.status_code == 200
     assert reverse("studio:episode_script", args=[workspace["id"], 12]) in content
     assert reverse("studio:generate_episode_script", args=[workspace["id"], 12]) in content
+
+
+def test_script_page_keeps_episode_modal_closed_until_requested(client):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+
+    response = client.get(reverse("studio:script", args=[workspace["id"]]))
+
+    content = response.content.decode("utf-8")
+    assert response.status_code == 200
+    assert 'data-modal-target="episode-script-1"' in content
+    assert "data-auto-open" not in content
+
+
+def test_episode_script_route_auto_opens_requested_episode_modal(client):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+
+    response = client.get(
+        reverse("studio:episode_script", args=[workspace["id"], 1])
+    )
+
+    content = response.content.decode("utf-8")
+    assert response.status_code == 200
+    assert 'id="episode-script-1" data-auto-open' in content
+
+
+def test_generate_characters_starts_background_task(client, monkeypatch):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    started = []
+    monkeypatch.setattr(
+        "studio.views._start_background_character_profile_generation",
+        lambda task_id: started.append(task_id),
+    )
+
+    response = client.post(reverse("studio:generate_characters", args=[workspace["id"]]))
+
+    task = GenerationTask.objects.get(task_type=GenerationTask.TYPE_CHARACTER_PROFILE)
+    assert response.status_code == 302
+    assert response["Location"] == reverse("studio:script", args=[workspace["id"]])
+    assert started == [task.id]
+    assert task.status == GenerationTask.STATUS_PENDING
+
+
+def test_character_image_task_persists_edited_prompt_and_character_target():
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    repository = WorkspaceRepository()
+    repository.save_character_profiles(workspace["id"], character_profiles())
+    character = repository.get_workspace(workspace["id"])["characters"][0]
+
+    task = repository.create_character_image_task(
+        workspace["id"], character["id"], "Edited cinematic character prompt"
+    )
+
+    saved_character = repository.get_character(workspace["id"], character["id"])
+    assert saved_character["image_prompt"] == "Edited cinematic character prompt"
+    assert task["target_id"] == str(character["id"])
+    assert task["input_snapshot"] == {
+        "prompt": "Edited cinematic character prompt",
+        "character_name": "Chen Mo",
+    }
+
+
+def test_script_page_shows_character_profile_failure(client):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    repository = WorkspaceRepository()
+    task = repository.create_character_profile_task(workspace["id"])
+    repository.fail_task(
+        task["id"],
+        "模型网关暂时不可用（HTTP 502），请稍后重试。",
+    )
+
+    response = client.get(reverse("studio:script", args=[workspace["id"]]))
+
+    content = response.content.decode("utf-8")
+    assert response.status_code == 200
+    assert "角色设定生成失败" in content
+    assert "模型网关暂时不可用（HTTP 502），请稍后重试。" in content

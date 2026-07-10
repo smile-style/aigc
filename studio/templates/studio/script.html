@@ -8,156 +8,134 @@
   <section class="hero-panel">
     <div>
       <p class="eyebrow">Step 2 / 3</p>
-      <h2>按集管理剧本与分镜生产</h2>
-      <p class="hero-copy">先生成整部作品的 60 集规划，再逐集生成完整剧本和分镜。每一集的数据与任务互相独立。</p>
+      <h2>按集管理剧本与角色资产</h2>
+      <p class="hero-copy">剧本详情通过弹框查看；角色 Prompt 和原图作为整部作品的一致性资产统一维护。</p>
     </div>
     {% if workspace and selected_outline %}
-      {% if selected_outline.script_status == "generating" %}
-        <button class="secondary-button" type="button" disabled>规划生成中</button>
-      {% else %}
-        <form method="post" action="{% url 'studio:generate_script' workspace.id %}" data-submit-guard>
-          {% csrf_token %}
-          <input type="hidden" name="outline_id" value="{{ selected_outline.id }}">
-          <input type="hidden" name="next" value="script">
-          <button class="primary-button" type="submit" data-loading-text="提交中...">{% if workspace.episodes %}重新生成规划{% else %}生成 60 集规划{% endif %}</button>
-        </form>
-      {% endif %}
+      <form method="post" action="{% url 'studio:generate_script' workspace.id %}" data-submit-guard>
+        {% csrf_token %}
+        <input type="hidden" name="outline_id" value="{{ selected_outline.id }}">
+        <input type="hidden" name="next" value="script">
+        <button class="primary-button" type="submit" data-loading-text="提交中..." {% if selected_outline.script_status == "generating" %}disabled{% endif %}>{% if workspace.episodes %}重新生成规划{% else %}生成 60 集规划{% endif %}</button>
+      </form>
     {% endif %}
   </section>
 
   {% if selected_outline %}
     <section class="surface-panel">
       <div class="selected-story">
-        <div>
-          <p class="eyebrow">当前作品</p>
-          <h2>{{ selected_outline.title }}</h2>
-          <p>{{ selected_outline.protagonist }}</p>
-        </div>
-        {% if workspace.episodes %}
-          <span class="status-pill success">{{ workspace.episodes|length }} 集已规划</span>
-        {% elif selected_outline.script_status == "generating" %}
-          <span class="status-pill info">后台生成中</span>
-        {% elif selected_outline.script_status == "failed" %}
-          <span class="status-pill warning">规划生成失败</span>
-        {% endif %}
+        <div><p class="eyebrow">当前作品</p><h2>{{ selected_outline.title }}</h2><p>{{ selected_outline.protagonist }}</p></div>
+        {% if workspace.episodes %}<span class="status-pill success">{{ workspace.episodes|length }} 集已规划</span>{% endif %}
       </div>
-      {% if selected_outline.script_error %}
-        <div class="alert inline-alert" role="alert">{{ selected_outline.script_error }}</div>
-      {% endif %}
-    </section>
-  {% else %}
-    <div class="empty-state">
-      <h2>当前没有选中的大纲</h2>
-      <p>先在大纲工作台把候选设为可用，再进入剧本加工。</p>
-    </div>
-  {% endif %}
-
-  {% if selected_episode %}
-    <section class="surface-panel episode-detail">
-      <div class="section-head">
-        <div>
-          <p class="eyebrow">Episode {{ selected_episode.episode }}</p>
-          <h2>第 {{ selected_episode.episode }} 集 · {{ selected_episode.title }}</h2>
-        </div>
-        <a class="secondary-link" href="{% url 'studio:script' workspace.id %}">返回剧集列表</a>
-      </div>
-
-      {% with task=workspace.episode_script_task %}
-        {% if task.status == "pending" or task.status == "running" %}
-          <div class="task-status is-running" data-task-poller data-task-url="{% url 'studio:task_status' task.id %}" data-task-kind="episode-script" aria-live="polite" aria-atomic="true">
-            <span class="task-indicator" aria-hidden="true"></span>
-            <div>
-              <strong data-task-label>正在生成第 {{ selected_episode.episode }} 集剧本</strong>
-              <p data-task-detail>完成后会自动显示完整剧本。</p>
-            </div>
-          </div>
-        {% elif task.status == "failed" %}
-          <div class="task-status is-error" role="alert">
-            <span class="task-indicator" aria-hidden="true"></span>
-            <div><strong>本集剧本生成失败</strong><p>{{ task.error_message|default:"请重试。" }}</p></div>
-          </div>
-        {% endif %}
-      {% endwith %}
-
-      <dl class="three-column-list">
-        <div><dt>本集摘要</dt><dd>{{ selected_episode.summary }}</dd></div>
-        <div><dt>核心冲突</dt><dd>{{ selected_episode.key_conflict }}</dd></div>
-        <div><dt>结尾悬念</dt><dd>{{ selected_episode.cliffhanger }}</dd></div>
-      </dl>
-
-      {% if selected_episode.full_script %}
-        <pre class="script-block">{{ selected_episode.full_script }}</pre>
-        <div class="detail-actions">
-          <form method="post" action="{% url 'studio:generate_episode_script' workspace.id selected_episode.episode %}" data-submit-guard>
-            {% csrf_token %}
-            <button class="secondary-button" type="submit" data-loading-text="提交中...">重新生成本集剧本</button>
-          </form>
-          <a class="primary-button" href="{% url 'studio:storyboard_episode' workspace.id selected_episode.episode %}">{% if selected_episode.has_storyboard %}查看本集分镜{% else %}生成本集分镜{% endif %}</a>
-        </div>
-      {% elif selected_episode.script_status != "generating" %}
-        <form class="detail-actions" method="post" action="{% url 'studio:generate_episode_script' workspace.id selected_episode.episode %}" data-submit-guard>
-          {% csrf_token %}
-          <button class="primary-button" type="submit" data-loading-text="提交中...">生成本集完整剧本</button>
-        </form>
-      {% endif %}
     </section>
   {% endif %}
 
   <section class="surface-panel">
     <div class="section-head">
-      <div>
-        <p class="eyebrow">Episode Pipeline</p>
-        <h2>60 集生产列表</h2>
-      </div>
+      <div><p class="eyebrow">Character Bible</p><h2>人物角色资产</h2></div>
       {% if workspace.episodes %}
-        <span class="status-pill info">{{ workspace.episodes|length }} 集</span>
+        <form method="post" action="{% url 'studio:generate_characters' workspace.id %}" data-submit-guard>
+          {% csrf_token %}
+          <button class="secondary-button" type="submit" data-loading-text="提交中...">{% if workspace.characters %}重新生成角色设定{% else %}生成角色设定{% endif %}</button>
+        </form>
       {% endif %}
     </div>
 
-    {% if workspace.episodes %}
-      <div class="episode-list">
-        {% for episode in workspace.episodes %}
-          <article class="episode-row">
-            <div class="episode-index">{{ episode.episode|stringformat:"02d" }}</div>
-            <div class="episode-copy">
-              <h3>{{ episode.title }}</h3>
-              <p>{{ episode.summary }}</p>
-            </div>
-            <div class="episode-state">
-              {% if episode.script_status == "generating" %}
-                <span class="status-pill info">剧本生成中</span>
-              {% elif episode.script_status == "failed" %}
-                <span class="status-pill warning">剧本失败</span>
-              {% elif episode.has_script %}
-                <span class="status-pill success">剧本已完成</span>
+    {% with task=workspace.character_profile_task %}
+      {% if task.status == "pending" or task.status == "running" %}
+        <div class="task-status is-running" data-task-poller data-task-url="{% url 'studio:task_status' task.id %}" data-task-kind="character-profile" aria-live="polite">
+          <span class="task-indicator" aria-hidden="true"></span><div><strong data-task-label>正在生成角色设定</strong><p data-task-detail>完成后会自动加载角色 Prompt。</p></div>
+        </div>
+      {% elif task.status == "failed" %}
+        <div class="task-status is-error" role="alert">
+          <span class="task-indicator" aria-hidden="true"></span><div><strong>角色设定生成失败</strong><p>{{ task.error_message|default:"模型服务暂时不可用，请稍后重试。" }}</p></div>
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% if workspace.characters %}
+      <div class="character-grid">
+        {% for character in workspace.characters %}
+          <article class="character-card">
+            <div class="character-visual">
+              {% if character.image_url %}
+                <img src="{{ character.image_url }}" alt="{{ character.name }}角色原图">
               {% else %}
-                <span class="status-pill muted">待生成剧本</span>
-              {% endif %}
-              {% if episode.has_storyboard %}
-                <span class="status-pill success">{{ episode.storyboard_count }} 个分镜</span>
+                <div class="character-placeholder"><span>{{ character.name|first }}</span><small>等待生成原图</small></div>
               {% endif %}
             </div>
-            <div class="episode-row-actions">
-              {% if episode.has_script %}
-                <a class="ghost-button" href="{% url 'studio:episode_script' workspace.id episode.episode %}">查看剧本</a>
-                <a class="secondary-link" href="{% url 'studio:storyboard_episode' workspace.id episode.episode %}">{% if episode.has_storyboard %}查看分镜{% else %}生成分镜{% endif %}</a>
-              {% elif episode.script_status == "generating" %}
-                <button class="secondary-button" type="button" disabled>生成中</button>
-              {% else %}
-                <form method="post" action="{% url 'studio:generate_episode_script' workspace.id episode.episode %}" data-submit-guard>
-                  {% csrf_token %}
-                  <button class="primary-button small" type="submit" data-loading-text="提交中...">{% if episode.script_status == "failed" %}重新生成{% else %}生成剧本{% endif %}</button>
-                </form>
-              {% endif %}
+            <div class="character-content">
+              <div class="card-head">
+                <div><p class="eyebrow">角色 {{ forloop.counter|stringformat:"02d" }}</p><h3>{{ character.name }}</h3></div>
+                {% if character.version %}<span class="status-pill success">原图 v{{ character.version }}</span>{% endif %}
+              </div>
+              <p class="character-role">{{ character.role }}</p>
+              <dl class="character-facts">
+                <div><dt>外形</dt><dd>{{ character.appearance }}</dd></div>
+                <div><dt>服装</dt><dd>{{ character.costume }}</dd></div>
+              </dl>
+              <form method="post" action="{% url 'studio:generate_character_image' workspace.id character.id %}" data-submit-guard>
+                {% csrf_token %}
+                <label class="field"><span>角色图片 Prompt</span><textarea name="image_prompt" rows="6">{{ character.image_prompt }}</textarea></label>
+                <button class="primary-button" type="submit" data-loading-text="提交中...">{% if character.image_url %}重新生成原图{% else %}生成角色原图{% endif %}</button>
+              </form>
+              {% with image_task=character.image_task %}
+                {% if image_task.status == "pending" or image_task.status == "running" %}
+                  <div class="task-status is-running" data-task-poller data-task-url="{% url 'studio:task_status' image_task.id %}" data-task-kind="character-image" aria-live="polite">
+                    <span class="task-indicator" aria-hidden="true"></span><div><strong data-task-label>正在生成 {{ character.name }} 原图</strong><p data-task-detail>图片生成完成后会自动刷新。</p></div>
+                  </div>
+                {% elif image_task.status == "failed" %}
+                  <div class="task-status is-error" role="alert"><span class="task-indicator"></span><div><strong>原图生成失败</strong><p>{{ image_task.error_message }}</p></div></div>
+                {% endif %}
+              {% endwith %}
             </div>
           </article>
         {% endfor %}
       </div>
     {% else %}
-      <div class="empty-state compact">
-        <h2>还没有剧集规划</h2>
-        <p>先点击“生成 60 集规划”，之后即可对任意一集生成完整剧本和分镜。</p>
+      <div class="empty-state compact"><h2>还没有角色设定</h2><p>生成剧集规划后，点击“生成角色设定”提取核心人物和原图 Prompt。</p></div>
+    {% endif %}
+  </section>
+
+  <section class="surface-panel">
+    <div class="section-head"><div><p class="eyebrow">Episode Pipeline</p><h2>60 集生产列表</h2></div></div>
+    {% if workspace.episodes %}
+      <div class="episode-list">
+        {% for episode in workspace.episodes %}
+          <article class="episode-row">
+            <div class="episode-index">{{ episode.episode|stringformat:"02d" }}</div>
+            <div class="episode-copy"><h3>{{ episode.title }}</h3><p>{{ episode.summary }}</p></div>
+            <div class="episode-state">
+              {% if episode.has_script %}<span class="status-pill success">剧本已完成</span>{% elif episode.script_status == "generating" %}<span class="status-pill info">剧本生成中</span>{% else %}<span class="status-pill muted">待生成剧本</span>{% endif %}
+              {% if episode.has_storyboard %}<span class="status-pill success">{{ episode.storyboard_count }} 个分镜</span>{% endif %}
+            </div>
+            <div class="episode-row-actions">
+              {% if episode.has_script %}
+                <button class="ghost-button" type="button" data-modal-target="episode-script-{{ episode.episode }}">查看剧本</button>
+                <a class="secondary-link" href="{% url 'studio:storyboard_episode' workspace.id episode.episode %}">{% if episode.has_storyboard %}查看分镜{% else %}生成分镜{% endif %}</a>
+              {% elif episode.script_status == "generating" %}
+                <button class="secondary-button" type="button" disabled>生成中</button>
+              {% else %}
+                <form method="post" action="{% url 'studio:generate_episode_script' workspace.id episode.episode %}" data-submit-guard>{% csrf_token %}<button class="primary-button small" type="submit" data-loading-text="提交中...">生成剧本</button></form>
+              {% endif %}
+            </div>
+          </article>
+
+          {% if episode.has_script %}
+            <div class="detail-modal" id="episode-script-{{ episode.episode }}" {% if selected_episode.episode == episode.episode %}data-auto-open{% endif %} hidden>
+              <div class="modal-scrim" data-modal-close></div>
+              <section class="modal-panel script-modal-panel" role="dialog" aria-modal="true" aria-labelledby="episode-title-{{ episode.episode }}">
+                <div class="modal-head"><div><p class="eyebrow">Episode {{ episode.episode }}</p><h3 id="episode-title-{{ episode.episode }}">第 {{ episode.episode }} 集 · {{ episode.title }}</h3></div><button class="icon-button" type="button" data-modal-close aria-label="关闭剧本"><span aria-hidden="true">&times;</span></button></div>
+                <dl class="three-column-list"><div><dt>摘要</dt><dd>{{ episode.summary }}</dd></div><div><dt>冲突</dt><dd>{{ episode.key_conflict }}</dd></div><div><dt>悬念</dt><dd>{{ episode.cliffhanger }}</dd></div></dl>
+                <pre class="script-block modal-script">{{ episode.full_script }}</pre>
+                <div class="modal-actions"><form method="post" action="{% url 'studio:generate_episode_script' workspace.id episode.episode %}" data-submit-guard>{% csrf_token %}<button class="secondary-button" type="submit">重新生成</button></form><a class="primary-button" href="{% url 'studio:storyboard_episode' workspace.id episode.episode %}">进入分镜</a></div>
+              </section>
+            </div>
+          {% endif %}
+        {% endfor %}
       </div>
+    {% else %}
+      <div class="empty-state compact"><h2>还没有剧集规划</h2><p>先生成 60 集规划。</p></div>
     {% endif %}
   </section>
 </section>

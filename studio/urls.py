@@ -27,6 +27,16 @@ urlpatterns = [
         views.generate_episode_script_view,
         name="generate_episode_script",
     ),
+    path(
+        "script/<str:workspace_id>/characters/generate/",
+        views.generate_characters_view,
+        name="generate_characters",
+    ),
+    path(
+        "script/<str:workspace_id>/characters/<int:character_id>/image/",
+        views.generate_character_image_view,
+        name="generate_character_image",
+    ),
     path("tasks/<int:task_id>/", views.task_status_view, name="task_status"),
     path("storyboard/<str:workspace_id>/", views.storyboard_page, name="storyboard"),
     path(
