@@ -1,9 +1,9 @@
-import pytest
+﻿import pytest
 from django.http import HttpResponse
 from django.urls import reverse
 
 from studio.constants import GENRES
-from studio.models import Outline, Project
+from studio.models import GenerationTask, Outline, Project
 from studio.repositories.workspace import WorkspaceRepository
 
 pytestmark = pytest.mark.django_db
@@ -292,45 +292,117 @@ def test_generate_storyboard_get_returns_405_without_writing_workspace(client):
     assert read_workspace(workspace["id"]) == before
 
 
-def test_generate_storyboard_writes_prompts(client, monkeypatch):
+def test_generate_storyboard_starts_background_task(client, monkeypatch):
     workspace = write_workspace(episode_1_script="Episode 1 complete script")
+    started = []
+    monkeypatch.setattr(
+        "studio.views._start_background_storyboard_generation",
+        lambda task_id: started.append(task_id),
+    )
+
+    response = client.post(reverse("studio:generate_storyboard", args=[workspace["id"]]))
+
+    task = GenerationTask.objects.get()
+    assert response.status_code == 302
+    assert response["Location"] == reverse("studio:storyboard_episode", args=[workspace["id"], 1])
+    assert started == [task.id]
+    assert task.project.workspace_id == workspace["id"]
+    assert task.status == GenerationTask.STATUS_PENDING
+
+
+def test_duplicate_storyboard_submission_reuses_active_task(client, monkeypatch):
+    workspace = write_workspace(episode_1_script="Episode 1 complete script")
+    started = []
+    monkeypatch.setattr(
+        "studio.views._start_background_storyboard_generation",
+        lambda task_id: started.append(task_id),
+    )
+
+    first_response = client.post(reverse("studio:generate_storyboard", args=[workspace["id"]]))
+    second_response = client.post(reverse("studio:generate_storyboard", args=[workspace["id"]]))
+
+    assert first_response.status_code == 302
+    assert second_response.status_code == 302
+    assert GenerationTask.objects.count() == 1
+    assert started == [GenerationTask.objects.get().id]
+
+
+def test_background_storyboard_generation_uses_task_workspace(monkeypatch):
+    workspace = write_workspace(episode_1_script="Episode 1 complete script")
+    repository = WorkspaceRepository()
+    task = repository.create_storyboard_task(workspace["id"], 1)
     provider = object()
     monkeypatch.setattr("studio.views.LLMProvider.from_env", lambda: provider)
     monkeypatch.setattr(
         "studio.views.generate_storyboard",
-        lambda llm, episode_1_script: storyboard_payload(),
+        lambda llm, episode_script, episode_number=1: storyboard_payload(),
     )
 
-    response = client.post(reverse("studio:generate_storyboard", args=[workspace["id"]]))
+    from studio.views import _run_storyboard_generation
 
-    assert response.status_code == 200
+    _run_storyboard_generation(task["id"])
+
     saved = read_workspace(workspace["id"])
+    finished_task = repository.get_task(task["id"])
     assert len(saved["storyboard_prompts"]) == 12
+    assert finished_task["status"] == GenerationTask.STATUS_SUCCEEDED
+    assert finished_task["workspace_id"] == workspace["id"]
+    assert finished_task["result_snapshot"] == {"episode_number": 1, "storyboard_prompt_count": 12}
 
 
-def test_generation_error_keeps_previous_content(client, monkeypatch):
+def test_background_storyboard_error_keeps_previous_content(monkeypatch):
     workspace = write_workspace(
         episode_1_script="keep old script",
         storyboard_prompts=storyboard_payload(),
     )
+    repository = WorkspaceRepository()
+    task = repository.create_storyboard_task(workspace["id"], 1)
     provider = object()
     monkeypatch.setattr("studio.views.LLMProvider.from_env", lambda: provider)
-    monkeypatch.setattr(
-        "studio.views._render_storyboard",
-        lambda request, workspace, error=None: HttpResponse(error or ""),
-    )
 
-    def raise_error(llm, episode_1_script):
+    def raise_error(llm, episode_script, episode_number=1):
         raise ValueError("storyboard generation failed")
 
     monkeypatch.setattr("studio.views.generate_storyboard", raise_error)
 
-    response = client.post(reverse("studio:generate_storyboard", args=[workspace["id"]]))
+    from studio.views import _run_storyboard_generation
+
+    _run_storyboard_generation(task["id"])
+
+    saved = read_workspace(workspace["id"])
+    failed_task = repository.get_task(task["id"])
+    assert saved["episode_1_script"] == "keep old script"
+    assert saved["storyboard_prompts"] == storyboard_payload()
+    assert failed_task["status"] == GenerationTask.STATUS_FAILED
+    assert "storyboard generation failed" in failed_task["error_message"]
+
+
+def test_task_status_returns_result_url_for_task_workspace(client):
+    workspace = write_workspace(episode_1_script="Episode 1 complete script")
+    repository = WorkspaceRepository()
+    task = repository.create_storyboard_task(workspace["id"], 1)
+    repository.finish_task(task["id"], result={"storyboard_prompt_count": 12})
+
+    response = client.get(reverse("studio:task_status", args=[task["id"]]))
 
     assert response.status_code == 200
-    assert "storyboard generation failed" in response.content.decode("utf-8")
-    saved = read_workspace(workspace["id"])
-    assert saved["episode_1_script"] == "keep old script"
+    payload = response.json()
+    assert payload["workspace_id"] == workspace["id"]
+    assert payload["status"] == GenerationTask.STATUS_SUCCEEDED
+    assert payload["result_url"].endswith(reverse("studio:storyboard_episode", args=[workspace["id"], 1]))
+
+
+def test_storyboard_page_polls_active_task(client):
+    workspace = write_workspace(episode_1_script="Episode 1 complete script")
+    task = WorkspaceRepository().create_storyboard_task(workspace["id"], 1)
+
+    response = client.get(reverse("studio:storyboard", args=[workspace["id"]]))
+
+    content = response.content.decode("utf-8")
+    assert response.status_code == 200
+    assert "data-task-poller" in content
+    assert reverse("studio:task_status", args=[task["id"]]) in content
+
 
 def test_mark_outline_usable_keeps_outline_after_refresh(client, monkeypatch):
     provider = object()
@@ -390,7 +462,7 @@ def test_script_library_action_shows_view_script_when_script_exists(client):
     assert response.status_code == 200
     content = response.content.decode("utf-8")
     assert "查看剧本" in content
-    assert "生成剧本" not in content
+    assert ">生成剧本</button>" not in content
 
 
 def test_selecting_unscripted_outline_does_not_show_previous_script(client):
@@ -408,3 +480,137 @@ def test_selecting_unscripted_outline_does_not_show_previous_script(client):
     assert selected["selected_outline_id"] == "outline-2"
     assert selected["script_plan"] == []
     assert selected["episode_1_script"] == ""
+
+def test_series_plan_creates_sixty_episode_records():
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+
+    assert len(workspace["episodes"]) == 60
+    assert workspace["episodes"][0]["episode"] == 1
+    assert workspace["episodes"][0]["has_script"] is True
+    assert workspace["episodes"][11]["episode"] == 12
+    assert workspace["episodes"][11]["has_script"] is False
+
+
+def test_generate_arbitrary_episode_script_starts_background_task(client, monkeypatch):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    started = []
+    monkeypatch.setattr(
+        "studio.views._start_background_episode_script_generation",
+        lambda task_id: started.append(task_id),
+    )
+
+    response = client.post(
+        reverse("studio:generate_episode_script", args=[workspace["id"], 12])
+    )
+
+    task = GenerationTask.objects.get(task_type=GenerationTask.TYPE_EPISODE_SCRIPT)
+    episode = WorkspaceRepository().get_episode(workspace["id"], 12)
+    assert response.status_code == 302
+    assert response["Location"] == reverse(
+        "studio:episode_script",
+        args=[workspace["id"], 12],
+    )
+    assert task.target_id == "12"
+    assert started == [task.id]
+    assert episode["script_status"] == "generating"
+
+
+def test_background_episode_script_generation_saves_requested_episode(monkeypatch):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    repository = WorkspaceRepository()
+    task = repository.create_episode_script_task(workspace["id"], 12)
+    captured = {}
+
+    def fake_generate(provider, outline, episode, previous_episode=None, next_episode=None):
+        captured["episode"] = episode["episode"]
+        captured["previous"] = previous_episode["episode"]
+        captured["next"] = next_episode["episode"]
+        return "Episode 12 complete script"
+
+    monkeypatch.setattr("studio.views.LLMProvider.from_env", lambda: object())
+    monkeypatch.setattr("studio.views.generate_episode_script", fake_generate)
+
+    from studio.views import _run_episode_script_generation
+
+    _run_episode_script_generation(task["id"])
+
+    episode = repository.get_episode(workspace["id"], 12)
+    finished_task = repository.get_task(task["id"])
+    assert captured == {"episode": 12, "previous": 11, "next": 13}
+    assert episode["full_script"] == "Episode 12 complete script"
+    assert episode["script_status"] == "ready"
+    assert finished_task["status"] == GenerationTask.STATUS_SUCCEEDED
+
+
+def test_storyboard_for_arbitrary_episode_is_saved_independently(monkeypatch):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    repository = WorkspaceRepository()
+    repository.save_episode_script(workspace["id"], 12, "Episode 12 complete script")
+    task = repository.create_storyboard_task(workspace["id"], 12)
+    captured = {}
+
+    def fake_storyboard(provider, episode_script, episode_number=1):
+        captured["script"] = episode_script
+        captured["episode_number"] = episode_number
+        return storyboard_payload()
+
+    monkeypatch.setattr("studio.views.LLMProvider.from_env", lambda: object())
+    monkeypatch.setattr("studio.views.generate_storyboard", fake_storyboard)
+
+    from studio.views import _run_storyboard_generation
+
+    _run_storyboard_generation(task["id"])
+
+    episode_12 = repository.get_episode_workspace(workspace["id"], 12)
+    episode_1 = repository.get_episode_workspace(workspace["id"], 1)
+    assert captured == {
+        "script": "Episode 12 complete script",
+        "episode_number": 12,
+    }
+    assert len(episode_12["storyboard_prompts"]) == 12
+    assert episode_12["selected_episode"]["has_storyboard"] is True
+    assert episode_1["storyboard_prompts"] == []
+
+
+def test_task_status_points_to_requested_episode(client):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    repository = WorkspaceRepository()
+    repository.save_episode_script(workspace["id"], 12, "Episode 12 complete script")
+    task = repository.create_storyboard_task(workspace["id"], 12)
+    repository.finish_task(task["id"], result={"episode_number": 12})
+
+    response = client.get(reverse("studio:task_status", args=[task["id"]]))
+
+    assert response.status_code == 200
+    assert response.json()["result_url"].endswith(
+        reverse("studio:storyboard_episode", args=[workspace["id"], 12])
+    )
+
+
+def test_script_page_links_every_episode_to_its_own_workflow(client):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+
+    response = client.get(reverse("studio:script", args=[workspace["id"]]))
+
+    content = response.content.decode("utf-8")
+    assert response.status_code == 200
+    assert reverse("studio:episode_script", args=[workspace["id"], 12]) in content
+    assert reverse("studio:generate_episode_script", args=[workspace["id"], 12]) in content

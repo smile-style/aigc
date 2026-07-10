@@ -1,6 +1,5 @@
-import json
+﻿import json
 import logging
-
 import httpx
 import pytest
 
@@ -94,7 +93,7 @@ def test_provider_from_env_uses_supplied_mapping():
     )
 
 
-def test_provider_default_client_ignores_environment_proxy(monkeypatch):
+def test_provider_default_client_uses_environment_proxy_by_default(monkeypatch):
     created = {}
 
     class CapturingClient:
@@ -106,7 +105,7 @@ def test_provider_default_client_ignores_environment_proxy(monkeypatch):
     provider = LLMProvider(LLMConfig(base_url="https://example.test/v1", api_key="key", model="model-a"))
 
     assert isinstance(provider.client, CapturingClient)
-    assert created["trust_env"] is False
+    assert created["trust_env"] is True
 
 
 def test_provider_default_timeout_is_long_for_generation(monkeypatch):
@@ -239,5 +238,4 @@ def test_generate_text_wraps_malformed_api_json():
 
     with pytest.raises(LLMAPIError):
         provider.generate_text([{"role": "user", "content": "Hi"}])
-
 

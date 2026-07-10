@@ -1,6 +1,6 @@
 import pytest
 
-from studio.services.script import generate_script, validate_script_payload
+from studio.services.script import generate_episode_script, generate_script, validate_script_payload
 
 
 class FakeProvider:
@@ -205,3 +205,32 @@ def test_validate_script_payload_rejects_invalid_episode_1_script(value):
                 "episode_1_script": value,
             }
         )
+
+def test_generate_episode_script_uses_episode_and_continuity_context():
+    provider = FakeProvider({"episode_script": "第 12 集完整剧本"})
+    episode = make_episode(12)
+    previous_episode = make_episode(11)
+    next_episode = make_episode(13)
+
+    result = generate_episode_script(
+        provider,
+        make_outline(),
+        episode,
+        previous_episode=previous_episode,
+        next_episode=next_episode,
+    )
+
+    prompt = provider.messages[-1]["content"]
+    assert result == "第 12 集完整剧本"
+    assert "第 12 集" in prompt
+    assert previous_episode["title"] in prompt
+    assert next_episode["title"] in prompt
+    assert episode["key_conflict"] in prompt
+
+
+@pytest.mark.parametrize("payload", [None, {}, {"episode_script": ""}])
+def test_generate_episode_script_rejects_invalid_response(payload):
+    provider = FakeProvider(payload)
+
+    with pytest.raises(ValueError, match="episode_script|object"):
+        generate_episode_script(provider, make_outline(), make_episode(2))

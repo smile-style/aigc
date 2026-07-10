@@ -2,8 +2,10 @@ import logging
 import threading
 
 from django.db import close_old_connections
+from django.http import JsonResponse
 from django.shortcuts import redirect, render
-from django.views.decorators.http import require_POST
+from django.urls import reverse
+from django.views.decorators.http import require_GET, require_POST
 
 from .constants import EPISODE_COUNT, EPISODE_DURATION_MINUTES, GENRES
 from .llm.provider import (
@@ -12,9 +14,10 @@ from .llm.provider import (
     LLMJSONParseError,
     LLMProvider,
 )
+from .models import GenerationTask
 from .repositories.workspace import CURRENT_WORKSPACE_ID, WorkspaceRepository
 from .services.outline import generate_outlines
-from .services.script import generate_script
+from .services.script import generate_episode_script, generate_script
 from .services.storyboard import generate_storyboard
 
 logger = logging.getLogger(__name__)
@@ -144,31 +147,201 @@ def generate_script_view(request, workspace_id):
     return redirect("studio:script", workspace_id=workspace_id)
 
 
-def storyboard_page(request, workspace_id):
+def episode_script_page(request, workspace_id, episode_number):
+    repository = WorkspaceRepository()
+    workspace = repository.get_episode_workspace(workspace_id, episode_number)
+    selected_episode = workspace["selected_episode"]
+    return _render_script(request, workspace, selected_episode=selected_episode)
+
+
+@require_POST
+def generate_episode_script_view(request, workspace_id, episode_number):
     repository = WorkspaceRepository()
     workspace = repository.get_workspace(workspace_id)
+    try:
+        task = repository.create_episode_script_task(workspace_id, episode_number)
+        if task["created"]:
+            _start_background_episode_script_generation(task["id"])
+    except EXPECTED_GENERATION_ERRORS as exc:
+        selected_episode = next(
+            (
+                episode
+                for episode in workspace.get("episodes", [])
+                if episode.get("episode") == episode_number
+            ),
+            None,
+        )
+        return _render_script(
+            request,
+            workspace,
+            error=str(exc),
+            selected_episode=selected_episode,
+        )
+    return redirect(
+        "studio:episode_script",
+        workspace_id=workspace_id,
+        episode_number=episode_number,
+    )
+
+
+def storyboard_page(request, workspace_id):
+    return storyboard_episode_page(request, workspace_id, 1)
+
+
+def storyboard_episode_page(request, workspace_id, episode_number):
+    repository = WorkspaceRepository()
+    workspace = repository.get_episode_workspace(workspace_id, episode_number)
     return _render_storyboard(request, workspace)
 
 
 @require_POST
-def generate_storyboard_view(request, workspace_id):
+def generate_storyboard_view(request, workspace_id, episode_number=1):
     repository = WorkspaceRepository()
-    workspace = repository.get_workspace(workspace_id)
+    workspace = repository.get_episode_workspace(workspace_id, episode_number)
 
     try:
-        episode_1_script = workspace.get("episode_1_script", "")
-        if not isinstance(episode_1_script, str) or not episode_1_script.strip():
-            raise ValueError("请先生成第一集剧本，再生成分镜。")
-
-        prompts = generate_storyboard(LLMProvider.from_env(), episode_1_script)
-        workspace = repository.update_workspace(
-            workspace_id,
-            storyboard_prompts=prompts,
-        )
+        task = repository.create_storyboard_task(workspace_id, episode_number)
+        if task["created"]:
+            _start_background_storyboard_generation(task["id"])
     except EXPECTED_GENERATION_ERRORS as exc:
         return _render_storyboard(request, workspace, error=str(exc))
 
-    return _render_storyboard(request, workspace)
+    return redirect(
+        "studio:storyboard_episode",
+        workspace_id=workspace_id,
+        episode_number=episode_number,
+    )
+
+
+@require_GET
+def task_status_view(request, task_id):
+    repository = WorkspaceRepository()
+    try:
+        task = repository.get_task(task_id)
+    except FileNotFoundError:
+        return JsonResponse({"error": "任务不存在"}, status=404)
+
+    if task["status"] == GenerationTask.STATUS_SUCCEEDED:
+        episode_number = int(task["target_id"] or 1)
+        if task["task_type"] == GenerationTask.TYPE_STORYBOARD:
+            route_name = "studio:storyboard_episode"
+        elif task["task_type"] == GenerationTask.TYPE_EPISODE_SCRIPT:
+            route_name = "studio:episode_script"
+        else:
+            route_name = None
+        if route_name:
+            task["result_url"] = request.build_absolute_uri(
+                reverse(route_name, args=[task["workspace_id"], episode_number])
+            )
+    return JsonResponse(task)
+
+
+def _start_background_episode_script_generation(task_id):
+    worker = threading.Thread(
+        target=_run_episode_script_generation,
+        args=(task_id,),
+        daemon=True,
+    )
+    worker.start()
+    return worker
+
+
+def _run_episode_script_generation(task_id):
+    close_old_connections()
+    repository = WorkspaceRepository()
+    task = None
+    try:
+        task = repository.start_task(task_id)
+        workspace_id = task["workspace_id"]
+        episode_number = int(task["target_id"])
+        workspace = repository.get_workspace(workspace_id)
+        episodes = workspace.get("episodes", [])
+        episode = next(
+            item for item in episodes if item.get("episode") == episode_number
+        )
+        previous_episode = next(
+            (
+                item
+                for item in episodes
+                if item.get("episode") == episode_number - 1
+            ),
+            None,
+        )
+        next_episode = next(
+            (
+                item
+                for item in episodes
+                if item.get("episode") == episode_number + 1
+            ),
+            None,
+        )
+        full_script = generate_episode_script(
+            LLMProvider.from_env(),
+            workspace["selected_outline"],
+            episode,
+            previous_episode=previous_episode,
+            next_episode=next_episode,
+        )
+        repository.save_episode_script(workspace_id, episode_number, full_script)
+        repository.finish_task(task_id, result={"episode_number": episode_number})
+    except Exception as exc:
+        logger.exception("Episode script generation task %s failed", task_id)
+        if task is not None:
+            try:
+                repository.mark_episode_script_generation_failed(
+                    task["workspace_id"],
+                    int(task["target_id"]),
+                    exc,
+                )
+            except Exception:
+                logger.exception("Could not mark episode script task %s failed", task_id)
+        try:
+            repository.fail_task(task_id, exc)
+        except Exception:
+            logger.exception("Could not mark generation task %s failed", task_id)
+    finally:
+        close_old_connections()
+
+
+def _start_background_storyboard_generation(task_id):
+    worker = threading.Thread(
+        target=_run_storyboard_generation,
+        args=(task_id,),
+        daemon=True,
+    )
+    worker.start()
+    return worker
+
+
+def _run_storyboard_generation(task_id):
+    close_old_connections()
+    repository = WorkspaceRepository()
+    try:
+        task = repository.start_task(task_id)
+        workspace_id = task["workspace_id"]
+        episode_number = int(task["target_id"] or 1)
+        episode = repository.get_episode(workspace_id, episode_number)
+        prompts = generate_storyboard(
+            LLMProvider.from_env(),
+            episode["full_script"],
+            episode_number=episode_number,
+        )
+        repository.save_storyboard_for_episode(workspace_id, episode_number, prompts)
+        repository.finish_task(
+            task_id,
+            result={
+                "episode_number": episode_number,
+                "storyboard_prompt_count": len(prompts),
+            },
+        )
+    except Exception as exc:
+        logger.exception("Storyboard generation task %s failed", task_id)
+        try:
+            repository.fail_task(task_id, exc)
+        except Exception:
+            logger.exception("Could not mark storyboard task %s failed", task_id)
+    finally:
+        close_old_connections()
 
 
 def _start_background_script_generation(workspace_id, outline_id):
@@ -236,13 +409,23 @@ def _render_script_library(request, data, error=None):
     )
 
 
-def _render_script(request, workspace, error=None):
+def _render_script(request, workspace, error=None, selected_episode=None):
+    if selected_episode is None:
+        selected_episode = next(
+            (
+                episode
+                for episode in (workspace or {}).get("episodes", [])
+                if episode.get("episode") == 1
+            ),
+            None,
+        )
     return render(
         request,
         "studio/script.html",
         {
             "workspace": workspace,
             "selected_outline": _selected_outline(workspace or {}),
+            "selected_episode": selected_episode,
             "error": error,
             "active_nav": "script",
         },

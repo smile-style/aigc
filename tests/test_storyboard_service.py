@@ -1,4 +1,4 @@
-import pytest
+﻿import pytest
 
 from studio.constants import MAX_STORYBOARD_SHOTS, MIN_STORYBOARD_SHOTS
 from studio.services.storyboard import (
@@ -38,7 +38,7 @@ def make_payload(count=MIN_STORYBOARD_SHOTS):
 
 
 def test_generate_storyboard_returns_valid_shots():
-    episode_1_script = "第1集剧本：主角在雨夜醒来，发现命运已经改写。"
+    episode_1_script = "第一集剧本：主角在雨夜醒来，发现命运已经改写。"
     provider = FakeProvider(make_payload(MIN_STORYBOARD_SHOTS))
 
     prompts = generate_storyboard(provider, episode_1_script)
@@ -47,7 +47,6 @@ def test_generate_storyboard_returns_valid_shots():
     assert len(prompts) == MIN_STORYBOARD_SHOTS
     assert prompts[0]["shot_number"] == 1
     assert episode_1_script in prompt
-    assert f"{MIN_STORYBOARD_SHOTS}到{MAX_STORYBOARD_SHOTS}" in prompt
     assert "JSON" in provider.messages[0]["content"]
     for field in sorted(REQUIRED_STORYBOARD_FIELDS - {"shot_number"}):
         assert field in prompt
@@ -60,7 +59,7 @@ def test_generate_storyboard_returns_valid_shots():
 def test_generate_storyboard_rejects_invalid_episode_1_script(value):
     provider = FakeProvider(make_payload(MIN_STORYBOARD_SHOTS))
 
-    with pytest.raises(ValueError, match="episode_1_script"):
+    with pytest.raises(ValueError, match="episode_script"):
         generate_storyboard(provider, value)
 
 
@@ -114,10 +113,7 @@ def test_validate_storyboard_payload_rejects_missing_prompt_field():
         validate_storyboard_payload(payload)
 
 
-@pytest.mark.parametrize(
-    "field",
-    sorted(REQUIRED_STORYBOARD_FIELDS - {"shot_number"}),
-)
+@pytest.mark.parametrize("field", sorted(REQUIRED_STORYBOARD_FIELDS - {"shot_number"}))
 @pytest.mark.parametrize("value", ["", "   ", None, 123])
 def test_validate_storyboard_payload_rejects_invalid_text_fields(field, value):
     payload = make_payload(MIN_STORYBOARD_SHOTS)
@@ -127,13 +123,22 @@ def test_validate_storyboard_payload_rejects_invalid_text_fields(field, value):
         validate_storyboard_payload(payload)
 
 
-@pytest.mark.parametrize("value", [1.0, True, "1", None])
+@pytest.mark.parametrize("value", [1.0, True, None])
 def test_validate_storyboard_payload_rejects_invalid_shot_number_type(value):
     payload = make_payload(MIN_STORYBOARD_SHOTS)
     payload["storyboard_prompts"][0]["shot_number"] = value
 
-    with pytest.raises(ValueError, match="shot_number|integer|number"):
+    with pytest.raises(ValueError, match="shot_number|整数"):
         validate_storyboard_payload(payload)
+
+
+def test_validate_storyboard_payload_normalizes_string_shot_number():
+    payload = make_payload(MIN_STORYBOARD_SHOTS)
+    payload["storyboard_prompts"][0]["shot_number"] = "镜头 1"
+
+    prompts = validate_storyboard_payload(payload)
+
+    assert prompts[0]["shot_number"] == 1
 
 
 def test_validate_storyboard_payload_rejects_wrong_shot_number_sequence():

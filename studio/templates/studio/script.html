@@ -4,111 +4,160 @@
 {% block page_heading %}剧本工作台{% endblock %}
 
 {% block content %}
-<section class="h-full min-h-0 space-y-8 overflow-y-auto pr-2">
-  <section class="rounded-3xl border border-slate-800 bg-slate-900/45 p-8 backdrop-blur-xl shadow-glow">
-    <div class="flex flex-col gap-8 xl:flex-row xl:items-start xl:justify-between">
-      <div class="min-w-0 flex-1">
-        <p class="text-xs font-medium uppercase tracking-[0.28em] text-aurora-300/80">工作流 2 / 3</p>
-        <h2 class="mt-3 text-2xl font-semibold tracking-tight text-white">当前加工对象</h2>
-      </div>
-      {% if workspace and selected_outline %}
-        {% if selected_outline.script_status == "generating" %}
-          <button type="button" class="h-12 rounded-2xl border border-slate-700 bg-slate-900/60 px-8 text-sm font-bold text-slate-400" disabled>生成中</button>
-        {% else %}
-          <form method="post" action="{% url 'studio:generate_script' workspace.id %}" data-submit-guard>
-            {% csrf_token %}
-            <input type="hidden" name="outline_id" value="{{ selected_outline.id }}">
-            <input type="hidden" name="next" value="script">
-            <button type="submit" class="h-12 rounded-2xl bg-aurora-400 px-8 text-sm font-bold text-slate-950 shadow-glow transition-all duration-300 hover:-translate-y-0.5 hover:bg-aurora-300 disabled:translate-y-0 disabled:cursor-wait disabled:opacity-70" data-loading-text="提交中...">{% if selected_outline.has_script %}重新生成剧本{% else %}生成剧本{% endif %}</button>
-          </form>
-        {% endif %}
-      {% endif %}
+<section class="stack">
+  <section class="hero-panel">
+    <div>
+      <p class="eyebrow">Step 2 / 3</p>
+      <h2>按集管理剧本与分镜生产</h2>
+      <p class="hero-copy">先生成整部作品的 60 集规划，再逐集生成完整剧本和分镜。每一集的数据与任务互相独立。</p>
     </div>
-
-    {% if selected_outline %}
-      <div class="mt-8 rounded-3xl border border-slate-800 bg-slate-950/45 p-6 backdrop-blur-xl">
-        <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h3 class="text-xl font-semibold text-white">{{ selected_outline.title }}</h3>
-            <p class="mt-3 text-sm leading-7 text-slate-400">{{ selected_outline.protagonist }}</p>
-          </div>
-          {% if selected_outline.has_script or selected_outline.script_status == "ready" %}
-            <span class="inline-flex shrink-0 rounded-full border border-[#4ade80]/30 bg-[#4ade80]/10 px-3 py-1 text-xs font-bold text-[#86efac]">已生成</span>
-          {% elif selected_outline.script_status == "generating" %}
-            <span class="inline-flex shrink-0 rounded-full border border-sky-400/30 bg-sky-400/10 px-3 py-1 text-xs font-bold text-sky-200">后台生成中</span>
-          {% elif selected_outline.script_status == "failed" %}
-            <span class="inline-flex shrink-0 rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1 text-xs font-bold text-amber-200">生成失败</span>
-          {% endif %}
-        </div>
-        {% if selected_outline.script_error %}
-          <p class="mt-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">{{ selected_outline.script_error }}</p>
-        {% endif %}
-        <dl class="mt-8 grid gap-8 lg:grid-cols-3">
-          <div>
-            <dt class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">核心设定</dt>
-            <dd class="mt-2 text-sm leading-7 text-slate-200">{{ selected_outline.core_premise }}</dd>
-          </div>
-          <div>
-            <dt class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">钩子</dt>
-            <dd class="mt-2 text-sm leading-7 text-slate-200">{{ selected_outline.hook }}</dd>
-          </div>
-          <div>
-            <dt class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">长线梗概</dt>
-            <dd class="mt-2 text-sm leading-7 text-slate-200">{{ selected_outline.arc_summary }}</dd>
-          </div>
-        </dl>
-      </div>
-    {% else %}
-      <div class="mt-8 rounded-3xl border border-dashed border-slate-800 bg-slate-950/30 p-8 text-sm text-slate-400 backdrop-blur">当前工作区还没有选中的大纲。</div>
+    {% if workspace and selected_outline %}
+      {% if selected_outline.script_status == "generating" %}
+        <button class="secondary-button" type="button" disabled>规划生成中</button>
+      {% else %}
+        <form method="post" action="{% url 'studio:generate_script' workspace.id %}" data-submit-guard>
+          {% csrf_token %}
+          <input type="hidden" name="outline_id" value="{{ selected_outline.id }}">
+          <input type="hidden" name="next" value="script">
+          <button class="primary-button" type="submit" data-loading-text="提交中...">{% if workspace.episodes %}重新生成规划{% else %}生成 60 集规划{% endif %}</button>
+        </form>
+      {% endif %}
     {% endif %}
   </section>
 
-  <section class="rounded-3xl border border-slate-800 bg-slate-900/40 p-8 backdrop-blur-xl">
-    <div class="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
-      <div>
-        <p class="text-xs font-medium uppercase tracking-[0.28em] text-aurora-300/80">Episode Plan</p>
-        <h2 class="mt-3 text-2xl font-semibold tracking-tight text-white">60 集节奏表</h2>
+  {% if selected_outline %}
+    <section class="surface-panel">
+      <div class="selected-story">
+        <div>
+          <p class="eyebrow">当前作品</p>
+          <h2>{{ selected_outline.title }}</h2>
+          <p>{{ selected_outline.protagonist }}</p>
+        </div>
+        {% if workspace.episodes %}
+          <span class="status-pill success">{{ workspace.episodes|length }} 集已规划</span>
+        {% elif selected_outline.script_status == "generating" %}
+          <span class="status-pill info">后台生成中</span>
+        {% elif selected_outline.script_status == "failed" %}
+          <span class="status-pill warning">规划生成失败</span>
+        {% endif %}
       </div>
-      {% if workspace and workspace.script_plan %}
-        <a class="inline-flex h-12 items-center justify-center rounded-2xl border border-slate-800 bg-slate-950/60 px-6 text-sm font-bold text-aurora-300 backdrop-blur transition-all duration-300 hover:-translate-y-0.5 hover:border-aurora-400/50 hover:bg-aurora-400/10" href="{% url 'studio:storyboard' workspace.id %}">进入分镜页</a>
+      {% if selected_outline.script_error %}
+        <div class="alert inline-alert" role="alert">{{ selected_outline.script_error }}</div>
+      {% endif %}
+    </section>
+  {% else %}
+    <div class="empty-state">
+      <h2>当前没有选中的大纲</h2>
+      <p>先在大纲工作台把候选设为可用，再进入剧本加工。</p>
+    </div>
+  {% endif %}
+
+  {% if selected_episode %}
+    <section class="surface-panel episode-detail">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Episode {{ selected_episode.episode }}</p>
+          <h2>第 {{ selected_episode.episode }} 集 · {{ selected_episode.title }}</h2>
+        </div>
+        <a class="secondary-link" href="{% url 'studio:script' workspace.id %}">返回剧集列表</a>
+      </div>
+
+      {% with task=workspace.episode_script_task %}
+        {% if task.status == "pending" or task.status == "running" %}
+          <div class="task-status is-running" data-task-poller data-task-url="{% url 'studio:task_status' task.id %}" data-task-kind="episode-script" aria-live="polite" aria-atomic="true">
+            <span class="task-indicator" aria-hidden="true"></span>
+            <div>
+              <strong data-task-label>正在生成第 {{ selected_episode.episode }} 集剧本</strong>
+              <p data-task-detail>完成后会自动显示完整剧本。</p>
+            </div>
+          </div>
+        {% elif task.status == "failed" %}
+          <div class="task-status is-error" role="alert">
+            <span class="task-indicator" aria-hidden="true"></span>
+            <div><strong>本集剧本生成失败</strong><p>{{ task.error_message|default:"请重试。" }}</p></div>
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      <dl class="three-column-list">
+        <div><dt>本集摘要</dt><dd>{{ selected_episode.summary }}</dd></div>
+        <div><dt>核心冲突</dt><dd>{{ selected_episode.key_conflict }}</dd></div>
+        <div><dt>结尾悬念</dt><dd>{{ selected_episode.cliffhanger }}</dd></div>
+      </dl>
+
+      {% if selected_episode.full_script %}
+        <pre class="script-block">{{ selected_episode.full_script }}</pre>
+        <div class="detail-actions">
+          <form method="post" action="{% url 'studio:generate_episode_script' workspace.id selected_episode.episode %}" data-submit-guard>
+            {% csrf_token %}
+            <button class="secondary-button" type="submit" data-loading-text="提交中...">重新生成本集剧本</button>
+          </form>
+          <a class="primary-button" href="{% url 'studio:storyboard_episode' workspace.id selected_episode.episode %}">{% if selected_episode.has_storyboard %}查看本集分镜{% else %}生成本集分镜{% endif %}</a>
+        </div>
+      {% elif selected_episode.script_status != "generating" %}
+        <form class="detail-actions" method="post" action="{% url 'studio:generate_episode_script' workspace.id selected_episode.episode %}" data-submit-guard>
+          {% csrf_token %}
+          <button class="primary-button" type="submit" data-loading-text="提交中...">生成本集完整剧本</button>
+        </form>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  <section class="surface-panel">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Episode Pipeline</p>
+        <h2>60 集生产列表</h2>
+      </div>
+      {% if workspace.episodes %}
+        <span class="status-pill info">{{ workspace.episodes|length }} 集</span>
       {% endif %}
     </div>
 
-    {% if workspace and workspace.script_plan %}
-      <div class="mt-8 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-        {% for episode in workspace.script_plan %}
-          <article class="rounded-3xl border border-slate-800 bg-slate-950/45 p-6 backdrop-blur-xl transition-all duration-300 hover:-translate-y-1 hover:border-aurora-400/30">
-            <p class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">第 {{ episode.episode }} 集</p>
-            <h3 class="mt-3 text-lg font-semibold text-white">{{ episode.title }}</h3>
-            <dl class="mt-6 space-y-5">
-              <div>
-                <dt class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">摘要</dt>
-                <dd class="mt-2 text-sm leading-7 text-slate-300">{{ episode.summary }}</dd>
-              </div>
-              <div>
-                <dt class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">冲突</dt>
-                <dd class="mt-2 text-sm leading-7 text-slate-300">{{ episode.key_conflict }}</dd>
-              </div>
-              <div>
-                <dt class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">悬念</dt>
-                <dd class="mt-2 text-sm leading-7 text-slate-300">{{ episode.cliffhanger }}</dd>
-              </div>
-            </dl>
+    {% if workspace.episodes %}
+      <div class="episode-list">
+        {% for episode in workspace.episodes %}
+          <article class="episode-row">
+            <div class="episode-index">{{ episode.episode|stringformat:"02d" }}</div>
+            <div class="episode-copy">
+              <h3>{{ episode.title }}</h3>
+              <p>{{ episode.summary }}</p>
+            </div>
+            <div class="episode-state">
+              {% if episode.script_status == "generating" %}
+                <span class="status-pill info">剧本生成中</span>
+              {% elif episode.script_status == "failed" %}
+                <span class="status-pill warning">剧本失败</span>
+              {% elif episode.has_script %}
+                <span class="status-pill success">剧本已完成</span>
+              {% else %}
+                <span class="status-pill muted">待生成剧本</span>
+              {% endif %}
+              {% if episode.has_storyboard %}
+                <span class="status-pill success">{{ episode.storyboard_count }} 个分镜</span>
+              {% endif %}
+            </div>
+            <div class="episode-row-actions">
+              {% if episode.has_script %}
+                <a class="ghost-button" href="{% url 'studio:episode_script' workspace.id episode.episode %}">查看剧本</a>
+                <a class="secondary-link" href="{% url 'studio:storyboard_episode' workspace.id episode.episode %}">{% if episode.has_storyboard %}查看分镜{% else %}生成分镜{% endif %}</a>
+              {% elif episode.script_status == "generating" %}
+                <button class="secondary-button" type="button" disabled>生成中</button>
+              {% else %}
+                <form method="post" action="{% url 'studio:generate_episode_script' workspace.id episode.episode %}" data-submit-guard>
+                  {% csrf_token %}
+                  <button class="primary-button small" type="submit" data-loading-text="提交中...">{% if episode.script_status == "failed" %}重新生成{% else %}生成剧本{% endif %}</button>
+                </form>
+              {% endif %}
+            </div>
           </article>
         {% endfor %}
       </div>
     {% else %}
-      <div class="mt-8 rounded-3xl border border-dashed border-slate-800 bg-slate-950/30 p-8 text-sm text-slate-400 backdrop-blur">还没有剧本规划。点击生成后，任务会在后台执行。</div>
-    {% endif %}
-  </section>
-
-  <section class="rounded-3xl border border-slate-800 bg-slate-900/40 p-8 backdrop-blur-xl">
-    <p class="text-xs font-medium uppercase tracking-[0.28em] text-aurora-300/80">Episode 1</p>
-    <h2 class="mt-3 text-2xl font-semibold tracking-tight text-white">第一集样稿</h2>
-    {% if workspace and workspace.episode_1_script %}
-      <pre class="mt-8 whitespace-pre-wrap rounded-3xl border border-slate-800 bg-slate-950/80 p-6 text-sm leading-8 text-slate-200 backdrop-blur">{{ workspace.episode_1_script }}</pre>
-    {% else %}
-      <div class="mt-8 rounded-3xl border border-dashed border-slate-800 bg-slate-950/30 p-8 text-sm text-slate-400 backdrop-blur">生成完成后会显示第一集完整样稿。</div>
+      <div class="empty-state compact">
+        <h2>还没有剧集规划</h2>
+        <p>先点击“生成 60 集规划”，之后即可对任意一集生成完整剧本和分镜。</p>
+      </div>
     {% endif %}
   </section>
 </section>

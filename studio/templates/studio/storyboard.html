@@ -1,70 +1,93 @@
 {% extends "studio/base.html" %}
 
-{% block title %}分镜工作台 | AI 漫剧生成工具{% endblock %}
+{% block title %}第 {{ workspace.selected_episode.episode }} 集分镜 | AI 漫剧生成工具{% endblock %}
 {% block page_heading %}分镜工作台{% endblock %}
 
 {% block content %}
-<section class="h-full min-h-0 space-y-8 overflow-y-auto pr-2">
-  <section class="rounded-3xl border border-slate-800 bg-slate-900/45 p-8 backdrop-blur-xl shadow-glow">
-    <div class="flex flex-col gap-8 sm:flex-row sm:items-center sm:justify-between">
+<section class="stack">
+  {% with episode=workspace.selected_episode task=workspace.storyboard_task %}
+    <section class="hero-panel">
       <div>
-        <p class="text-xs font-medium uppercase tracking-[0.28em] text-aurora-300/80">工作流 3 / 3</p>
-        <h2 class="mt-3 text-2xl font-semibold tracking-tight text-white">分镜 Prompt</h2>
+        <p class="eyebrow">Episode {{ episode.episode }} · Step 3 / 3</p>
+        <h2>第 {{ episode.episode }} 集 · {{ episode.title }}</h2>
+        <p class="hero-copy">{{ episode.summary }}</p>
       </div>
-      {% if workspace %}
-        <form method="post" action="{% url 'studio:generate_storyboard' workspace.id %}" data-submit-guard>
-          {% csrf_token %}
-          <button type="submit" class="h-12 rounded-2xl bg-aurora-400 px-8 text-sm font-bold text-slate-950 shadow-glow transition-all duration-300 hover:-translate-y-0.5 hover:bg-aurora-300 disabled:translate-y-0 disabled:cursor-wait disabled:opacity-70" data-loading-text="生成中...">生成分镜 Prompt</button>
-        </form>
-      {% endif %}
-    </div>
-  </section>
-
-  <section class="rounded-3xl border border-slate-800 bg-slate-900/40 p-8 backdrop-blur-xl">
-    <p class="text-xs font-medium uppercase tracking-[0.28em] text-aurora-300/80">Storyboard</p>
-    <h2 class="mt-3 text-2xl font-semibold tracking-tight text-white">镜头清单</h2>
-
-    {% if workspace and workspace.storyboard_prompts %}
-      <div class="mt-8 grid gap-6 lg:grid-cols-2">
-        {% for shot in workspace.storyboard_prompts %}
-          <article class="rounded-3xl border border-slate-800 bg-slate-950/45 p-6 backdrop-blur-xl transition-all duration-300 hover:-translate-y-1 hover:border-aurora-400/30">
-            <p class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">镜头 {{ shot.shot_number }}</p>
-            <dl class="mt-6 grid gap-5">
-              <div>
-                <dt class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">时长</dt>
-                <dd class="mt-2 text-sm leading-7 text-slate-200">{{ shot.duration }}</dd>
-              </div>
-              <div>
-                <dt class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">画面描述</dt>
-                <dd class="mt-2 text-sm leading-7 text-slate-200">{{ shot.visual_description }}</dd>
-              </div>
-              <div>
-                <dt class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">角色动作</dt>
-                <dd class="mt-2 text-sm leading-7 text-slate-200">{{ shot.character_action }}</dd>
-              </div>
-              <div>
-                <dt class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">台词 / 旁白</dt>
-                <dd class="mt-2 text-sm leading-7 text-slate-200">{{ shot.dialogue_or_narration }}</dd>
-              </div>
-              <div>
-                <dt class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">镜头语言</dt>
-                <dd class="mt-2 text-sm leading-7 text-slate-200">{{ shot.camera_language }}</dd>
-              </div>
-              <div>
-                <dt class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">图片 Prompt</dt>
-                <dd class="mt-2 text-sm leading-7 text-slate-200">{{ shot.image_prompt }}</dd>
-              </div>
-              <div>
-                <dt class="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">视频 Prompt</dt>
-                <dd class="mt-2 text-sm leading-7 text-slate-200">{{ shot.video_prompt }}</dd>
-              </div>
-            </dl>
-          </article>
-        {% endfor %}
+      <div class="hero-actions">
+        <a class="ghost-button" href="{% url 'studio:episode_script' workspace.id episode.episode %}">查看本集剧本</a>
+        {% if episode.has_script %}
+          <form method="post" action="{% url 'studio:generate_storyboard_episode' workspace.id episode.episode %}" data-submit-guard data-storyboard-form>
+            {% csrf_token %}
+            <button class="primary-button" type="submit" data-loading-text="提交中..." {% if task.status == "pending" or task.status == "running" %}disabled{% endif %}>{% if episode.has_storyboard %}重新生成本集分镜{% else %}生成本集分镜{% endif %}</button>
+          </form>
+        {% endif %}
       </div>
-    {% else %}
-      <div class="mt-8 rounded-3xl border border-dashed border-slate-800 bg-slate-950/30 p-8 text-sm text-slate-400 backdrop-blur">还没有分镜结果。</div>
+    </section>
+
+    {% if task.status == "pending" or task.status == "running" %}
+      <div class="task-status is-running" data-task-poller data-task-url="{% url 'studio:task_status' task.id %}" data-task-kind="storyboard" aria-live="polite" aria-atomic="true">
+        <span class="task-indicator" aria-hidden="true"></span>
+        <div>
+          <strong data-task-label>正在生成第 {{ episode.episode }} 集分镜</strong>
+          <p data-task-detail>页面可以保持打开，完成后会自动显示本集结果。</p>
+        </div>
+      </div>
+    {% elif task.status == "failed" %}
+      <div class="task-status is-error" role="alert">
+        <span class="task-indicator" aria-hidden="true"></span>
+        <div><strong>本集分镜生成失败</strong><p>{{ task.error_message|default:"请重试。" }}</p></div>
+      </div>
     {% endif %}
-  </section>
+
+    <section class="metric-row" aria-label="本集状态">
+      <div class="metric-card"><span>剧集</span><strong>第 {{ episode.episode }} 集</strong></div>
+      <div class="metric-card"><span>完整剧本</span><strong>{% if episode.has_script %}已完成{% else %}待生成{% endif %}</strong></div>
+      <div class="metric-card"><span>分镜数量</span><strong>{{ episode.storyboard_count }} 个</strong></div>
+    </section>
+
+    <section class="surface-panel">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Storyboard</p>
+          <h2>第 {{ episode.episode }} 集镜头清单</h2>
+        </div>
+        <a class="secondary-link" href="{% url 'studio:script' workspace.id %}">返回 60 集列表</a>
+      </div>
+
+      {% if not episode.has_script %}
+        <div class="empty-state">
+          <h2>本集还没有完整剧本</h2>
+          <p>先生成第 {{ episode.episode }} 集完整剧本，审核后再制作分镜。</p>
+          <a class="primary-button" href="{% url 'studio:episode_script' workspace.id episode.episode %}">前往生成剧本</a>
+        </div>
+      {% elif workspace.storyboard_prompts %}
+        <div class="shot-grid">
+          {% for shot in workspace.storyboard_prompts %}
+            <article class="shot-card">
+              <div class="card-head">
+                <span class="step-badge">{{ shot.shot_number }}</span>
+                <div>
+                  <p class="eyebrow">第 {{ episode.episode }} 集 · 镜头 {{ shot.shot_number }}</p>
+                  <h3>{{ shot.duration }}</h3>
+                </div>
+              </div>
+              <dl>
+                <div><dt>画面描述</dt><dd>{{ shot.visual_description }}</dd></div>
+                <div><dt>角色动作</dt><dd>{{ shot.character_action }}</dd></div>
+                <div><dt>对白 / 旁白</dt><dd>{{ shot.dialogue_or_narration }}</dd></div>
+                <div><dt>镜头语言</dt><dd>{{ shot.camera_language }}</dd></div>
+                <div><dt>图片 Prompt</dt><dd>{{ shot.image_prompt }}</dd></div>
+                <div><dt>视频 Prompt</dt><dd>{{ shot.video_prompt }}</dd></div>
+              </dl>
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="empty-state">
+          <h2>第 {{ episode.episode }} 集还没有分镜</h2>
+          <p>点击“生成本集分镜”，任务会在后台执行并自动刷新结果。</p>
+        </div>
+      {% endif %}
+    </section>
+  {% endwith %}
 </section>
 {% endblock %}

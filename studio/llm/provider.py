@@ -1,10 +1,9 @@
-import json
+﻿import json
 import logging
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-
 import httpx
 
 
@@ -55,12 +54,17 @@ class LLMProvider:
 
     def __init__(self, config, client=None, timeout=None):
         self.config = config
-        self.client = client or httpx.Client(trust_env=False)
+        self.client = client or httpx.Client(trust_env=self._trust_env_from_env())
         self.timeout = timeout or self._timeout_from_env()
 
     @classmethod
     def from_env(cls, environ=None):
         return cls(LLMConfig.from_env(environ))
+
+    @classmethod
+    def _trust_env_from_env(cls):
+        raw_value = os.environ.get("LLM_TRUST_ENV", "true").strip().lower()
+        return raw_value not in {"0", "false", "no", "off"}
 
     @classmethod
     def _timeout_from_env(cls):
@@ -164,7 +168,7 @@ class LLMProvider:
                 body_preview=response.text[:1000],
                 error=str(exc),
             )
-            raise LLMAPIError(str(exc)) from exc
+            raise LLMAPIError(self._friendly_http_error(exc)) from exc
         except httpx.HTTPError as exc:
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
             self._log_event(
@@ -174,7 +178,7 @@ class LLMProvider:
                 elapsed_ms=elapsed_ms,
                 error=str(exc),
             )
-            raise LLMAPIError(str(exc)) from exc
+            raise LLMAPIError(self._friendly_http_error(exc)) from exc
         except (json.JSONDecodeError, ValueError, KeyError, IndexError, TypeError) as exc:
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
             self._log_event(
@@ -185,6 +189,22 @@ class LLMProvider:
                 error=str(exc),
             )
             raise LLMAPIError("Model response did not include message content") from exc
+
+    @staticmethod
+    def _friendly_http_error(exc):
+        message = str(exc)
+        if "WinError 10013" in message:
+            return (
+                "模型服务连接被 Windows 拒绝。请检查 LLM_BASE_URL 是否可访问、"
+                "系统代理/防火墙是否允许该地址，或在 .env 中设置正确的代理环境。"
+            )
+        if isinstance(exc, httpx.ConnectError):
+            return f"无法连接模型服务，请检查 LLM_BASE_URL 和网络/代理配置：{message}"
+        if isinstance(exc, httpx.ProxyError):
+            return f"模型服务代理连接失败，请检查系统代理或代理环境变量：{message}"
+        if isinstance(exc, httpx.NetworkError):
+            return f"模型服务网络请求失败，请稍后重试或检查网络配置：{message}"
+        return message
 
     @staticmethod
     def _extract_message_content(response):

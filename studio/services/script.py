@@ -99,3 +99,72 @@ def validate_script_payload(payload):
                 raise ValueError(f"Episode {index} field {field} must be a non-empty string")
 
     return {"script_plan": script_plan, "episode_1_script": episode_1_script}
+
+def generate_episode_script(provider, outline, episode, previous_episode=None, next_episode=None):
+    validated_outline = validate_outline(outline)
+    if not isinstance(episode, dict):
+        raise ValueError("Episode must be an object")
+
+    required_fields = REQUIRED_EPISODE_FIELDS
+    missing = required_fields - set(episode)
+    if missing:
+        raise ValueError(f"Episode missing fields: {', '.join(sorted(missing))}")
+    episode_number = episode["episode"]
+    if not isinstance(episode_number, int) or isinstance(episode_number, bool):
+        raise ValueError("Episode number must be an integer")
+
+    for field in sorted(required_fields - {"episode"}):
+        value = episode[field]
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"Episode field {field} must be a non-empty string")
+
+    continuity = []
+    if isinstance(previous_episode, dict):
+        continuity.append(
+            "上一集："
+            f"{previous_episode.get('title', '')}；"
+            f"摘要：{previous_episode.get('summary', '')}；"
+            f"结尾悬念：{previous_episode.get('cliffhanger', '')}"
+        )
+    if isinstance(next_episode, dict):
+        continuity.append(
+            "下一集："
+            f"{next_episode.get('title', '')}；"
+            f"需要衔接的方向：{next_episode.get('summary', '')}"
+        )
+
+    payload = provider.generate_json(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "你是爆款 AI 漫画短剧编剧。只返回 JSON，不要返回 Markdown。"
+                    'JSON 格式为 {"episode_script": "..."}。'
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"请创作第 {episode_number} 集完整剧本，时长约 "
+                    f"{EPISODE_DURATION_MINUTES} 分钟，可直接用于分镜制作。\n"
+                    f"整部作品标题：{validated_outline['title']}\n"
+                    f"核心设定：{validated_outline['core_premise']}\n"
+                    f"主角：{validated_outline['protagonist']}\n"
+                    f"长线梗概：{validated_outline['arc_summary']}\n"
+                    f"本集标题：{episode['title']}\n"
+                    f"本集摘要：{episode['summary']}\n"
+                    f"核心冲突：{episode['key_conflict']}\n"
+                    f"结尾悬念：{episode['cliffhanger']}\n"
+                    + ("\n".join(continuity) if continuity else "")
+                    + "\n剧本必须包含场景、人物动作、对白和旁白，并与前后集自然衔接。"
+                ),
+            },
+        ],
+        temperature=0.7,
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("Model response must be an object")
+    episode_script = payload.get("episode_script")
+    if not isinstance(episode_script, str) or not episode_script.strip():
+        raise ValueError("Model response must include a non-empty episode_script")
+    return episode_script

@@ -86,20 +86,112 @@ class Script(models.Model):
         return f"Script for {self.outline}"
 
 
+class Episode(models.Model):
+    SCRIPT_PENDING = "pending"
+    SCRIPT_GENERATING = "generating"
+    SCRIPT_READY = "ready"
+    SCRIPT_FAILED = "failed"
+    SCRIPT_STATUS_CHOICES = [
+        (SCRIPT_PENDING, "Pending"),
+        (SCRIPT_GENERATING, "Generating"),
+        (SCRIPT_READY, "Ready"),
+        (SCRIPT_FAILED, "Failed"),
+    ]
+
+    script = models.ForeignKey(Script, on_delete=models.CASCADE, related_name="episodes")
+    episode_number = models.PositiveIntegerField()
+    title = models.CharField(max_length=255)
+    summary = models.TextField()
+    key_conflict = models.TextField()
+    cliffhanger = models.TextField()
+    full_script = models.TextField(blank=True)
+    script_status = models.CharField(
+        max_length=20,
+        choices=SCRIPT_STATUS_CHOICES,
+        default=SCRIPT_PENDING,
+        db_index=True,
+    )
+    script_error = models.TextField(blank=True)
+    script_started_at = models.DateTimeField(null=True, blank=True)
+    script_finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["episode_number"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["script", "episode_number"],
+                name="unique_episode_number_per_script",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Episode {self.episode_number} of {self.script}"
+
+
 class StoryboardPrompt(models.Model):
-    project = models.OneToOneField(
+    project = models.ForeignKey(
         Project,
         on_delete=models.CASCADE,
-        related_name="storyboard_prompt",
+        related_name="storyboard_prompts",
     )
     script = models.ForeignKey(
         Script,
         on_delete=models.CASCADE,
         related_name="storyboard_prompts",
     )
+    episode = models.OneToOneField(
+        Episode,
+        on_delete=models.CASCADE,
+        related_name="storyboard_prompt",
+    )
     prompts_payload = models.JSONField(default=list)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"Storyboard prompts for {self.project}"
+        return f"Storyboard prompts for episode {self.episode.episode_number}"
+
+
+class GenerationTask(models.Model):
+    TYPE_OUTLINE = "outline"
+    TYPE_SCRIPT = "script"
+    TYPE_EPISODE_SCRIPT = "episode_script"
+    TYPE_STORYBOARD = "storyboard"
+    TYPE_CHOICES = [
+        (TYPE_OUTLINE, "Outline"),
+        (TYPE_SCRIPT, "Script"),
+        (TYPE_EPISODE_SCRIPT, "Episode script"),
+        (TYPE_STORYBOARD, "Storyboard"),
+    ]
+
+    STATUS_PENDING = "pending"
+    STATUS_RUNNING = "running"
+    STATUS_SUCCEEDED = "succeeded"
+    STATUS_FAILED = "failed"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_RUNNING, "Running"),
+        (STATUS_SUCCEEDED, "Succeeded"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_CANCELLED, "Cancelled"),
+    ]
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="generation_tasks")
+    task_type = models.CharField(max_length=32, choices=TYPE_CHOICES, db_index=True)
+    status = models.CharField(max_length=32, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
+    target_id = models.CharField(max_length=120, blank=True, default="")
+    input_snapshot = models.JSONField(default=dict, blank=True)
+    result_snapshot = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self):
+        return f"{self.task_type}:{self.status} for {self.project}"

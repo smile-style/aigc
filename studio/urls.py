@@ -17,10 +17,31 @@ urlpatterns = [
         views.generate_script_view,
         name="generate_script",
     ),
+    path(
+        "script/<str:workspace_id>/episode/<int:episode_number>/",
+        views.episode_script_page,
+        name="episode_script",
+    ),
+    path(
+        "script/<str:workspace_id>/episode/<int:episode_number>/generate/",
+        views.generate_episode_script_view,
+        name="generate_episode_script",
+    ),
+    path("tasks/<int:task_id>/", views.task_status_view, name="task_status"),
     path("storyboard/<str:workspace_id>/", views.storyboard_page, name="storyboard"),
     path(
         "storyboard/<str:workspace_id>/generate/",
         views.generate_storyboard_view,
         name="generate_storyboard",
+    ),
+    path(
+        "storyboard/<str:workspace_id>/episode/<int:episode_number>/",
+        views.storyboard_episode_page,
+        name="storyboard_episode",
+    ),
+    path(
+        "storyboard/<str:workspace_id>/episode/<int:episode_number>/generate/",
+        views.generate_storyboard_view,
+        name="generate_storyboard_episode",
     ),
 ]
