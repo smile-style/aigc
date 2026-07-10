@@ -3,7 +3,7 @@ services:
     image: registry.cn-hangzhou.aliyuncs.com/docker-registry-cache/mysql:8.0
     restart: always
     ports:
-      - '3306:3306'
+      - "3306:3306"
     container_name: mysql-8
     environment:
       - "MYSQL_DATABASE=${MYSQL_DATABASE:-AIGC_STUDIO}"
@@ -15,6 +15,12 @@ services:
       - mysql_data:/var/lib/mysql
       - ./config/mysql.cnf:/etc/mysql/conf.d/mysql.cnf:ro
       - ./init:/docker-entrypoint-initdb.d/:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   aigc-studio:
     build:
@@ -23,6 +29,9 @@ services:
     image: aigc-studio:latest
     container_name: aigc-studio
     restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
     env_file:
       - .env
     environment:
@@ -30,8 +39,14 @@ services:
       DJANGO_STATIC_ROOT: /app/staticfiles
       WORKSPACE_DIR: /app/workspace
       LLM_LOG_PATH: /app/logs/llm.log
+      DB_ENGINE: mysql
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: "${MYSQL_DATABASE:-AIGC_STUDIO}"
+      DB_USER: "${MYSQL_USER:-aigc_studio}"
+      DB_PASSWORD: "${MYSQL_PASSWORD}"
     ports:
-      - "52341:8000"
+      - "8080:8000"
     volumes:
       - aigc_workspace:/app/workspace
       - aigc_logs:/app/logs

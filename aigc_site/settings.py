@@ -59,12 +59,30 @@ TEMPLATES = [
 WSGI_APPLICATION = "aigc_site.wsgi.application"
 ASGI_APPLICATION = "aigc_site.asgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+DB_ENGINE = os.environ.get("DB_ENGINE", "sqlite").strip().lower()
+
+if DB_ENGINE == "mysql":
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": os.environ.get("DB_NAME") or os.environ.get("MYSQL_DATABASE", "AIGC_STUDIO"),
+            "USER": os.environ.get("DB_USER") or os.environ.get("MYSQL_USER", "aigc_studio"),
+            "PASSWORD": os.environ.get("DB_PASSWORD") or os.environ.get("MYSQL_PASSWORD", ""),
+            "HOST": os.environ.get("DB_HOST", "127.0.0.1"),
+            "PORT": os.environ.get("DB_PORT", "3306"),
+            "OPTIONS": {
+                "charset": "utf8mb4",
+                "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
+            },
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
 LANGUAGE_CODE = "zh-hans"
 TIME_ZONE = "Asia/Shanghai"

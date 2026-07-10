@@ -25,4 +25,4 @@ RUN mkdir -p /app/workspace /app/logs /app/staticfiles \
 
 EXPOSE 8000
 
-CMD ["gunicorn", "aigc_site.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "360"]
+CMD ["sh", "-c", "python manage.py migrate --noinput && gunicorn aigc_site.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 360"]

@@ -1,21 +1,23 @@
-import json
-
 import pytest
 from django.http import HttpResponse
 from django.urls import reverse
 
 from studio.constants import GENRES
+from studio.models import Outline, Project
+from studio.repositories.workspace import WorkspaceRepository
+
+pytestmark = pytest.mark.django_db
 
 
 def outline_payload():
     return [
         {
             "id": f"outline-{index}",
-            "title": f"大纲标题 {index}",
-            "core_premise": f"核心设定 {index}",
-            "protagonist": f"主角 {index}",
-            "hook": f"钩子 {index}",
-            "arc_summary": f"长线梗概 {index}",
+            "title": f"Outline title {index}",
+            "core_premise": f"Core premise {index}",
+            "protagonist": f"Protagonist {index}",
+            "hook": f"Hook {index}",
+            "arc_summary": f"Arc summary {index}",
         }
         for index in range(1, 7)
     ]
@@ -26,14 +28,14 @@ def script_payload():
         "script_plan": [
             {
                 "episode": index,
-                "title": f"第{index}集标题",
-                "summary": f"第{index}集摘要",
-                "key_conflict": f"第{index}集冲突",
-                "cliffhanger": f"第{index}集悬念",
+                "title": f"Episode {index} title",
+                "summary": f"Episode {index} summary",
+                "key_conflict": f"Episode {index} conflict",
+                "cliffhanger": f"Episode {index} cliffhanger",
             }
             for index in range(1, 61)
         ],
-        "episode_1_script": "第1集完整剧本",
+        "episode_1_script": "Episode 1 complete script",
     }
 
 
@@ -41,41 +43,69 @@ def storyboard_payload():
     return [
         {
             "shot_number": index,
-            "duration": f"{index + 2}秒",
-            "visual_description": f"画面描述 {index}",
-            "character_action": f"角色动作 {index}",
-            "dialogue_or_narration": f"台词旁白 {index}",
-            "camera_language": f"镜头语言 {index}",
-            "image_prompt": f"图片提示词 {index}",
-            "video_prompt": f"视频提示词 {index}",
+            "duration": f"{index + 2}s",
+            "visual_description": f"Visual description {index}",
+            "character_action": f"Character action {index}",
+            "dialogue_or_narration": f"Dialogue {index}",
+            "camera_language": f"Camera language {index}",
+            "image_prompt": f"Image prompt {index}",
+            "video_prompt": f"Video prompt {index}",
         }
         for index in range(1, 13)
     ]
 
 
-def write_workspace(tmp_path, **overrides):
-    workspace = {
-        "id": "workspace-1",
-        "genre": GENRES[0],
-        "episode_count": 60,
-        "episode_duration_minutes": 2,
-        "outlines": [],
-        "selected_outline_id": None,
-        "script_plan": [],
-        "episode_1_script": "",
-        "storyboard_prompts": [],
-        "created_at": "2026-07-02T12:00:00+08:00",
-        "updated_at": "2026-07-02T12:00:00+08:00",
-    }
-    workspace.update(overrides)
-    path = tmp_path / f"{workspace['id']}.json"
-    path.write_text(json.dumps(workspace, ensure_ascii=False, indent=2), encoding="utf-8")
+def write_workspace(**overrides):
+    repo = WorkspaceRepository()
+    workspace_id = overrides.pop("id", "workspace-1")
+    genre = overrides.pop("genre", GENRES[0])
+    workspace = repo.create_workspace(genre, workspace_id=workspace_id)
+
+    outlines = overrides.pop("outlines", None)
+    selected_outline_id = overrides.pop("selected_outline_id", None)
+    script_plan = overrides.pop("script_plan", None)
+    episode_1_script = overrides.pop("episode_1_script", None)
+    storyboard_prompts = overrides.pop("storyboard_prompts", None)
+
+    needs_outline = selected_outline_id or script_plan is not None or episode_1_script is not None
+    if outlines is None and needs_outline:
+        outlines = outline_payload()
+        selected_outline_id = selected_outline_id or outlines[0]["id"]
+    if outlines is not None:
+        workspace = repo.update_workspace(workspace_id, outlines=outlines)
+    if selected_outline_id:
+        workspace = repo.update_workspace(workspace_id, selected_outline_id=selected_outline_id)
+    if script_plan is not None or episode_1_script is not None:
+        workspace = repo.update_workspace(
+            workspace_id,
+            script_plan=script_plan if script_plan is not None else [],
+            episode_1_script=episode_1_script if episode_1_script is not None else "",
+        )
+    if storyboard_prompts is not None:
+        workspace = repo.update_workspace(workspace_id, storyboard_prompts=storyboard_prompts)
+
     return workspace
 
 
-def read_workspace(tmp_path, workspace_id="workspace-1"):
-    return json.loads((tmp_path / f"{workspace_id}.json").read_text(encoding="utf-8"))
+def read_workspace(workspace_id="workspace-1"):
+    return WorkspaceRepository().get_workspace(workspace_id)
 
+
+def test_outline_page_loads_current_outlines_from_database(client):
+    WorkspaceRepository().replace_current_outline_set(GENRES[0], outline_payload())
+
+    response = client.get(reverse("studio:outline"))
+
+    assert response.status_code == 200
+    content = response.content.decode("utf-8")
+    assert "Outline title 1" in content
+    assert "Core premise 1" in content
+
+
+def test_outline_page_allows_empty_database(client):
+    response = client.get(reverse("studio:outline"))
+
+    assert response.status_code == 200
 
 def test_outline_payload_returns_six_candidates():
     outlines = outline_payload()
@@ -95,7 +125,7 @@ def test_script_payload_returns_plan_and_episode_1_script():
     payload = script_payload()
 
     assert len(payload["script_plan"]) == 60
-    assert payload["episode_1_script"] == "第1集完整剧本"
+    assert payload["episode_1_script"] == "Episode 1 complete script"
 
 
 def test_storyboard_payload_returns_twelve_prompts():
@@ -104,8 +134,7 @@ def test_storyboard_payload_returns_twelve_prompts():
     assert len(prompts) == 12
 
 
-def test_generate_outlines_writes_workspace(client, settings, monkeypatch, tmp_path):
-    settings.WORKSPACE_DIR = tmp_path
+def test_generate_outlines_writes_workspace(client, monkeypatch):
     provider = object()
     monkeypatch.setattr("studio.views.LLMProvider.from_env", lambda: provider)
     monkeypatch.setattr("studio.views.generate_outlines", lambda llm, genre: outline_payload())
@@ -113,18 +142,18 @@ def test_generate_outlines_writes_workspace(client, settings, monkeypatch, tmp_p
     response = client.post(reverse("studio:generate_outlines"), {"genre": GENRES[0]})
 
     assert response.status_code == 200
-    assert "大纲标题 1" in response.content.decode("utf-8")
+    assert "Outline title 1" in response.content.decode("utf-8")
 
-    workspace_files = list(tmp_path.glob("*.json"))
-    assert len(workspace_files) == 1
-    workspace = json.loads(workspace_files[0].read_text(encoding="utf-8"))
+    workspace = WorkspaceRepository().get_current_workspace()
+    assert Project.objects.count() == 1
+    assert Outline.objects.count() == 6
     assert workspace["genre"] == GENRES[0]
-    assert workspace["outlines"] == outline_payload()
+    assert [outline["source_id"] for outline in workspace["outlines"]] == [outline["id"] for outline in outline_payload()]
+    assert all(outline["is_usable"] is False for outline in workspace["outlines"])
     assert workspace["selected_outline_id"] is None
 
 
-def test_generate_outlines_reuses_current_workspace_file(client, settings, monkeypatch, tmp_path):
-    settings.WORKSPACE_DIR = tmp_path
+def test_generate_outlines_reuses_current_workspace(client, monkeypatch):
     provider = object()
     calls = []
 
@@ -141,18 +170,16 @@ def test_generate_outlines_reuses_current_workspace_file(client, settings, monke
 
     assert first_response.status_code == 200
     assert second_response.status_code == 200
-    workspace_files = sorted(path.name for path in tmp_path.glob("*.json"))
-    assert workspace_files == ["current.json"]
-    workspace = read_workspace(tmp_path, "current")
+    workspace = WorkspaceRepository().get_current_workspace()
+    assert Project.objects.count() == 1
+    assert Outline.objects.count() == 6
     assert workspace["genre"] == GENRES[1]
-    assert len(workspace["outlines"]) == 6
     assert {outline["title"] for outline in workspace["outlines"]} == {"second"}
     assert workspace["selected_outline_id"] is None
 
 
-def test_select_outline_redirects_to_script_page(client, settings, tmp_path):
-    settings.WORKSPACE_DIR = tmp_path
-    workspace = write_workspace(tmp_path, outlines=outline_payload())
+def test_select_outline_redirects_to_script_page(client):
+    workspace = write_workspace(outlines=outline_payload())
 
     response = client.post(
         reverse("studio:select_outline"),
@@ -162,16 +189,12 @@ def test_select_outline_redirects_to_script_page(client, settings, tmp_path):
     assert response.status_code == 302
     assert response["Location"] == reverse("studio:script", args=[workspace["id"]])
 
-    saved = read_workspace(tmp_path, workspace["id"])
+    saved = read_workspace(workspace["id"])
     assert saved["selected_outline_id"] == "outline-2"
 
 
-@pytest.mark.parametrize("outlines", [None, ["x"]])
-def test_select_outline_handles_malformed_outlines(
-    client, settings, monkeypatch, tmp_path, outlines
-):
-    settings.WORKSPACE_DIR = tmp_path
-    workspace = write_workspace(tmp_path, outlines=outlines)
+def test_select_outline_handles_unknown_outline_id(client, monkeypatch):
+    workspace = write_workspace(outlines=outline_payload())
     captured = {}
 
     def fake_render_outline(request, workspace=None, error=None, genre=None):
@@ -183,7 +206,7 @@ def test_select_outline_handles_malformed_outlines(
 
     response = client.post(
         reverse("studio:select_outline"),
-        {"workspace_id": workspace["id"], "outline_id": "outline-1"},
+        {"workspace_id": workspace["id"], "outline_id": "missing-outline"},
     )
 
     assert response.status_code == 200
@@ -192,99 +215,85 @@ def test_select_outline_handles_malformed_outlines(
     assert response.content.decode("utf-8") == captured["error"]
 
 
-def test_generate_script_get_returns_405_without_writing_workspace(client, settings, tmp_path):
-    settings.WORKSPACE_DIR = tmp_path
-    write_workspace(
-        tmp_path,
+def test_generate_script_get_returns_405_without_writing_workspace(client):
+    workspace = write_workspace(
         outlines=outline_payload(),
         selected_outline_id="outline-1",
-        script_plan=[{"episode": 1, "title": "旧标题"}],
-        episode_1_script="旧剧本",
+        script_plan=[{"episode": 1, "title": "old title"}],
+        episode_1_script="old script",
     )
-    before = read_workspace(tmp_path)
+    before = read_workspace(workspace["id"])
 
     response = client.get(reverse("studio:generate_script", args=[before["id"]]))
 
     assert response.status_code == 405
-    assert read_workspace(tmp_path) == before
+    assert read_workspace(workspace["id"]) == before
 
 
-def test_generate_script_writes_plan_and_episode_script(
-    client, settings, monkeypatch, tmp_path
-):
-    settings.WORKSPACE_DIR = tmp_path
+def test_generate_script_starts_background_generation(client, monkeypatch):
     workspace = write_workspace(
-        tmp_path,
         outlines=outline_payload(),
         selected_outline_id="outline-1",
     )
-    provider = object()
-    monkeypatch.setattr("studio.views.LLMProvider.from_env", lambda: provider)
+    started = []
     monkeypatch.setattr(
-        "studio.views.generate_script",
-        lambda llm, outline: script_payload(),
+        "studio.views._start_background_script_generation",
+        lambda workspace_id, outline_id: started.append((workspace_id, outline_id)),
     )
 
     response = client.post(reverse("studio:generate_script", args=[workspace["id"]]))
 
-    assert response.status_code == 200
-    saved = read_workspace(tmp_path, workspace["id"])
-    assert len(saved["script_plan"]) == 60
-    assert saved["episode_1_script"] == "第1集完整剧本"
+    assert response.status_code == 302
+    assert response["Location"] == reverse("studio:script", args=[workspace["id"]])
+    assert started == [(workspace["id"], "outline-1")]
+    saved = read_workspace(workspace["id"])
+    assert saved["selected_outline"]["script_status"] == "generating"
+    assert saved["script_plan"] == []
+    assert saved["episode_1_script"] == ""
 
 
-def test_generate_script_error_keeps_previous_content(
-    client, settings, monkeypatch, tmp_path
-):
-    settings.WORKSPACE_DIR = tmp_path
+def test_background_script_error_keeps_previous_content(monkeypatch):
     workspace = write_workspace(
-        tmp_path,
         outlines=outline_payload(),
         selected_outline_id="outline-1",
-        script_plan=[{"episode": 1, "title": "旧标题"}],
-        episode_1_script="旧剧本",
+        script_plan=[{"episode": 1, "title": "old title"}],
+        episode_1_script="old script",
     )
+    WorkspaceRepository().start_script_generation(workspace["id"], "outline-1")
     provider = object()
     monkeypatch.setattr("studio.views.LLMProvider.from_env", lambda: provider)
 
     def raise_error(llm, outline):
-        raise ValueError("剧本生成失败")
+        raise ValueError("script generation failed")
 
     monkeypatch.setattr("studio.views.generate_script", raise_error)
-    monkeypatch.setattr(
-        "studio.views._render_script",
-        lambda request, workspace, error=None: HttpResponse(error or ""),
+
+    from studio.views import _run_script_generation
+
+    _run_script_generation(workspace["id"], "outline-1")
+
+    saved = read_workspace(workspace["id"])
+    assert saved["script_plan"] == [{"episode": 1, "title": "old title"}]
+    assert saved["episode_1_script"] == "old script"
+    assert saved["selected_outline"]["script_status"] == "failed"
+    assert "script generation failed" in saved["selected_outline"]["script_error"]
+
+
+def test_generate_storyboard_get_returns_405_without_writing_workspace(client):
+    workspace = write_workspace(
+        episode_1_script="old script",
+        storyboard_prompts=[{"shot_number": 1, "image_prompt": "old prompt"}],
     )
-
-    response = client.post(reverse("studio:generate_script", args=[workspace["id"]]))
-
-    assert response.status_code == 200
-    assert "剧本生成失败" in response.content.decode("utf-8")
-    saved = read_workspace(tmp_path, workspace["id"])
-    assert saved["script_plan"] == [{"episode": 1, "title": "旧标题"}]
-    assert saved["episode_1_script"] == "旧剧本"
-
-
-def test_generate_storyboard_get_returns_405_without_writing_workspace(
-    client, settings, tmp_path
-):
-    settings.WORKSPACE_DIR = tmp_path
-    write_workspace(
-        tmp_path,
-        episode_1_script="旧剧本",
-        storyboard_prompts=[{"shot_number": 1, "image_prompt": "旧分镜"}],
-    )
-    before = read_workspace(tmp_path)
+    before = read_workspace(workspace["id"])
 
     response = client.get(reverse("studio:generate_storyboard", args=[before["id"]]))
 
     assert response.status_code == 405
-    assert read_workspace(tmp_path) == before
+    assert read_workspace(workspace["id"]) == before
 
 
-def test_generate_storyboard_writes_prompts(client, settings, monkeypatch, tmp_path):
-    settings.WORKSPACE_DIR = tmp_path
-    workspace = write_workspace(tmp_path, episode_1_script="第1集完整剧本")
+def test_generate_storyboard_writes_prompts(client, monkeypatch):
+    workspace = write_workspace(episode_1_script="Episode 1 complete script")
     provider = object()
     monkeypatch.setattr("studio.views.LLMProvider.from_env", lambda: provider)
     monkeypatch.setattr(
@@ -295,15 +304,13 @@ def test_generate_storyboard_writes_prompts(client, settings, monkeypatch, tmp_p
     response = client.post(reverse("studio:generate_storyboard", args=[workspace["id"]]))
 
     assert response.status_code == 200
-    saved = read_workspace(tmp_path, workspace["id"])
+    saved = read_workspace(workspace["id"])
     assert len(saved["storyboard_prompts"]) == 12
 
 
-def test_generation_error_keeps_previous_content(client, settings, monkeypatch, tmp_path):
-    settings.WORKSPACE_DIR = tmp_path
+def test_generation_error_keeps_previous_content(client, monkeypatch):
     workspace = write_workspace(
-        tmp_path,
-        episode_1_script="保留原有剧本",
+        episode_1_script="keep old script",
         storyboard_prompts=storyboard_payload(),
     )
     provider = object()
@@ -314,13 +321,90 @@ def test_generation_error_keeps_previous_content(client, settings, monkeypatch, 
     )
 
     def raise_error(llm, episode_1_script):
-        raise ValueError("分镜生成失败")
+        raise ValueError("storyboard generation failed")
 
     monkeypatch.setattr("studio.views.generate_storyboard", raise_error)
 
     response = client.post(reverse("studio:generate_storyboard", args=[workspace["id"]]))
 
     assert response.status_code == 200
-    assert "分镜生成失败" in response.content.decode("utf-8")
-    saved = read_workspace(tmp_path, workspace["id"])
-    assert saved["episode_1_script"] == "保留原有剧本"
+    assert "storyboard generation failed" in response.content.decode("utf-8")
+    saved = read_workspace(workspace["id"])
+    assert saved["episode_1_script"] == "keep old script"
+
+def test_mark_outline_usable_keeps_outline_after_refresh(client, monkeypatch):
+    provider = object()
+    monkeypatch.setattr("studio.views.LLMProvider.from_env", lambda: provider)
+    monkeypatch.setattr("studio.views.generate_outlines", lambda llm, genre: outline_payload())
+
+    client.post(reverse("studio:generate_outlines"), {"genre": GENRES[0]})
+    workspace = WorkspaceRepository().get_current_workspace()
+    first_outline_id = workspace["outlines"][0]["id"]
+
+    response = client.post(
+        reverse("studio:mark_outline_usable"),
+        {"workspace_id": workspace["id"], "usable_outline_id": first_outline_id},
+    )
+
+    assert response.status_code == 302
+    assert WorkspaceRepository().get_current_workspace()["usable_outlines"][0]["id"] == first_outline_id
+
+    monkeypatch.setattr(
+        "studio.views.generate_outlines",
+        lambda llm, genre: [{**outline, "title": "New round"} for outline in outline_payload()],
+    )
+    client.post(reverse("studio:generate_outlines"), {"genre": GENRES[1]})
+    refreshed = WorkspaceRepository().get_current_workspace()
+
+    assert first_outline_id in [outline["id"] for outline in refreshed["usable_outlines"]]
+    assert first_outline_id not in [outline["id"] for outline in refreshed["outlines"]]
+    assert len(refreshed["outlines"]) == 6
+
+
+def test_script_library_page_lists_usable_outlines(client):
+    workspace = WorkspaceRepository().replace_current_outline_set(GENRES[0], outline_payload())
+    first_outline_id = workspace["outlines"][0]["id"]
+    WorkspaceRepository().mark_outline_usable(workspace["id"], first_outline_id)
+
+    response = client.get(reverse("studio:script_index"))
+
+    assert response.status_code == 200
+    content = response.content.decode("utf-8")
+    assert "Outline title 1" in content
+    assert "生成剧本" in content
+
+def test_script_library_action_shows_view_script_when_script_exists(client):
+    workspace = WorkspaceRepository().replace_current_outline_set(GENRES[0], outline_payload())
+    first_outline_id = workspace["outlines"][0]["id"]
+    repo = WorkspaceRepository()
+    repo.mark_outline_usable(workspace["id"], first_outline_id)
+    repo.update_workspace(workspace["id"], selected_outline_id=first_outline_id)
+    repo.update_workspace(
+        workspace["id"],
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+
+    response = client.get(reverse("studio:script_index"))
+
+    assert response.status_code == 200
+    content = response.content.decode("utf-8")
+    assert "查看剧本" in content
+    assert "生成剧本" not in content
+
+
+def test_selecting_unscripted_outline_does_not_show_previous_script(client):
+    workspace = write_workspace(outlines=outline_payload(), selected_outline_id="outline-1")
+    repo = WorkspaceRepository()
+    repo.update_workspace(
+        workspace["id"],
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    repo.update_workspace(workspace["id"], selected_outline_id="outline-2")
+
+    selected = repo.get_workspace(workspace["id"])
+
+    assert selected["selected_outline_id"] == "outline-2"
+    assert selected["script_plan"] == []
+    assert selected["episode_1_script"] == ""

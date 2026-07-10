@@ -1,3 +1,7 @@
+import logging
+import threading
+
+from django.db import close_old_connections
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_POST
 
@@ -8,10 +12,12 @@ from .llm.provider import (
     LLMJSONParseError,
     LLMProvider,
 )
-from .repositories.workspace import JsonWorkspaceRepository
+from .repositories.workspace import CURRENT_WORKSPACE_ID, WorkspaceRepository
 from .services.outline import generate_outlines
 from .services.script import generate_script
 from .services.storyboard import generate_storyboard
+
+logger = logging.getLogger(__name__)
 
 EXPECTED_GENERATION_ERRORS = (
     FileNotFoundError,
@@ -23,13 +29,18 @@ EXPECTED_GENERATION_ERRORS = (
 
 
 def outline_page(request):
-    return _render_outline(request)
+    repository = WorkspaceRepository()
+    try:
+        workspace = repository.get_current_workspace()
+    except FileNotFoundError:
+        workspace = None
+    return _render_outline(request, workspace=workspace)
 
 
 @require_POST
 def generate_outlines_view(request):
     genre = request.POST.get("genre", "")
-    repository = JsonWorkspaceRepository()
+    repository = WorkspaceRepository()
     try:
         workspace = repository.get_current_workspace()
     except FileNotFoundError:
@@ -45,25 +56,29 @@ def generate_outlines_view(request):
 
 
 @require_POST
+def mark_outline_usable_view(request):
+    repository = WorkspaceRepository()
+    workspace_id = request.POST.get("workspace_id", CURRENT_WORKSPACE_ID)
+    outline_id = request.POST.get("usable_outline_id") or request.POST.get("outline_id", "")
+    try:
+        repository.mark_outline_usable(workspace_id, outline_id)
+    except FileNotFoundError as exc:
+        try:
+            workspace = repository.get_workspace(workspace_id)
+        except FileNotFoundError:
+            workspace = None
+        return _render_outline(request, workspace=workspace, error=str(exc))
+    return redirect("studio:outline")
+
+
+@require_POST
 def select_outline_view(request):
-    repository = JsonWorkspaceRepository()
+    repository = WorkspaceRepository()
     workspace_id = request.POST.get("workspace_id", "")
     outline_id = request.POST.get("outline_id", "")
     workspace = repository.get_workspace(workspace_id)
-    outlines = workspace.get("outlines")
 
-    if not isinstance(outlines, list):
-        return _render_outline(
-            request,
-            workspace=workspace,
-            error="请选择有效的大纲。",
-            genre=workspace.get("genre"),
-        )
-
-    has_outline = any(
-        isinstance(outline, dict) and outline.get("id") == outline_id for outline in outlines
-    )
-    if not has_outline:
+    if not repository.outline_exists(workspace_id, outline_id):
         return _render_outline(
             request,
             workspace=workspace,
@@ -75,43 +90,69 @@ def select_outline_view(request):
     return redirect("studio:script", workspace_id=workspace_id)
 
 
+def script_library_page(request):
+    repository = WorkspaceRepository()
+    try:
+        data = repository.list_usable_outlines(CURRENT_WORKSPACE_ID)
+    except FileNotFoundError:
+        data = {
+            "id": CURRENT_WORKSPACE_ID,
+            "genre": "",
+            "episode_count": EPISODE_COUNT,
+            "episode_duration_minutes": EPISODE_DURATION_MINUTES,
+            "usable_outlines": [],
+        }
+    return _render_script_library(request, data)
+
+
 def script_page(request, workspace_id):
-    repository = JsonWorkspaceRepository()
+    repository = WorkspaceRepository()
     workspace = repository.get_workspace(workspace_id)
     return _render_script(request, workspace)
 
 
 @require_POST
 def generate_script_view(request, workspace_id):
-    repository = JsonWorkspaceRepository()
-    workspace = repository.get_workspace(workspace_id)
+    repository = WorkspaceRepository()
+    next_page = request.POST.get("next", "script")
+    outline_id = request.POST.get("outline_id", "")
 
     try:
-        selected_outline = _selected_outline(workspace)
-        if selected_outline is None:
-            raise ValueError("请先选择一个大纲，再生成剧本。")
-
-        payload = generate_script(LLMProvider.from_env(), selected_outline)
-        workspace = repository.update_workspace(
-            workspace_id,
-            script_plan=payload["script_plan"],
-            episode_1_script=payload["episode_1_script"],
-        )
+        outline = repository.start_script_generation(workspace_id, outline_id or None)
+        _start_background_script_generation(workspace_id, outline["id"])
     except EXPECTED_GENERATION_ERRORS as exc:
+        if next_page == "script_index":
+            try:
+                data = repository.list_usable_outlines(CURRENT_WORKSPACE_ID)
+            except FileNotFoundError:
+                data = {
+                    "id": CURRENT_WORKSPACE_ID,
+                    "genre": "",
+                    "episode_count": EPISODE_COUNT,
+                    "episode_duration_minutes": EPISODE_DURATION_MINUTES,
+                    "usable_outlines": [],
+                }
+            return _render_script_library(request, data, error=str(exc))
+        try:
+            workspace = repository.get_workspace(workspace_id)
+        except FileNotFoundError:
+            workspace = None
         return _render_script(request, workspace, error=str(exc))
 
-    return _render_script(request, workspace)
+    if next_page == "script_index":
+        return redirect("studio:script_index")
+    return redirect("studio:script", workspace_id=workspace_id)
 
 
 def storyboard_page(request, workspace_id):
-    repository = JsonWorkspaceRepository()
+    repository = WorkspaceRepository()
     workspace = repository.get_workspace(workspace_id)
     return _render_storyboard(request, workspace)
 
 
 @require_POST
 def generate_storyboard_view(request, workspace_id):
-    repository = JsonWorkspaceRepository()
+    repository = WorkspaceRepository()
     workspace = repository.get_workspace(workspace_id)
 
     try:
@@ -130,6 +171,41 @@ def generate_storyboard_view(request, workspace_id):
     return _render_storyboard(request, workspace)
 
 
+def _start_background_script_generation(workspace_id, outline_id):
+    worker = threading.Thread(
+        target=_run_script_generation,
+        args=(workspace_id, outline_id),
+        daemon=True,
+    )
+    worker.start()
+    return worker
+
+
+def _run_script_generation(workspace_id, outline_id):
+    close_old_connections()
+    repository = WorkspaceRepository()
+    try:
+        workspace = repository.get_workspace(workspace_id)
+        outline = _outline_by_id(workspace, outline_id)
+        if outline is None:
+            raise FileNotFoundError(f"Outline not found: {outline_id}")
+        payload = generate_script(LLMProvider.from_env(), outline)
+        repository.save_script_for_outline(
+            workspace_id,
+            outline_id,
+            payload["script_plan"],
+            payload["episode_1_script"],
+        )
+    except EXPECTED_GENERATION_ERRORS as exc:
+        logger.exception("Script generation failed for outline %s", outline_id)
+        try:
+            repository.mark_script_generation_failed(workspace_id, outline_id, exc)
+        except FileNotFoundError:
+            logger.exception("Could not mark failed script generation for outline %s", outline_id)
+    finally:
+        close_old_connections()
+
+
 def _render_outline(request, workspace=None, error=None, genre=None):
     selected_genre = genre or (workspace or {}).get("genre")
     return render(
@@ -142,6 +218,20 @@ def _render_outline(request, workspace=None, error=None, genre=None):
             "workspace": workspace,
             "selected_genre": selected_genre,
             "error": error,
+            "active_nav": "outline",
+        },
+    )
+
+
+def _render_script_library(request, data, error=None):
+    return render(
+        request,
+        "studio/script_library.html",
+        {
+            "workspace": data,
+            "usable_outlines": data.get("usable_outlines", []),
+            "error": error,
+            "active_nav": "script",
         },
     )
 
@@ -152,8 +242,9 @@ def _render_script(request, workspace, error=None):
         "studio/script.html",
         {
             "workspace": workspace,
-            "selected_outline": _selected_outline(workspace),
+            "selected_outline": _selected_outline(workspace or {}),
             "error": error,
+            "active_nav": "script",
         },
     )
 
@@ -165,17 +256,25 @@ def _render_storyboard(request, workspace, error=None):
         {
             "workspace": workspace,
             "error": error,
+            "active_nav": "storyboard",
         },
     )
 
 
 def _selected_outline(workspace):
-    selected_outline_id = workspace.get("selected_outline_id")
-    outlines = workspace.get("outlines")
-    if not isinstance(outlines, list):
-        return None
+    if workspace.get("selected_outline"):
+        return workspace["selected_outline"]
 
-    for outline in outlines:
-        if isinstance(outline, dict) and outline.get("id") == selected_outline_id:
-            return outline
+    selected_outline_id = workspace.get("selected_outline_id")
+    return _outline_by_id(workspace, selected_outline_id)
+
+
+def _outline_by_id(workspace, outline_id):
+    outline_groups = [workspace.get("outlines"), workspace.get("usable_outlines")]
+    for outlines in outline_groups:
+        if not isinstance(outlines, list):
+            continue
+        for outline in outlines:
+            if isinstance(outline, dict) and outline.get("id") == outline_id:
+                return outline
     return None
