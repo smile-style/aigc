@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import video_views, views
 
 
 app_name = "studio"
@@ -37,6 +37,11 @@ urlpatterns = [
         views.generate_character_image_view,
         name="generate_character_image",
     ),
+    path(
+        "script/<str:workspace_id>/characters/<int:character_id>/image/download/",
+        views.download_character_image_view,
+        name="download_character_image",
+    ),
     path("tasks/<int:task_id>/", views.task_status_view, name="task_status"),
     path("storyboard/<str:workspace_id>/", views.storyboard_page, name="storyboard"),
     path(
@@ -53,5 +58,52 @@ urlpatterns = [
         "storyboard/<str:workspace_id>/episode/<int:episode_number>/generate/",
         views.generate_storyboard_view,
         name="generate_storyboard_episode",
+    ),
+    path("system/", video_views.system_settings_page, name="system_settings"),
+    path("video/<str:workspace_id>/", video_views.video_page, name="video"),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/",
+        video_views.video_episode_page,
+        name="video_episode",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/status/",
+        video_views.video_status_view,
+        name="video_status",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/batch/",
+        video_views.batch_video_view,
+        name="batch_videos",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/shot/<uuid:shot_id>/generate/",
+        video_views.generate_shot_video_view,
+        name="generate_shot_video",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/shot/<uuid:shot_id>/characters/",
+        video_views.bind_shot_characters_view,
+        name="bind_shot_characters",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/reorder/",
+        video_views.reorder_video_shots_view,
+        name="reorder_video_shots",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/export/",
+        video_views.export_video_view,
+        name="export_video",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/shot-video/<int:video_id>/download/",
+        video_views.download_shot_video_view,
+        name="download_shot_video",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/download/",
+        video_views.download_composition_view,
+        name="download_composition",
     ),
 ]

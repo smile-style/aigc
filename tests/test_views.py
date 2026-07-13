@@ -2,6 +2,7 @@
 from django.http import HttpResponse
 from django.urls import reverse
 
+from studio.llm.image_provider import ImageResult
 from studio.constants import GENRES
 from studio.models import GenerationTask, Outline, Project
 from studio.repositories.workspace import WorkspaceRepository
@@ -629,6 +630,44 @@ def test_script_page_links_every_episode_to_its_own_workflow(client):
     assert reverse("studio:generate_episode_script", args=[workspace["id"], 12]) in content
 
 
+def test_script_page_defaults_to_episode_workspace(client):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    repository = WorkspaceRepository()
+    repository.save_character_profiles(workspace["id"], character_profiles())
+
+    response = client.get(reverse("studio:script", args=[workspace["id"]]))
+
+    content = response.content.decode("utf-8")
+    assert response.status_code == 200
+    assert 'data-workspace-view="episodes"' in content
+    assert 'href="?view=episodes" aria-current="page"' in content
+    assert "60 集生产列表" in content
+    assert 'class="character-grid"' not in content
+
+
+def test_script_page_opens_character_assets_from_query_string(client):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    repository = WorkspaceRepository()
+    repository.save_character_profiles(workspace["id"], character_profiles())
+
+    response = client.get(
+        f'{reverse("studio:script", args=[workspace["id"]])}?view=characters'
+    )
+
+    content = response.content.decode("utf-8")
+    assert response.status_code == 200
+    assert 'data-workspace-view="characters"' in content
+    assert 'href="?view=characters" aria-current="page"' in content
+    assert 'class="character-grid"' in content
+    assert "60 集生产列表" not in content
+
+
 def test_script_page_keeps_episode_modal_closed_until_requested(client):
     workspace = write_workspace(
         script_plan=script_payload()["script_plan"],
@@ -669,13 +708,19 @@ def test_generate_characters_starts_background_task(client, monkeypatch):
         lambda task_id: started.append(task_id),
     )
 
-    response = client.post(reverse("studio:generate_characters", args=[workspace["id"]]))
+    response = client.post(
+        reverse("studio:generate_characters", args=[workspace["id"]]), {"visual_style": "realistic"}
+    )
 
     task = GenerationTask.objects.get(task_type=GenerationTask.TYPE_CHARACTER_PROFILE)
     assert response.status_code == 302
-    assert response["Location"] == reverse("studio:script", args=[workspace["id"]])
+    assert response["Location"] == (
+        f'{reverse("studio:script", args=[workspace["id"]])}?view=characters'
+    )
     assert started == [task.id]
     assert task.status == GenerationTask.STATUS_PENDING
+    assert task.input_snapshot["visual_style"] == "realistic"
+    assert WorkspaceRepository().get_workspace(workspace["id"])["character_visual_style"] == "realistic"
 
 
 def test_character_image_task_persists_edited_prompt_and_character_target():
@@ -697,8 +742,81 @@ def test_character_image_task_persists_edited_prompt_and_character_target():
     assert task["input_snapshot"] == {
         "prompt": "Edited cinematic character prompt",
         "character_name": "Chen Mo",
+        "visual_style": "comic",
     }
 
+
+
+def test_character_image_can_be_downloaded_from_script_page(client, settings, tmp_path):
+    settings.MEDIA_ROOT = tmp_path
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    repository = WorkspaceRepository()
+    repository.save_character_profiles(workspace["id"], character_profiles())
+    character = repository.get_workspace(workspace["id"])["characters"][0]
+    repository.save_character_asset(
+        workspace["id"],
+        character["id"],
+        ImageResult(b"downloadable-image", ".png", "", "fake-image-model"),
+    )
+
+    page_response = client.get(
+        f'{reverse("studio:script", args=[workspace["id"]])}?view=characters'
+    )
+    download_url = reverse(
+        "studio:download_character_image",
+        args=[workspace["id"], character["id"]],
+    )
+
+    assert page_response.status_code == 200
+    assert download_url in page_response.content.decode("utf-8")
+    assert "&#19979;&#36733;&#21407;&#22270;" in page_response.content.decode("utf-8")
+
+    download_response = client.get(download_url)
+
+    assert download_response.status_code == 200
+    assert b"".join(download_response.streaming_content) == b"downloadable-image"
+    assert download_response["Content-Disposition"].startswith("attachment;")
+    assert 'filename="Chen Mo-v1.png"' in download_response["Content-Disposition"]
+
+
+def test_character_image_worker_reapplies_persisted_visual_style(monkeypatch):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    repository = WorkspaceRepository()
+    repository.create_character_profile_task(workspace["id"], "realistic")
+    repository.save_character_profiles(workspace["id"], character_profiles())
+    character = repository.get_workspace(workspace["id"])["characters"][0]
+    task = repository.create_character_image_task(
+        workspace["id"], character["id"], "Edited character prompt without a style"
+    )
+    captured = {}
+
+    class FakeImageProvider:
+        def generate_image(self, prompt):
+            captured["prompt"] = prompt
+            return ImageResult(b"image", ".png", "", "fake-image-model")
+
+    monkeypatch.setattr("studio.views.ImageProvider.from_env", lambda: FakeImageProvider())
+
+    def fake_save_asset(self, workspace_id, character_id, result, prompt_snapshot=None):
+        captured["snapshot"] = prompt_snapshot
+        return {"image_url": "/media/character.png"}
+
+    monkeypatch.setattr(WorkspaceRepository, "save_character_asset", fake_save_asset)
+
+    from studio.views import _run_character_image_generation
+
+    _run_character_image_generation(task["id"])
+
+    finished = repository.get_task(task["id"])
+    assert "cinematic photorealism" in captured["prompt"]
+    assert "Do not use anime" in captured["prompt"]
+    assert captured["snapshot"] == captured["prompt"]
 
 def test_script_page_shows_character_profile_failure(client):
     workspace = write_workspace(
@@ -712,7 +830,9 @@ def test_script_page_shows_character_profile_failure(client):
         "模型网关暂时不可用（HTTP 502），请稍后重试。",
     )
 
-    response = client.get(reverse("studio:script", args=[workspace["id"]]))
+    response = client.get(
+        f'{reverse("studio:script", args=[workspace["id"]])}?view=characters'
+    )
 
     content = response.content.decode("utf-8")
     assert response.status_code == 200

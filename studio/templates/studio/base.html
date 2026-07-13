@@ -5,8 +5,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}AI 漫剧生成工具{% endblock %}</title>
-  <link rel="stylesheet" href="{% static 'studio/app.css' %}?v=20260710-uiux">
+  <link rel="stylesheet" href="{% static 'studio/app.css' %}?v=20260713-workbench">
+  <link rel="stylesheet" href="{% static 'studio/phase3.css' %}?v=20260713-video">
+  <link rel="stylesheet" href="{% static 'studio/phase3-extras.css' %}?v=20260713-video">
   <script src="{% static 'studio/app.js' %}?v=20260710-uiux" defer></script>
+  <script src="{% static 'studio/phase3.js' %}?v=20260713-video" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -41,7 +44,23 @@
             <strong>分镜 Prompt</strong>
           </div>
         {% endif %}
+        {% if workspace and workspace.id and workspace.storyboard_prompts %}
+          <a class="nav-item {% if active_nav == 'video' %}is-active{% endif %}" href="{% url 'studio:video' workspace.id %}">
+            <span>4</span>
+            <strong>视频成片</strong>
+          </a>
+        {% else %}
+          <div class="nav-item is-disabled" aria-disabled="true">
+            <span>4</span>
+            <strong>视频成片</strong>
+          </div>
+        {% endif %}
       </nav>
+
+      <a class="system-nav-link {% if active_nav == 'system' %}is-active{% endif %}" href="{% url 'studio:system_settings' %}">
+        <span aria-hidden="true">⚙</span>
+        <strong>系统管理</strong>
+      </a>
 
       <section class="sidebar-panel" aria-label="存储状态">
         <p class="nav-kicker">Storage</p>

@@ -2,7 +2,7 @@ import logging
 import threading
 
 from django.db import close_old_connections
-from django.http import JsonResponse
+from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
@@ -15,9 +15,10 @@ from .llm.provider import (
     LLMJSONParseError,
     LLMProvider,
 )
-from .models import GenerationTask
+from .models import GenerationTask, ModelAssignment
 from .repositories.workspace import CURRENT_WORKSPACE_ID, WorkspaceRepository
-from .services.characters import generate_character_profiles
+from .services.characters import apply_character_visual_style, generate_character_profiles
+from .services.model_config import image_provider_for, llm_provider_for
 from .services.outline import generate_outlines
 from .services.script import generate_episode_script, generate_script
 from .services.storyboard import generate_storyboard
@@ -52,7 +53,7 @@ def generate_outlines_view(request):
         workspace = None
 
     try:
-        outlines = generate_outlines(LLMProvider.from_env(), genre)
+        outlines = generate_outlines(llm_provider_for(ModelAssignment.PURPOSE_OUTLINE), genre)
         workspace = repository.replace_current_outline_set(genre, outlines)
     except EXPECTED_GENERATION_ERRORS as exc:
         return _render_outline(request, workspace=workspace, error=str(exc), genre=genre)
@@ -191,12 +192,14 @@ def generate_episode_script_view(request, workspace_id, episode_number):
 def generate_characters_view(request, workspace_id):
     repository = WorkspaceRepository()
     try:
-        task = repository.create_character_profile_task(workspace_id)
+        task = repository.create_character_profile_task(workspace_id, request.POST.get("visual_style"))
         if task["created"]:
             _start_background_character_profile_generation(task["id"])
     except EXPECTED_GENERATION_ERRORS as exc:
-        return _render_script(request, repository.get_workspace(workspace_id), error=str(exc))
-    return redirect("studio:script", workspace_id=workspace_id)
+        return _render_script(
+            request, repository.get_workspace(workspace_id), error=str(exc), script_view="characters"
+        )
+    return redirect(f'{reverse("studio:script", args=[workspace_id])}?view=characters')
 
 
 @require_POST
@@ -211,8 +214,26 @@ def generate_character_image_view(request, workspace_id, character_id):
         if task["created"]:
             _start_background_character_image_generation(task["id"])
     except EXPECTED_GENERATION_ERRORS as exc:
-        return _render_script(request, repository.get_workspace(workspace_id), error=str(exc))
-    return redirect("studio:script", workspace_id=workspace_id)
+        return _render_script(
+            request, repository.get_workspace(workspace_id), error=str(exc), script_view="characters"
+        )
+    return redirect(f'{reverse("studio:script", args=[workspace_id])}?view=characters')
+
+
+@require_GET
+def download_character_image_view(request, workspace_id, character_id):
+    try:
+        asset = WorkspaceRepository().get_latest_character_asset(
+            workspace_id, character_id
+        )
+    except FileNotFoundError as exc:
+        raise Http404(str(exc)) from exc
+    return FileResponse(
+        asset["file"],
+        as_attachment=True,
+        filename=asset["filename"],
+    )
+
 
 def storyboard_page(request, workspace_id):
     return storyboard_episode_page(request, workspace_id, 1)
@@ -257,7 +278,8 @@ def task_status_view(request, task_id):
             GenerationTask.TYPE_CHARACTER_IMAGE,
         }:
             task["result_url"] = request.build_absolute_uri(
-                reverse("studio:script", args=[task["workspace_id"]])
+                f'{reverse("studio:script", args=[task["workspace_id"]])}'
+                "?view=characters"
             )
         elif task["task_type"] == GenerationTask.TYPE_STORYBOARD:
             episode_number = int(task["target_id"] or 1)
@@ -290,9 +312,10 @@ def _run_character_profile_generation(task_id):
         task = repository.start_task(task_id)
         workspace = repository.get_workspace(task["workspace_id"])
         profiles = generate_character_profiles(
-            LLMProvider.from_env(),
+            llm_provider_for(ModelAssignment.PURPOSE_CHARACTER_PROFILE),
             workspace["selected_outline"],
             workspace.get("episodes", []),
+            task["input_snapshot"].get("visual_style", workspace["character_visual_style"]),
         )
         repository.save_character_profiles(task["workspace_id"], profiles)
         repository.finish_task(task_id, result={"character_count": len(profiles)})
@@ -323,8 +346,14 @@ def _run_character_image_generation(task_id):
         task = repository.start_task(task_id)
         character_id = int(task["target_id"])
         character = repository.get_character(task["workspace_id"], character_id)
-        result = ImageProvider.from_env().generate_image(character["image_prompt"])
-        asset = repository.save_character_asset(task["workspace_id"], character_id, result)
+        effective_prompt = apply_character_visual_style(
+            character["image_prompt"],
+            task["input_snapshot"].get("visual_style", character["visual_style"]),
+        )
+        result = image_provider_for().generate_image(effective_prompt)
+        asset = repository.save_character_asset(
+            task["workspace_id"], character_id, result, prompt_snapshot=effective_prompt
+        )
         repository.finish_task(
             task_id,
             result={"character_id": character_id, "image_url": asset["image_url"]},
@@ -380,7 +409,7 @@ def _run_episode_script_generation(task_id):
             None,
         )
         full_script = generate_episode_script(
-            LLMProvider.from_env(),
+            llm_provider_for(ModelAssignment.PURPOSE_EPISODE_SCRIPT),
             workspace["selected_outline"],
             episode,
             previous_episode=previous_episode,
@@ -426,7 +455,7 @@ def _run_storyboard_generation(task_id):
         episode_number = int(task["target_id"] or 1)
         episode = repository.get_episode(workspace_id, episode_number)
         prompts = generate_storyboard(
-            LLMProvider.from_env(),
+            llm_provider_for(ModelAssignment.PURPOSE_STORYBOARD),
             episode["full_script"],
             episode_number=episode_number,
         )
@@ -466,7 +495,7 @@ def _run_script_generation(workspace_id, outline_id):
         outline = _outline_by_id(workspace, outline_id)
         if outline is None:
             raise FileNotFoundError(f"Outline not found: {outline_id}")
-        payload = generate_script(LLMProvider.from_env(), outline)
+        payload = generate_script(llm_provider_for(ModelAssignment.PURPOSE_SCRIPT), outline)
         repository.save_script_for_outline(
             workspace_id,
             outline_id,
@@ -513,7 +542,13 @@ def _render_script_library(request, data, error=None):
     )
 
 
-def _render_script(request, workspace, error=None, selected_episode=None):
+def _render_script(
+    request, workspace, error=None, selected_episode=None, script_view=None
+):
+    requested_view = script_view or request.GET.get("view", "episodes")
+    if selected_episode is not None:
+        requested_view = "episodes"
+    active_view = requested_view if requested_view in {"episodes", "characters"} else "episodes"
     return render(
         request,
         "studio/script.html",
@@ -521,6 +556,7 @@ def _render_script(request, workspace, error=None, selected_episode=None):
             "workspace": workspace,
             "selected_outline": _selected_outline(workspace or {}),
             "selected_episode": selected_episode,
+            "script_view": active_view,
             "error": error,
             "active_nav": "script",
         },

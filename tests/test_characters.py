@@ -109,3 +109,35 @@ def test_generate_character_profiles_rejects_invalid_payload(payload):
             {"title": "a", "core_premise": "b", "protagonist": "c", "arc_summary": "d"},
             [],
         )
+
+
+@pytest.mark.parametrize(
+    ("visual_style", "expected_lock", "forbidden_style"),
+    [
+        ("comic", "polished Chinese comic illustration", "cinematic photorealism"),
+        ("realistic", "cinematic photorealism", "polished Chinese comic illustration"),
+    ],
+)
+def test_character_profiles_apply_one_visual_style_to_every_prompt(
+    visual_style, expected_lock, forbidden_style
+):
+    payload = character_payload()
+    payload["characters"].append(
+        {
+            **payload["characters"][0],
+            "name": "Second character",
+            "image_prompt": "Second character full body",
+        }
+    )
+    provider = FakeLLM(payload)
+
+    profiles = generate_character_profiles(
+        provider,
+        {"title": "Story", "core_premise": "Premise", "protagonist": "Lead", "arc_summary": "Arc"},
+        [],
+        visual_style=visual_style,
+    )
+
+    assert all(expected_lock in profile["image_prompt"] for profile in profiles)
+    assert all(forbidden_style not in profile["image_prompt"] for profile in profiles)
+    assert ("漫画" if visual_style == "comic" else "偏真人") in provider.messages[-1]["content"]

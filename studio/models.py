@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 
 
@@ -74,11 +76,23 @@ class Outline(models.Model):
 
 
 class Script(models.Model):
+    CHARACTER_STYLE_COMIC = "comic"
+    CHARACTER_STYLE_REALISTIC = "realistic"
+    CHARACTER_STYLE_CHOICES = [
+        (CHARACTER_STYLE_COMIC, "Comic"),
+        (CHARACTER_STYLE_REALISTIC, "Realistic"),
+    ]
+
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="scripts")
     outline = models.OneToOneField(Outline, on_delete=models.CASCADE, related_name="script")
     plan_payload = models.JSONField(default=list)
     episode_1_script = models.TextField(blank=True)
     raw_payload = models.JSONField(default=dict)
+    character_visual_style = models.CharField(
+        max_length=20,
+        choices=CHARACTER_STYLE_CHOICES,
+        default=CHARACTER_STYLE_COMIC,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -246,3 +260,7 @@ class GenerationTask(models.Model):
 
     def __str__(self):
         return f"{self.task_type}:{self.status} for {self.project}"
+
+
+# Imported after the core models to avoid circular references.
+from .video_models import *  # noqa: E402,F401,F403

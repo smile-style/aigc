@@ -1,4 +1,6 @@
 import uuid
+from pathlib import Path
+
 from django.core.files.base import ContentFile
 
 from django.db import transaction
@@ -463,12 +465,16 @@ class WorkspaceRepository:
         task = project.generation_tasks.filter(task_type=task_type).order_by("-created_at", "-id").first()
         return self._task_to_dict(task) if task else None
 
-    def create_character_profile_task(self, workspace_id):
+    def create_character_profile_task(self, workspace_id, visual_style=None):
         with transaction.atomic():
             project = Project.objects.select_for_update().get(workspace_id=workspace_id)
             script = self._script_for_selected_outline(project)
             if script is None:
                 raise ValueError("请先生成剧集规划，再生成角色设定。")
+            selected_style = visual_style or script.character_visual_style
+            valid_styles = {value for value, _ in Script.CHARACTER_STYLE_CHOICES}
+            if selected_style not in valid_styles:
+                raise ValueError(f"Unsupported character visual style: {selected_style}")
             target_id = f"script:{script.id}"
             running = project.generation_tasks.filter(
                 task_type=GenerationTask.TYPE_CHARACTER_PROFILE,
@@ -479,11 +485,14 @@ class WorkspaceRepository:
                 data = self._task_to_dict(running)
                 data["created"] = False
                 return data
+            if script.character_visual_style != selected_style:
+                script.character_visual_style = selected_style
+                script.save(update_fields=["character_visual_style", "updated_at"])
             task = GenerationTask.objects.create(
                 project=project,
                 task_type=GenerationTask.TYPE_CHARACTER_PROFILE,
                 target_id=target_id,
-                input_snapshot={"script_id": script.id},
+                input_snapshot={"script_id": script.id, "visual_style": selected_style},
             )
             data = self._task_to_dict(task)
             data["created"] = True
@@ -537,7 +546,11 @@ class WorkspaceRepository:
                 project=project,
                 task_type=GenerationTask.TYPE_CHARACTER_IMAGE,
                 target_id=str(character.id),
-                input_snapshot={"prompt": character.image_prompt, "character_name": character.name},
+                input_snapshot={
+                    "prompt": character.image_prompt,
+                    "character_name": character.name,
+                    "visual_style": character.script.character_visual_style,
+                },
             )
             data = self._task_to_dict(task)
             data["created"] = True
@@ -553,7 +566,7 @@ class WorkspaceRepository:
             raise FileNotFoundError(f"Character not found: {character_id}") from exc
         return self._character_to_dict(character)
 
-    def save_character_asset(self, workspace_id, character_id, result):
+    def save_character_asset(self, workspace_id, character_id, result, prompt_snapshot=None):
         with transaction.atomic():
             character = Character.objects.select_for_update().get(
                 pk=character_id,
@@ -563,7 +576,7 @@ class WorkspaceRepository:
             asset = CharacterAsset(
                 character=character,
                 model=result.model,
-                prompt_snapshot=character.image_prompt,
+                prompt_snapshot=prompt_snapshot or character.image_prompt,
                 source_url=result.source_url,
                 version=version,
             )
@@ -571,6 +584,25 @@ class WorkspaceRepository:
             asset.image.save(filename, ContentFile(result.content), save=False)
             asset.save()
         return self.get_character(workspace_id, character_id)
+
+    def get_latest_character_asset(self, workspace_id, character_id):
+        asset = (
+            CharacterAsset.objects.select_related("character__script__project")
+            .filter(
+                character_id=character_id,
+                character__script__project__workspace_id=workspace_id,
+            )
+            .first()
+        )
+        if asset is None or not asset.image:
+            raise FileNotFoundError(f"Character image not found: {character_id}")
+
+        suffix = Path(asset.image.name).suffix
+        asset.image.open("rb")
+        return {
+            "file": asset.image,
+            "filename": f"{asset.character.name}-v{asset.version}{suffix}",
+        }
 
     def mark_outline_usable(self, workspace_id, outline_id):
         with transaction.atomic():
@@ -681,6 +713,9 @@ class WorkspaceRepository:
             "script_plan": script.plan_payload if script else [],
             "episodes": [self._episode_to_dict(episode) for episode in episodes],
             "characters": [self._character_to_dict(character) for character in characters],
+            "character_visual_style": (
+                script.character_visual_style if script else Script.CHARACTER_STYLE_COMIC
+            ),
             "character_profile_task": self._latest_task_dict(
                 project,
                 GenerationTask.TYPE_CHARACTER_PROFILE,
@@ -847,6 +882,7 @@ class WorkspaceRepository:
             "personality": character.personality,
             "costume": character.costume,
             "image_prompt": character.image_prompt,
+            "visual_style": character.script.character_visual_style,
             "image_url": latest_asset.image.url if latest_asset else "",
             "image_model": latest_asset.model if latest_asset else "",
             "version": latest_asset.version if latest_asset else 0,

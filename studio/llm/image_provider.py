@@ -32,7 +32,7 @@ class ImageConfig:
         environ = environ or os.environ
         base_url = (environ.get("IMAGE_BASE_URL") or environ.get("LLM_BASE_URL", "")).strip()
         api_key = (environ.get("IMAGE_API_KEY") or environ.get("LLM_API_KEY", "")).strip()
-        model = environ.get("IMAGE_MODEL", "gpt-image-2").strip()
+        model = environ.get("IMAGE_MODEL", "gemini-3.1-flash-image-preview").strip()
         endpoint = environ.get("IMAGE_API_PATH", "/chat/completions").strip()
         if model == "gpt-image-2" and endpoint.strip("/") == "images/generations":
             endpoint = "/chat/completions"
@@ -79,7 +79,7 @@ class ImageProvider:
                 "messages": [
                     {
                         "role": "user",
-                        "content": f"{prompt.strip()}\n输出尺寸：{self.config.size}",
+                        "content": f"{prompt.strip()}\nRequested output size: {self.config.size}",
                     }
                 ],
                 "stream": False,
@@ -111,10 +111,32 @@ class ImageProvider:
             )
         except httpx.TimeoutException as exc:
             raise LLMAPIError("Image generation timed out") from exc
+        except httpx.HTTPStatusError as exc:
+            message = self._friendly_http_error(exc)
+            raise LLMAPIError(message) from exc
         except httpx.HTTPError as exc:
             raise LLMAPIError(f"Image generation request failed: {exc}") from exc
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise LLMAPIError("Image response did not include image data") from exc
+
+    def _friendly_http_error(self, exc):
+        response = exc.response
+        message = ""
+        code = ""
+        try:
+            error = response.json().get("error", {})
+            if isinstance(error, dict):
+                message = str(error.get("message") or "").strip()
+                code = str(error.get("code") or "").strip()
+        except (ValueError, TypeError, AttributeError):
+            pass
+        if code == "DeploymentNotFound":
+            return (
+                f"\u56fe\u7247\u6a21\u578b {self.config.model} \u5728\u5f53\u524d\u7f51\u5173\u5206\u7ec4/API Key \u4e0b\u6ca1\u6709\u53ef\u7528\u90e8\u7f72\uff0c"
+                "\u8bf7\u5728\u7f51\u5173\u4e2d\u7ed1\u5b9a\u8be5\u6a21\u578b\u540e\u91cd\u8bd5\u3002"
+            )
+        detail = message or str(exc)
+        return f"Image generation request failed: {detail}"
 
     def _post_with_retry(self, url, **kwargs):
         for attempt in range(self.max_retries + 1):

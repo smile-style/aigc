@@ -39,6 +39,8 @@ def generate_storyboard(provider, episode_script, episode_number=1):
                     f"{REQUIRED_STORYBOARD_FIELD_LIST}。\n"
                     "shot_number 尽量使用整数；如果输出成字符串，也必须能明确解析为顺序编号。\n"
                     "所有文本字段都必须是非空字符串，内容要具体、可直接用于图像和视频生成。\n"
+                    "另外输出 character_names 字符串数组和 duration_seconds 整数；"
+                    "character_names 只填写本镜头实际出场的角色姓名，duration_seconds 范围为 2 到 15。\n"
                     f"第 {episode_number} 集剧本如下：\n{episode_script}"
                 ),
             },
@@ -81,6 +83,18 @@ def validate_storyboard_payload(payload):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"Shot {index} field {field} must be a non-empty string")
 
+        character_names = shot.get("character_names", [])
+        if not isinstance(character_names, list):
+            raise ValueError(f"Shot {index} field character_names must be a list")
+        shot["character_names"] = [
+            name.strip() for name in character_names if isinstance(name, str) and name.strip()
+        ]
+        has_explicit_duration = "duration_seconds" in shot
+        shot["duration_seconds"] = normalize_duration_seconds(
+            shot.get("duration_seconds", shot["duration"]),
+            index,
+            strict=has_explicit_duration,
+        )
     return storyboard_prompts
 
 
@@ -97,3 +111,16 @@ def normalize_shot_number(value, index):
         if match:
             return int(match.group(0))
     raise ValueError(f"第 {index} 个镜头的 shot_number 必须是整数")
+
+
+def normalize_duration_seconds(value, index, strict=True):
+    if isinstance(value, bool):
+        raise ValueError(f"第 {index} 个镜头的 duration_seconds 必须是整数")
+    if isinstance(value, int):
+        seconds = value
+    else:
+        match = re.search(r"\d+", str(value or ""))
+        seconds = int(match.group(0)) if match else 5
+    if strict and not 2 <= seconds <= 15:
+        raise ValueError(f"第 {index} 个镜头的 duration_seconds 必须在 2 到 15 之间")
+    return max(2, min(15, seconds))

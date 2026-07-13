@@ -1,0 +1,19 @@
+.settings-create { margin-top: 10px; }
+.settings-create summary {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: #67e8f9;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  list-style: none;
+}
+.settings-create summary::-webkit-details-marker { display: none; }
+.settings-create summary::before { content: "+"; margin-right: 7px; font-size: 18px; }
+.settings-create[open] summary { margin-bottom: 10px; background: rgba(103, 232, 249, .08); }
+.settings-create[open] summary::before { content: "−"; }
+.settings-create summary:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }

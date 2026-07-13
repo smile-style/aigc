@@ -1,0 +1,97 @@
+{% extends "studio/base.html" %}
+{% load studio_extras %}
+
+{% block title %}系统管理 | 漫剧工坊{% endblock %}
+{% block page_heading %}系统管理{% endblock %}
+
+{% block content %}
+<section class="stack settings-workspace">
+  {% if success %}<div class="task-status is-success" role="status"><strong>{{ success }}</strong></div>{% endif %}
+
+  <nav class="subnav" aria-label="系统管理模块">
+    <a href="#providers">模型服务</a>
+    <a href="#models">模型列表</a>
+    <a href="#routing">任务路由</a>
+  </nav>
+
+  <section class="surface-panel" id="providers">
+    <div class="section-head">
+      <div><p class="eyebrow">Provider</p><h2>模型服务</h2></div>
+      <span class="status-pill">密钥由环境变量托管</span>
+    </div>
+    <div class="settings-list">
+      {% for provider in providers %}
+        <form method="post" class="settings-row" data-submit-guard>
+          {% csrf_token %}<input type="hidden" name="action" value="save_provider"><input type="hidden" name="provider_id" value="{{ provider.id }}">
+          <label>服务名称<input name="name" value="{{ provider.name }}" required></label>
+          <label>服务类型<select name="provider_type">{% for value,label in provider_types %}<option value="{{ value }}" {% if provider.provider_type == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+          <label class="field-wide">基础域名<input name="base_url" value="{{ provider.base_url }}" required></label>
+          <label>API Key 环境变量<input name="api_key_env_var" value="{{ provider.api_key_env_var }}" required></label>
+          <label>超时（秒）<input type="number" name="timeout_seconds" min="1" value="{{ provider.timeout_seconds }}"></label>
+          <label>重试<input type="number" name="max_retries" min="0" value="{{ provider.max_retries }}"></label>
+          <label>并发<input type="number" name="max_concurrency" min="1" value="{{ provider.max_concurrency }}"></label>
+          <label class="toggle-field"><input type="checkbox" name="enabled" {% if provider.enabled %}checked{% endif %}> 启用</label>
+          <button class="primary-button" type="submit" data-loading-text="保存中...">保存服务</button>
+        </form>
+      {% empty %}<div class="empty-state"><h3>还没有模型服务</h3></div>{% endfor %}
+    </div>
+  </section>
+    <details class="settings-create">
+      <summary>新增模型服务</summary>
+      <form method="post" class="settings-row" data-submit-guard>
+        {% csrf_token %}<input type="hidden" name="action" value="save_provider">
+        <label>服务名称<input name="name" required></label>
+        <label>服务类型<select name="provider_type">{% for value,label in provider_types %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></label>
+        <label class="field-wide">基础域名<input name="base_url" placeholder="https://example.com" required></label>
+        <label>API Key 环境变量<input name="api_key_env_var" value="DASHSCOPE_API_KEY" required></label>
+        <label>超时（秒）<input type="number" name="timeout_seconds" min="1" value="600"></label>
+        <label>重试<input type="number" name="max_retries" min="0" value="3"></label>
+        <label>并发<input type="number" name="max_concurrency" min="1" value="2"></label>
+        <label class="toggle-field"><input type="checkbox" name="enabled" checked> 启用</label>
+        <button class="primary-button" type="submit" data-loading-text="保存中...">创建服务</button>
+      </form>
+    </details>
+
+  <section class="surface-panel" id="models">
+    <div class="section-head"><div><p class="eyebrow">Models</p><h2>模型列表</h2></div></div>
+    <div class="settings-list">
+      {% for config in model_configs %}
+        <form method="post" class="settings-row model-settings-row" data-submit-guard>
+          {% csrf_token %}<input type="hidden" name="action" value="save_model"><input type="hidden" name="config_id" value="{{ config.id }}">
+          <label>显示名称<input name="name" value="{{ config.name }}" required></label>
+          <label>模型标识<input name="model_id" value="{{ config.model_id }}" required></label>
+          <label>模型服务<select name="provider">{% for provider in providers %}<option value="{{ provider.id }}" {% if config.provider_id == provider.id %}selected{% endif %}>{{ provider.name }}</option>{% endfor %}</select></label>
+          <label>能力<select name="capability">{% for value,label in capabilities %}<option value="{{ value }}" {% if config.capability == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+          <label class="field-wide">默认参数<textarea name="default_parameters" rows="6">{{ config.default_parameters|json_value }}</textarea></label>
+          <label class="toggle-field"><input type="checkbox" name="enabled" {% if config.enabled %}checked{% endif %}> 启用</label>
+          <button class="primary-button" type="submit" data-loading-text="保存中...">保存模型</button>
+        </form>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="surface-panel" id="routing">
+    <details class="settings-create">
+      <summary>新增模型</summary>
+      <form method="post" class="settings-row model-settings-row" data-submit-guard>
+        {% csrf_token %}<input type="hidden" name="action" value="save_model">
+        <label>显示名称<input name="name" required></label>
+        <label>模型标识<input name="model_id" required></label>
+        <label>模型服务<select name="provider">{% for provider in providers %}<option value="{{ provider.id }}">{{ provider.name }}</option>{% endfor %}</select></label>
+        <label>能力<select name="capability">{% for value,label in capabilities %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></label>
+        <label class="field-wide">默认参数<textarea name="default_parameters" rows="4">{}</textarea></label>
+        <label class="toggle-field"><input type="checkbox" name="enabled" checked> 启用</label>
+        <button class="primary-button" type="submit" data-loading-text="保存中...">创建模型</button>
+      </form>
+    </details>
+    <div class="section-head"><div><p class="eyebrow">Routing</p><h2>任务路由</h2></div></div>
+    <form method="post" class="routing-form" data-submit-guard>
+      {% csrf_token %}<input type="hidden" name="action" value="save_assignments">
+      {% for row in assignment_rows %}
+        <label><span>{{ row.label }}</span><select name="assignment_{{ row.purpose }}"><option value="">使用环境变量 / 未配置</option>{% for config in model_configs %}<option value="{{ config.id }}" {% if row.selected_id == config.id %}selected{% endif %}>{{ config.name }} · {{ config.model_id }}</option>{% endfor %}</select></label>
+      {% endfor %}
+      <div class="form-actions"><button class="primary-button" type="submit" data-loading-text="保存中...">保存任务路由</button></div>
+    </form>
+  </section>
+</section>
+{% endblock %}

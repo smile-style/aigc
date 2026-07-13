@@ -4,8 +4,8 @@
 {% block page_heading %}剧本工作台{% endblock %}
 
 {% block content %}
-<section class="stack">
-  <section class="hero-panel">
+<section class="stack" data-workspace-view="{{ script_view }}">
+  <section class="hero-panel compact-hero">
     <div>
       <p class="eyebrow">Step 2 / 3</p>
       <h2>按集管理剧本与角色资产</h2>
@@ -30,12 +30,34 @@
     </section>
   {% endif %}
 
+  <nav class="workspace-tabs" aria-label="剧本工作台视图">
+    <a href="?view=episodes" {% if script_view == "episodes" %}aria-current="page"{% endif %}>
+      <strong>剧集生产</strong><span>{{ workspace.episodes|length }} 集规划</span>
+    </a>
+    <a href="?view=characters" {% if script_view == "characters" %}aria-current="page"{% endif %}>
+      <strong>角色资产</strong><span>{{ workspace.characters|length }} 个角色</span>
+    </a>
+  </nav>
+
+  {% if script_view == "characters" %}
+
   <section class="surface-panel">
     <div class="section-head">
       <div><p class="eyebrow">Character Bible</p><h2>人物角色资产</h2></div>
       {% if workspace.episodes %}
         <form method="post" action="{% url 'studio:generate_characters' workspace.id %}" data-submit-guard>
           {% csrf_token %}
+          <fieldset class="style-segmented">
+            <legend>角色画风</legend>
+            <label>
+              <input type="radio" name="visual_style" value="realistic" {% if workspace.character_visual_style == "realistic" %}checked{% endif %}>
+              <span>偏真人</span>
+            </label>
+            <label>
+              <input type="radio" name="visual_style" value="comic" {% if workspace.character_visual_style != "realistic" %}checked{% endif %}>
+              <span>漫画</span>
+            </label>
+          </fieldset>
           <button class="secondary-button" type="submit" data-loading-text="提交中...">{% if workspace.characters %}重新生成角色设定{% else %}生成角色设定{% endif %}</button>
         </form>
       {% endif %}
@@ -77,7 +99,12 @@
               <form method="post" action="{% url 'studio:generate_character_image' workspace.id character.id %}" data-submit-guard>
                 {% csrf_token %}
                 <label class="field"><span>角色图片 Prompt</span><textarea name="image_prompt" rows="6">{{ character.image_prompt }}</textarea></label>
+                <div class="character-image-actions">
                 <button class="primary-button" type="submit" data-loading-text="提交中...">{% if character.image_url %}重新生成原图{% else %}生成角色原图{% endif %}</button>
+                  {% if character.image_url %}
+                    <a class="secondary-link" href="{% url 'studio:download_character_image' workspace.id character.id %}">&#19979;&#36733;&#21407;&#22270;</a>
+                  {% endif %}
+                </div>
               </form>
               {% with image_task=character.image_task %}
                 {% if image_task.status == "pending" or image_task.status == "running" %}
@@ -96,6 +123,10 @@
       <div class="empty-state compact"><h2>还没有角色设定</h2><p>生成剧集规划后，点击“生成角色设定”提取核心人物和原图 Prompt。</p></div>
     {% endif %}
   </section>
+
+  {% endif %}
+
+  {% if script_view == "episodes" %}
 
   <section class="surface-panel">
     <div class="section-head"><div><p class="eyebrow">Episode Pipeline</p><h2>60 集生产列表</h2></div></div>
@@ -138,5 +169,6 @@
       <div class="empty-state compact"><h2>还没有剧集规划</h2><p>先生成 60 集规划。</p></div>
     {% endif %}
   </section>
+  {% endif %}
 </section>
 {% endblock %}
