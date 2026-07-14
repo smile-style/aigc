@@ -4,11 +4,14 @@ import os
 from studio.llm.image_provider import ImageConfig, ImageProvider
 from studio.llm.provider import LLMConfig, LLMConfigurationError, LLMProvider
 from studio.models import ModelAssignment, ModelConfig, ProviderConfig
+from studio.services.secret_store import decrypt_secret
 
 
 DEFAULT_BAILIAN_ORIGIN = (
     "https://ws-vdsi8p8xwd4yw9rc.cn-beijing.maas.aliyuncs.com"
 )
+DEFAULT_SHOT_VIDEO_MODEL_ID = "wan2.7-r2v-2026-06-12"
+LEGACY_SHOT_VIDEO_MODEL_IDS = {"wan2.7-r2v"}
 
 
 def ensure_default_video_models():
@@ -26,23 +29,23 @@ def ensure_default_video_models():
     defaults = [
         (
             "万相 2.7 参考生视频",
-            "wan2.7-r2v",
+            DEFAULT_SHOT_VIDEO_MODEL_ID,
             ModelConfig.CAPABILITY_VIDEO_REFERENCE,
-            {"resolution": "720P", "ratio": "9:16", "duration": 5, "prompt_extend": True, "watermark": False},
+            {"resolution": "720P", "ratio": "9:16", "duration": 5, "prompt_extend": False, "watermark": False},
             ModelAssignment.PURPOSE_SHOT_VIDEO,
         ),
         (
             "万相 2.7 图生视频",
             "wan2.7-i2v-2026-04-25",
             ModelConfig.CAPABILITY_VIDEO_IMAGE,
-            {"resolution": "720P", "duration": 5, "prompt_extend": True, "watermark": False},
+            {"resolution": "720P", "duration": 5, "prompt_extend": False, "watermark": False},
             ModelAssignment.PURPOSE_SHOT_VIDEO_FALLBACK,
         ),
         (
             "万相 2.7 视频编辑",
             "wan2.7-videoedit",
             ModelConfig.CAPABILITY_VIDEO_EDIT,
-            {"resolution": "720P", "prompt_extend": True, "watermark": False},
+            {"resolution": "720P", "prompt_extend": False, "watermark": False},
             ModelAssignment.PURPOSE_VIDEO_EDIT,
         ),
     ]
@@ -53,12 +56,31 @@ def ensure_default_video_models():
             capability=capability,
             defaults={"name": name, "default_parameters": parameters},
         )
-        ModelAssignment.objects.get_or_create(purpose=purpose, defaults={"model": model})
+        assignment, created = ModelAssignment.objects.get_or_create(
+            purpose=purpose,
+            defaults={"model": model},
+        )
+        if (
+            not created
+            and purpose == ModelAssignment.PURPOSE_SHOT_VIDEO
+            and assignment.model.model_id in LEGACY_SHOT_VIDEO_MODEL_IDS
+        ):
+            assignment.model = model
+            assignment.save(update_fields=["model", "updated_at"])
+        if (model.default_parameters or {}).get("prompt_extend") is not False:
+            model.default_parameters = {**(model.default_parameters or {}), "prompt_extend": False}
+            model.save(update_fields=["default_parameters", "updated_at"])
     return provider
+
 
 
 def provider_api_key(provider):
     key = os.environ.get(provider.api_key_env_var, "").strip()
+    if provider.api_key_ciphertext:
+        try:
+            key = decrypt_secret(provider.api_key_ciphertext)
+        except ValueError as exc:
+            raise LLMConfigurationError(str(exc)) from exc
     if not key:
         raise LLMConfigurationError(
             f"环境变量 {provider.api_key_env_var} 尚未配置，无法调用 {provider.name}。"

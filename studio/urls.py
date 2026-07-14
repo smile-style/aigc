@@ -82,6 +82,11 @@ urlpatterns = [
         name="generate_shot_video",
     ),
     path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/shot/<uuid:shot_id>/prompt/",
+        video_views.save_shot_video_prompt_view,
+        name="save_shot_video_prompt",
+    ),
+    path(
         "video/<str:workspace_id>/episode/<int:episode_number>/shot/<uuid:shot_id>/characters/",
         video_views.bind_shot_characters_view,
         name="bind_shot_characters",

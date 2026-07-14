@@ -54,14 +54,34 @@
       <div class="video-shot-list">
         {% for shot in shots %}
           <article class="video-shot-row" data-video-shot="{{ shot.shot_id }}">
-            <header><span class="step-badge">{{ shot.shot_number }}</span><div><h3>镜头 {{ shot.shot_number }}</h3><p>{{ shot.duration_seconds }} 秒 · {{ shot.camera_language }}</p></div><span class="status-pill status-{{ shot.latest_video.status|default:'idle' }}" data-shot-status>{{ shot.latest_video.get_status_display|default:"待生成" }}</span></header>
+            <header><span class="step-badge">{{ shot.shot_number }}</span><div><h3>镜头 {{ shot.shot_number }}</h3><p>{{ shot.duration_seconds }} 秒</p></div><span class="status-pill status-{{ shot.latest_video.status|default:'idle' }}" data-shot-status>{{ shot.latest_video.get_status_display|default:"待生成" }}</span></header>
             <div class="video-shot-main">
               <div class="shot-reference-column">
                 <strong>角色参考</strong>
                 <div class="character-ref-list">{% for ref in shot.references_for_page %}<span class="character-ref"><img src="{{ ref.asset.image.url }}" alt=""><b>{{ ref.character.name }}</b><small>v{{ ref.asset.version }}</small></span>{% empty %}<span class="empty-inline">尚未匹配角色</span>{% endfor %}</div>
                 <button class="secondary-link" type="button" data-modal-target="bind-characters-{{ shot.id }}">调整角色</button>
               </div>
-              <div class="shot-prompt-column"><strong>视频 Prompt</strong><p>{{ shot.video_prompt }}</p></div>
+              <div class="shot-prompt-column">
+                <div class="submitted-prompt-head">
+                  <strong>当前生成 Prompt</strong>
+                  {% if shot.has_prompt_override %}
+                    <span class="prompt-policy-badge is-custom">人工修改</span>
+                  {% else %}
+                    <span class="prompt-policy-badge">来自分镜 · 六段完整内容</span>
+                  {% endif %}
+                </div>
+                {% if shot.prompt_source_changed %}<p class="prompt-source-warning">原始分镜已更新，当前仍保留人工版本。</p>{% endif %}
+                <p class="submitted-prompt" data-submitted-prompt>{{ shot.effective_video_prompt }}</p>
+                <div class="prompt-card-actions">
+                  <button class="secondary-link" type="button" data-modal-target="edit-prompt-{{ shot.id }}">编辑 Prompt</button>
+                </div>
+                {% if shot.latest_video %}
+                  <details class="prompt-metadata">
+                    <summary>上次任务实际提交的 Prompt · v{{ shot.latest_video.version }}</summary>
+                    <p class="historical-prompt">{{ shot.latest_video.prompt_snapshot }}</p>
+                  </details>
+                {% endif %}
+              </div>
               <div class="shot-preview-column">
                 {% if shot.selected_video %}<video controls preload="metadata" src="{{ shot.selected_video.video.url }}"></video>{% else %}<div class="video-placeholder"><span>{{ shot.shot_number }}</span><p>等待生成</p></div>{% endif %}
               </div>
@@ -74,6 +94,37 @@
           </article>
           <div class="detail-modal" id="bind-characters-{{ shot.id }}" role="dialog" aria-modal="true" aria-labelledby="bind-title-{{ shot.id }}" hidden>
             <div class="detail-backdrop" data-modal-close></div><section class="detail-panel compact-dialog"><button class="modal-close" type="button" data-modal-close aria-label="关闭">×</button><h2 id="bind-title-{{ shot.id }}">镜头 {{ shot.shot_number }} 的角色参考</h2>
+          <div class="detail-modal" id="edit-prompt-{{ shot.id }}" role="dialog" aria-modal="true" aria-labelledby="prompt-title-{{ shot.id }}" hidden>
+            <div class="detail-backdrop" data-modal-close></div>
+            <section class="detail-panel prompt-editor-dialog">
+              <button class="modal-close" type="button" data-modal-close aria-label="关闭">×</button>
+              <div class="prompt-editor-head">
+                <div><p class="eyebrow">镜头 {{ shot.shot_number }}</p><h2 id="prompt-title-{{ shot.id }}">视频生成 Prompt</h2></div>
+                {% if shot.has_prompt_override %}<span class="prompt-policy-badge is-custom">人工修改</span>{% else %}<span class="prompt-policy-badge">来自分镜</span>{% endif %}
+              </div>
+              <form method="post" action="{% url 'studio:save_shot_video_prompt' workspace.id episode.episode_number shot.shot_id %}" data-submit-guard>
+                {% csrf_token %}
+                <label class="prompt-editor-field" for="prompt-{{ shot.id }}">
+                  <span>当前生效 Prompt</span>
+                  <textarea id="prompt-{{ shot.id }}" name="prompt" maxlength="5000" rows="22" required>{{ shot.effective_video_prompt }}</textarea>
+                </label>
+                {% if shot.prompt_source_changed %}<p class="prompt-source-warning">原始分镜已更新，恢复后将使用最新六段内容。</p>{% endif %}
+                {% if shot.has_prompt_override %}
+                  <details class="source-prompt-preview">
+                    <summary>查看原始分镜 Prompt</summary>
+                    <pre>{{ shot.storyboard_prompt_for_page }}</pre>
+                  </details>
+                {% endif %}
+                <div class="prompt-editor-actions">
+                  <button class="ghost-button" type="submit" name="action" value="reset" formnovalidate data-loading-text="恢复中...">恢复分镜</button>
+                  <span class="prompt-editor-primary-actions">
+                    <button class="ghost-button" type="submit" name="action" value="save" data-loading-text="保存中...">保存</button>
+                    <button class="primary-button" type="submit" name="action" value="save_and_generate" data-loading-text="加入队列中..." {% if not shot.references_for_page or shot.latest_video.status == 'queued' or shot.latest_video.status == 'submitting' or shot.latest_video.status == 'running' or shot.latest_video.status == 'downloading' %}disabled{% endif %}>保存并生成</button>
+                  </span>
+                </div>
+              </form>
+            </section>
+          </div>
               <form method="post" action="{% url 'studio:bind_shot_characters' workspace.id episode.episode_number shot.shot_id %}" data-submit-guard>{% csrf_token %}<div class="character-choice-grid">{% for character in characters %}<label class="character-choice {% if not character.assets.first %}is-disabled{% endif %}">{% if character.assets.first %}<img src="{{ character.assets.first.image.url }}" alt="">{% endif %}<span><input type="checkbox" name="character_ids" value="{{ character.id }}" {% for ref in shot.references_for_page %}{% if ref.character_id == character.id %}checked{% endif %}{% endfor %} {% if not character.assets.first %}disabled{% endif %}> {{ character.name }}</span></label>{% endfor %}</div><button class="primary-button" type="submit" data-loading-text="保存中...">保存角色参考</button></form>
             </section>
           </div>

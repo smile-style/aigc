@@ -7,6 +7,13 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       form.dataset.submitting = "true";
       const clickedButton = event.submitter instanceof HTMLButtonElement ? event.submitter : null;
+      if (clickedButton?.name) {
+        const submitValue = document.createElement("input");
+        submitValue.type = "hidden";
+        submitValue.name = clickedButton.name;
+        submitValue.value = clickedButton.value;
+        form.appendChild(submitValue);
+      }
       const submitButtons = form.querySelectorAll('button[type="submit"]');
       submitButtons.forEach((button) => {
         if (!button.dataset.originalText) button.dataset.originalText = button.textContent.trim();

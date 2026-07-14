@@ -22,7 +22,14 @@ from studio.models import (
     VideoAsset,
 )
 from studio.services.model_config import ensure_default_video_models, normalize_provider_origin
-from studio.services.video import queue_shot_video, reorder_shots, sync_storyboard_shots
+from studio.services.video import (
+    effective_video_prompt,
+    queue_shot_video,
+    reorder_shots,
+    save_video_prompt_override,
+    storyboard_video_prompt,
+    sync_storyboard_shots,
+)
 
 
 pytestmark = pytest.mark.django_db
@@ -114,8 +121,26 @@ def test_default_video_models_and_routes_are_seeded():
         purpose=ModelAssignment.PURPOSE_SHOT_VIDEO
     )
     assert provider.base_url.endswith("cn-beijing.maas.aliyuncs.com")
-    assert assignment.model.model_id == "wan2.7-r2v"
+    assert assignment.model.model_id == "wan2.7-r2v-2026-06-12"
     assert assignment.model.default_parameters["resolution"] == "720P"
+
+def test_default_video_models_migrate_legacy_primary_assignment():
+    provider = ensure_default_video_models()
+    legacy_model = ModelConfig.objects.create(
+        provider=provider,
+        name="Legacy Wan R2V",
+        model_id="wan2.7-r2v",
+        capability=ModelConfig.CAPABILITY_VIDEO_REFERENCE,
+        default_parameters={"resolution": "720P"},
+    )
+    assignment = ModelAssignment.objects.get(purpose=ModelAssignment.PURPOSE_SHOT_VIDEO)
+    assignment.model = legacy_model
+    assignment.save(update_fields=["model", "updated_at"])
+
+    ensure_default_video_models()
+
+    assignment.refresh_from_db()
+    assert assignment.model.model_id == "wan2.7-r2v-2026-06-12"
 
 
 def test_storyboard_sync_extracts_character_and_duration():
@@ -139,15 +164,39 @@ def test_queue_shot_video_pins_model_and_character_asset():
 
     assert created is True
     assert asset.status == VideoAsset.STATUS_QUEUED
-    assert asset.model_config.model_id == "wan2.7-r2v"
+    assert asset.model_config.model_id == "wan2.7-r2v-2026-06-12"
     assert asset.input_snapshot["references"][0]["asset_version"] == 1
-    assert "图1是角色林默" in asset.prompt_snapshot
+    assert asset.prompt_snapshot == storyboard_video_prompt(shot)
+    assert asset.input_snapshot["prompt_policy"] == "full_storyboard_prompt"
+    assert asset.input_snapshot["source_storyboard_prompt"] == storyboard_video_prompt(shot)
+    assert "**画面描述**" in asset.prompt_snapshot
+    assert "**对白 / 旁白**" in asset.prompt_snapshot
+    assert "**图片 Prompt**" in asset.prompt_snapshot
+    assert "**视频 Prompt**" in asset.prompt_snapshot
+    assert asset.input_snapshot["parameters"]["prompt_extend"] is False
     assert asset.generation_task.task_type == GenerationTask.TYPE_SHOT_VIDEO
 
 
+
+
+def test_queue_shot_video_uses_manual_prompt_override():
+    _, _, storyboard = make_episode()
+    ensure_default_video_models()
+    shot = sync_storyboard_shots(storyboard)[0]
+    custom_prompt = "人工调整后的完整视频 Prompt"
+
+    save_video_prompt_override(shot, custom_prompt)
+    asset, created = queue_shot_video(shot)
+
+    assert created is True
+    assert shot.video_prompt_override == custom_prompt
+    assert effective_video_prompt(shot) == custom_prompt
+    assert asset.prompt_snapshot == custom_prompt
+    assert asset.input_snapshot["prompt_policy"] == "manual_override"
+
 def test_video_provider_uses_dashscope_async_endpoint(tmp_path):
     provider_config = ensure_default_video_models()
-    model = ModelConfig.objects.get(model_id="wan2.7-r2v")
+    model = ModelConfig.objects.get(model_id="wan2.7-r2v-2026-06-12")
     image_path = tmp_path / "character.png"
     image_path.write_bytes(b"image")
 
@@ -155,7 +204,9 @@ def test_video_provider_uses_dashscope_async_endpoint(tmp_path):
         assert request.url.path == "/api/v1/services/aigc/video-generation/video-synthesis"
         assert request.headers["X-DashScope-Async"] == "enable"
         payload = __import__("json").loads(request.content)
-        assert payload["model"] == "wan2.7-r2v"
+        assert payload["input"]["prompt"] == "prompt"
+        assert payload["parameters"]["prompt_extend"] is False
+        assert payload["model"] == "wan2.7-r2v-2026-06-12"
         assert payload["parameters"]["resolution"] == "720P"
         assert payload["input"]["media"][0]["url"].startswith("data:image/png;base64,")
         return httpx.Response(200, json={"output": {"task_id": "task-1"}, "request_id": "request-1"})
@@ -174,8 +225,9 @@ def test_system_settings_page_loads_seeded_models(client):
     assert response.status_code == 200
     content = response.content.decode("utf-8")
     assert "系统管理" in content
-    assert "wan2.7-r2v" in content
-    assert "DASHSCOPE_API_KEY" in content
+    assert "wan2.7-r2v-2026-06-12" in content
+    assert "文本生成模型" in content
+    assert "任务路由" not in content
 
 
 def test_video_page_loads_shots_and_character_reference(client):
@@ -189,6 +241,41 @@ def test_video_page_loads_shots_and_character_reference(client):
     assert "镜头 1" in content
     assert "林默" in content
 
+    assert "当前生成 Prompt" in content
+    assert "来自分镜 · 六段完整内容" in content
+    assert "编辑 Prompt" in content
+    assert "**画面描述**" in content
+    assert "6 秒 · 中景推进" not in content
+
+
+
+def test_video_prompt_can_be_saved_and_reset(client):
+    project, _, storyboard = make_episode()
+    shot = sync_storyboard_shots(storyboard)[0]
+    url = reverse(
+        "studio:save_shot_video_prompt",
+        args=[project.workspace_id, 1, shot.shot_id],
+    )
+
+    response = client.post(
+        url,
+        {"action": "save", "prompt": "人工工作稿"},
+    )
+
+    assert response.status_code == 302
+    shot.refresh_from_db()
+    assert shot.video_prompt_override == "人工工作稿"
+    page = client.get(reverse("studio:video_episode", args=[project.workspace_id, 1]))
+    assert "人工修改" in page.content.decode("utf-8")
+    assert "人工工作稿" in page.content.decode("utf-8")
+
+    response = client.post(url, {"action": "reset"})
+
+    assert response.status_code == 302
+    shot.refresh_from_db()
+    assert shot.video_prompt_override == ""
+    assert effective_video_prompt(shot) == storyboard_video_prompt(shot)
+
 
 def test_reorder_shots_updates_production_order():
     _, episode, storyboard = make_episode()
@@ -200,3 +287,22 @@ def test_reorder_shots_updates_production_order():
     sync_storyboard_shots(storyboard)
 
     assert list(StoryboardShot.objects.values_list("shot_number", flat=True)) == [2, 1]
+
+
+def test_video_status_does_not_resync_or_write(client, monkeypatch):
+    project, _, _ = make_episode()
+    calls = []
+
+    def fake_page_data(episode, sync=True):
+        calls.append(sync)
+        return {
+            "counts": {"total": 0, "ready": 0, "running": 0, "failed": 0},
+            "shots": [],
+            "composition": None,
+        }
+
+    monkeypatch.setattr("studio.video_views.video_page_data", fake_page_data)
+    response = client.get(reverse("studio:video_status", args=[project.workspace_id, 1]))
+
+    assert response.status_code == 200
+    assert calls == [False]

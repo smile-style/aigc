@@ -8,18 +8,15 @@ from studio.models import (
     Character,
     Episode,
     GenerationTask,
-    ModelAssignment,
-    ModelConfig,
-    ProviderConfig,
     StoryboardShot,
     VideoAsset,
     VideoComposition,
 )
 from studio.repositories.workspace import CURRENT_WORKSPACE_ID, WorkspaceRepository
-from studio.services.model_config import (
-    ensure_default_video_models,
-    save_model_from_post,
-    save_provider_from_post,
+from studio.services.model_slots import (
+    get_simple_model_slots,
+    save_simple_model_slot,
+    verify_simple_model_slot,
 )
 from studio.services.video import (
     bind_shot_characters,
@@ -27,6 +24,8 @@ from studio.services.video import (
     queue_export,
     queue_shot_video,
     reorder_shots,
+    save_video_prompt_override,
+    storyboard_video_prompt,
     video_page_data,
 )
 
@@ -34,52 +33,40 @@ from studio.services.video import (
 def system_settings_page(request):
     error = None
     success = None
-    ensure_default_video_models()
     if request.method == "POST":
-        action = request.POST.get("action")
+        action = request.POST.get("action") or request.GET.get("action")
+        category = request.POST.get("category", "")
         try:
-            if action == "save_provider":
-                save_provider_from_post(request.POST)
-                success = "模型服务已保存。"
-            elif action == "save_model":
-                save_model_from_post(request.POST)
-                success = "模型配置已保存。"
-            elif action == "save_assignments":
-                _save_assignments(request.POST)
-                success = "任务路由已更新。"
-            else:
+            if action not in {"save_slot", "verify_slot"}:
                 raise ValueError("无法识别的系统管理操作。")
+            model = save_simple_model_slot(category, request.POST)
+            if action == "save_slot":
+                success = f"{model.name}已保存。"
+            else:
+                model = verify_simple_model_slot(category)
+                if model.verification_status == model.VERIFICATION_FAILED:
+                    error = f"{model.name}验证失败：{model.verification_message}"
+                else:
+                    success = f"{model.name}验证完成。"
         except Exception as exc:
             error = str(exc)
+
     try:
         workspace = WorkspaceRepository().get_current_workspace()
     except FileNotFoundError:
         workspace = None
-    assignments = {item.purpose: item for item in ModelAssignment.objects.select_related("model")}
+
     return render(
         request,
         "studio/system_settings.html",
         {
             "workspace": workspace,
-            "providers": ProviderConfig.objects.prefetch_related("models").all(),
-            "model_configs": ModelConfig.objects.select_related("provider").all(),
-            "assignments": assignments,
-            "assignment_rows": [
-                {
-                    "purpose": purpose,
-                    "label": label,
-                    "selected_id": assignments[purpose].model_id if purpose in assignments else None,
-                }
-                for purpose, label in ModelAssignment.PURPOSE_CHOICES
-            ],
-            "provider_types": ProviderConfig.TYPE_CHOICES,
-            "capabilities": ModelConfig.CAPABILITY_CHOICES,
+            "slot_rows": get_simple_model_slots(),
             "error": error,
             "success": success,
             "active_nav": "system",
         },
     )
-
 
 def video_page(request, workspace_id):
     return video_episode_page(request, workspace_id, 1)
@@ -116,6 +103,25 @@ def generate_shot_video_view(request, workspace_id, episode_number, shot_id):
     shot = _shot(workspace_id, episode_number, shot_id)
     try:
         queue_shot_video(shot, force=request.POST.get("force") == "1")
+    except ValueError as exc:
+        return _video_error(request, workspace_id, episode_number, str(exc))
+    return _video_redirect(workspace_id, episode_number)
+
+
+
+
+@require_POST
+def save_shot_video_prompt_view(request, workspace_id, episode_number, shot_id):
+    shot = _shot(workspace_id, episode_number, shot_id)
+    try:
+        action = request.POST.get("action", "save")
+        if action == "reset":
+            prompt = storyboard_video_prompt(shot)
+        else:
+            prompt = request.POST.get("prompt", "")
+        save_video_prompt_override(shot, prompt)
+        if action == "save_and_generate":
+            queue_shot_video(shot, force=shot.video_assets.exists())
     except ValueError as exc:
         return _video_error(request, workspace_id, episode_number, str(exc))
     return _video_redirect(workspace_id, episode_number)
@@ -163,7 +169,7 @@ def export_video_view(request, workspace_id, episode_number):
 @require_GET
 def video_status_view(request, workspace_id, episode_number):
     episode = _episode(workspace_id, episode_number)
-    data = video_page_data(episode)
+    data = video_page_data(episode, sync=False)
     return JsonResponse(
         {
             "counts": data["counts"],
@@ -209,16 +215,6 @@ def download_composition_view(request, workspace_id, episode_number):
         as_attachment=True,
         filename=f"episode-{episode_number}.mp4",
     )
-
-
-def _save_assignments(post):
-    for purpose, _ in ModelAssignment.PURPOSE_CHOICES:
-        model_id = post.get(f"assignment_{purpose}")
-        if not model_id:
-            ModelAssignment.objects.filter(purpose=purpose).delete()
-            continue
-        model = ModelConfig.objects.get(pk=model_id, enabled=True)
-        ModelAssignment.objects.update_or_create(purpose=purpose, defaults={"model": model})
 
 
 def _episode(workspace_id, episode_number):

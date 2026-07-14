@@ -33,6 +33,15 @@ ACTIVE_VIDEO_STATUSES = {
     VideoAsset.STATUS_RUNNING,
     VideoAsset.STATUS_DOWNLOADING,
 }
+MAX_VIDEO_PROMPT_LENGTH = 5000
+STORYBOARD_PROMPT_SECTIONS = (
+    ("画面描述", "visual_description"),
+    ("角色动作", "character_action"),
+    ("对白 / 旁白", "dialogue_or_narration"),
+    ("镜头语言", "camera_language"),
+    ("图片 Prompt", "image_prompt"),
+    ("视频 Prompt", "video_prompt"),
+)
 
 
 def sync_storyboard_shots(storyboard):
@@ -110,7 +119,7 @@ def bind_shot_characters(shot, character_ids):
 
 def queue_shot_video(shot, force=False):
     active = shot.video_assets.filter(status__in=ACTIVE_VIDEO_STATUSES).first()
-    if active and not force:
+    if active:
         return active, False
     references = list(shot.character_references.select_related("character", "asset"))
     if not references:
@@ -122,13 +131,19 @@ def queue_shot_video(shot, force=False):
     )
     if model is None:
         raise ValueError("系统管理中尚未配置分镜视频主模型。")
-    prompt = _referenced_prompt(shot, references)
+    source_prompt = storyboard_video_prompt(shot)
+    prompt = effective_video_prompt(shot)
+    is_custom_prompt = bool(shot.video_prompt_override.strip())
     parameters = dict(model.default_parameters or {})
     parameters["duration"] = shot.duration_seconds
+    parameters["prompt_extend"] = False
     snapshot = {
         "shot_id": str(shot.shot_id),
         "shot_number": shot.shot_number,
         "model_id": model.model_id,
+        "prompt_policy": "manual_override" if is_custom_prompt else "full_storyboard_prompt",
+        "source_storyboard_prompt": source_prompt,
+        "source_storyboard_prompt_hash": _prompt_hash(source_prompt),
         "parameters": parameters,
         "references": [
             {
@@ -310,12 +325,23 @@ def reorder_shots(episode, shot_ids):
             StoryboardShot.objects.filter(pk=shots[shot_id].pk).update(position=position)
 
 
-def video_page_data(episode):
-    shots = sync_episode_shots(episode)
+def video_page_data(episode, sync=True):
+    shots = (
+        sync_episode_shots(episode)
+        if sync
+        else list(StoryboardShot.objects.filter(storyboard__episode=episode).order_by("position", "shot_number", "id"))
+    )
     for shot in shots:
         shot.references_for_page = list(shot.character_references.select_related("character", "asset"))
         shot.latest_video = shot.video_assets.first()
         shot.selected_video = shot.video_assets.filter(is_selected=True, status=VideoAsset.STATUS_READY).first()
+        shot.storyboard_prompt_for_page = storyboard_video_prompt(shot)
+        shot.effective_video_prompt = effective_video_prompt(shot)
+        shot.has_prompt_override = bool(shot.video_prompt_override.strip())
+        shot.prompt_source_changed = bool(
+            shot.has_prompt_override
+            and shot.video_prompt_override_source_hash != _prompt_hash(shot.storyboard_prompt_for_page)
+        )
     composition = VideoComposition.objects.filter(episode=episode).first()
     return {
         "shots": shots,
@@ -349,12 +375,47 @@ def _matching_character_names(payload, characters):
     return [character.name for character in characters if character.name and character.name in text]
 
 
-def _referenced_prompt(shot, references):
-    bindings = "；".join(
-        f"图{index}是角色{reference.character.name}，保持其脸部、发型、服装和整体形象一致"
-        for index, reference in enumerate(references, start=1)
+
+
+def storyboard_video_prompt(shot):
+    return "\n\n".join(
+        f"**{label}**\n{str(getattr(shot, field_name, '') or '').strip()}"
+        for label, field_name in STORYBOARD_PROMPT_SECTIONS
     )
-    return f"角色参考：{bindings}。\n镜头内容：{shot.video_prompt.strip()}"
+
+
+def effective_video_prompt(shot):
+    prompt = shot.video_prompt_override.strip() or storyboard_video_prompt(shot)
+    _validate_video_prompt(shot, prompt)
+    return prompt
+
+
+def save_video_prompt_override(shot, prompt):
+    source_prompt = storyboard_video_prompt(shot)
+    prompt = str(prompt or "").strip()
+    _validate_video_prompt(shot, prompt)
+    if prompt == source_prompt:
+        shot.video_prompt_override = ""
+        shot.video_prompt_override_source_hash = ""
+    else:
+        shot.video_prompt_override = prompt
+        shot.video_prompt_override_source_hash = _prompt_hash(source_prompt)
+    shot.save(
+        update_fields=["video_prompt_override", "video_prompt_override_source_hash", "updated_at"]
+    )
+
+
+def _validate_video_prompt(shot, prompt):
+    if not prompt:
+        raise ValueError(f"镜头 {shot.shot_number} 的视频生成 Prompt 不能为空。")
+    if len(prompt) > MAX_VIDEO_PROMPT_LENGTH:
+        raise ValueError(
+            f"镜头 {shot.shot_number} 的视频生成 Prompt 超过 {MAX_VIDEO_PROMPT_LENGTH} 个字符。"
+        )
+
+
+def _prompt_hash(prompt):
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
 def _duration_seconds(value):

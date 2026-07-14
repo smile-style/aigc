@@ -21,6 +21,7 @@ class ProviderConfig(models.Model):
     timeout_seconds = models.PositiveIntegerField(default=600)
     max_retries = models.PositiveIntegerField(default=3)
     max_concurrency = models.PositiveIntegerField(default=2)
+    api_key_ciphertext = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -32,6 +33,16 @@ class ProviderConfig(models.Model):
 
 
 class ModelConfig(models.Model):
+    VERIFICATION_UNTESTED = "untested"
+    VERIFICATION_SUCCESS = "success"
+    VERIFICATION_PARTIAL = "partial"
+    VERIFICATION_FAILED = "failed"
+    VERIFICATION_CHOICES = [
+        (VERIFICATION_UNTESTED, "Untested"),
+        (VERIFICATION_SUCCESS, "Verified"),
+        (VERIFICATION_PARTIAL, "Partially verified"),
+        (VERIFICATION_FAILED, "Failed"),
+    ]
     CAPABILITY_TEXT = "text"
     CAPABILITY_IMAGE = "image"
     CAPABILITY_VIDEO_REFERENCE = "video_reference"
@@ -53,6 +64,10 @@ class ModelConfig(models.Model):
     enabled = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    verification_status = models.CharField(max_length=20, choices=VERIFICATION_CHOICES, default=VERIFICATION_UNTESTED)
+    verification_message = models.CharField(max_length=500, blank=True)
+    verification_latency_ms = models.PositiveIntegerField(null=True, blank=True)
+    last_verified_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["capability", "name", "id"]
@@ -110,6 +125,8 @@ class StoryboardShot(models.Model):
     camera_language = models.TextField(blank=True)
     image_prompt = models.TextField(blank=True)
     video_prompt = models.TextField()
+    video_prompt_override = models.TextField(blank=True)
+    video_prompt_override_source_hash = models.CharField(max_length=64, blank=True, default="")
     negative_prompt = models.TextField(blank=True)
     character_names = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -6,3 +6,4 @@ pytest-django>=4.8,<5.0
 gunicorn>=22.0,<24.0
 whitenoise>=6.6,<7.0
 PyMySQL>=1.1,<2.0
+cryptography>=44.0,<47.0
