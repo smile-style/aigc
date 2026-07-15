@@ -46,7 +46,7 @@ class WorkspaceRepository:
             )
         return self._workspace_to_dict(project)
 
-    def get_workspace(self, workspace_id):
+    def get_workspace(self, workspace_id, script_id=None):
         try:
             project = (
                 Project.objects.select_related(
@@ -58,7 +58,16 @@ class WorkspaceRepository:
             )
         except Project.DoesNotExist as exc:
             raise FileNotFoundError(f"Workspace not found: {workspace_id}") from exc
-        return self._workspace_to_dict(project)
+        script = None
+        if script_id is not None:
+            try:
+                script = Script.objects.select_related("outline", "project").get(
+                    pk=script_id,
+                    project=project,
+                )
+            except Script.DoesNotExist as exc:
+                raise FileNotFoundError(f"Script not found: {script_id}") from exc
+        return self._workspace_to_dict(project, script_override=script)
 
     def save_workspace(self, workspace):
         workspace_id = workspace["id"]
@@ -284,21 +293,27 @@ class WorkspaceRepository:
                 ]
             )
 
-    def get_episode(self, workspace_id, episode_number):
-        episode = self._get_episode_model(workspace_id, episode_number)
+    @staticmethod
+    def _storyboard_task_target(script_id, episode_number):
+        return f"script:{script_id}:episode:{episode_number}" if script_id else str(episode_number)
+
+
+    def get_episode(self, workspace_id, episode_number, script_id=None):
+        episode = self._get_episode_model(workspace_id, episode_number, script_id=script_id)
         return self._episode_to_dict(episode)
 
-    def get_episode_workspace(self, workspace_id, episode_number):
-        workspace = self.get_workspace(workspace_id)
-        episode = self._get_episode_model(workspace_id, episode_number)
+    def get_episode_workspace(self, workspace_id, episode_number, script_id=None):
+        workspace = self.get_workspace(workspace_id, script_id=script_id)
+        episode = self._get_episode_model(workspace_id, episode_number, script_id=script_id)
         project = episode.script.project
         workspace["selected_episode"] = self._episode_to_dict(episode)
         storyboard = getattr(episode, "storyboard_prompt", None)
         workspace["storyboard_prompts"] = storyboard.prompts_payload if storyboard else []
+        storyboard_target = self._storyboard_task_target(script_id, episode_number)
         workspace["storyboard_task"] = self._latest_task_dict(
             project,
             GenerationTask.TYPE_STORYBOARD,
-            target_id=str(episode_number),
+            target_id=storyboard_target,
         )
         workspace["episode_script_task"] = self._latest_task_dict(
             project,
@@ -380,18 +395,19 @@ class WorkspaceRepository:
                 update_fields=["script_status", "script_error", "script_finished_at", "updated_at"]
             )
 
-    def create_storyboard_task(self, workspace_id, episode_number=1):
+    def create_storyboard_task(self, workspace_id, episode_number=1, script_id=None):
         with transaction.atomic():
             try:
                 project = Project.objects.select_for_update().get(workspace_id=workspace_id)
             except Project.DoesNotExist as exc:
                 raise FileNotFoundError(f"Workspace not found: {workspace_id}") from exc
-            episode = self._get_episode_model(workspace_id, episode_number)
+            episode = self._get_episode_model(workspace_id, episode_number, script_id=script_id)
+            target_id = self._storyboard_task_target(script_id, episode_number)
             if not episode.full_script.strip():
                 raise ValueError(f"请先生成第 {episode_number} 集完整剧本，再生成分镜。")
             running_task = project.generation_tasks.filter(
                 task_type=GenerationTask.TYPE_STORYBOARD,
-                target_id=str(episode_number),
+                target_id=target_id,
                 status__in=[GenerationTask.STATUS_PENDING, GenerationTask.STATUS_RUNNING],
             ).order_by("-created_at", "-id").first()
             if running_task:
@@ -401,16 +417,19 @@ class WorkspaceRepository:
             task = GenerationTask.objects.create(
                 project=project,
                 task_type=GenerationTask.TYPE_STORYBOARD,
-                target_id=str(episode_number),
-                input_snapshot={"episode_number": episode_number},
+                target_id=target_id,
+                input_snapshot={
+                    "episode_number": episode_number,
+                    "script_id": script_id,
+                },
             )
             task_data = self._task_to_dict(task)
             task_data["created"] = True
             return task_data
 
-    def save_storyboard_for_episode(self, workspace_id, episode_number, prompts):
+    def save_storyboard_for_episode(self, workspace_id, episode_number, prompts, script_id=None):
         with transaction.atomic():
-            episode = self._get_episode_model(workspace_id, episode_number, for_update=True)
+            episode = self._get_episode_model(workspace_id, episode_number, for_update=True, script_id=script_id)
             StoryboardPrompt.objects.update_or_create(
                 episode=episode,
                 defaults={
@@ -419,7 +438,7 @@ class WorkspaceRepository:
                     "prompts_payload": prompts,
                 },
             )
-        return self.get_episode_workspace(workspace_id, episode_number)
+        return self.get_episode_workspace(workspace_id, episode_number, script_id=script_id)
 
     def start_task(self, task_id):
         with transaction.atomic():
@@ -684,12 +703,16 @@ class WorkspaceRepository:
             suffix += 1
         return candidate
 
-    def _workspace_to_dict(self, project):
+    def _workspace_to_dict(self, project, script_override=None):
         active_outlines = project.outlines.filter(is_archived=False).order_by("position", "id")
         usable_outlines = project.outlines.filter(is_usable=True).order_by("-usable_at", "-id")
-        script = self._script_for_selected_outline(project)
+        script = script_override or self._script_for_selected_outline(project)
+        selected_outline = script.outline if script_override else project.selected_outline
         episodes = list(script.episodes.select_related("storyboard_prompt").order_by("episode_number")) if script else []
         characters = list(script.characters.prefetch_related("assets")) if script else []
+        script_choices = list(
+            project.scripts.select_related("outline").order_by("-updated_at", "-id")
+        )
         episode_1 = next(
             (episode for episode in episodes if episode.episode_number == 1),
             None,
@@ -703,13 +726,19 @@ class WorkspaceRepository:
             "outlines": [self._outline_to_dict(outline) for outline in active_outlines],
             "usable_outlines": [self._outline_to_dict(outline) for outline in usable_outlines],
             "selected_outline_id": (
-                project.selected_outline.outline_id if project.selected_outline_id else None
+                selected_outline.outline_id if selected_outline else None
             ),
             "selected_outline": (
-                self._outline_to_dict(project.selected_outline)
-                if project.selected_outline_id
+                self._outline_to_dict(selected_outline)
+                if selected_outline
                 else None
             ),
+            "script_id": script.id if script else None,
+            "script_title": script.outline.title if script else "",
+            "script_choices": [
+                {"id": item.id, "title": item.outline.title}
+                for item in script_choices
+            ],
             "script_plan": script.plan_payload if script else [],
             "episodes": [self._episode_to_dict(episode) for episode in episodes],
             "characters": [self._character_to_dict(character) for character in characters],
@@ -823,24 +852,26 @@ class WorkspaceRepository:
         if episode_numbers:
             script.episodes.exclude(episode_number__in=episode_numbers).delete()
 
-    def _get_episode_model(self, workspace_id, episode_number, for_update=False):
+    def _get_episode_model(self, workspace_id, episode_number, for_update=False, script_id=None):
         if not isinstance(episode_number, int) or isinstance(episode_number, bool):
             raise ValueError("Episode number must be an integer")
         try:
             project = Project.objects.only("selected_outline_id").get(workspace_id=workspace_id)
         except Project.DoesNotExist as exc:
             raise FileNotFoundError(f"Workspace not found: {workspace_id}") from exc
-        if project.selected_outline_id is None:
+        if script_id is None and project.selected_outline_id is None:
             raise ValueError("请先选择一个大纲并生成剧集规划。")
 
         queryset = Episode.objects.select_related("script__project", "script__outline", "storyboard_prompt")
         if for_update:
             queryset = queryset.select_for_update()
         try:
-            return queryset.get(
-                script__outline_id=project.selected_outline_id,
-                episode_number=episode_number,
-            )
+            filters = {"episode_number": episode_number, "script__project": project}
+            if script_id is not None:
+                filters["script_id"] = script_id
+            else:
+                filters["script__outline_id"] = project.selected_outline_id
+            return queryset.get(**filters)
         except Episode.DoesNotExist as exc:
             raise FileNotFoundError(f"Episode not found: {episode_number}") from exc
 

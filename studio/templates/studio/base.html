@@ -35,8 +35,8 @@
           <span>2</span>
           <strong>剧本加工</strong>
         </a>
-        {% if workspace and workspace.id %}
-          <a class="nav-item {% if active_nav == 'storyboard' %}is-active{% endif %}" href="{% url 'studio:storyboard' workspace.id %}">
+        {% if workspace and workspace.id and workspace.script_id %}
+          <a class="nav-item {% if active_nav == 'storyboard' %}is-active{% endif %}" href="{% url 'studio:storyboard_script_episode' workspace.id workspace.script_id 1 %}">
             <span>3</span>
             <strong>分镜 Prompt</strong>
           </a>
@@ -46,8 +46,8 @@
             <strong>分镜 Prompt</strong>
           </div>
         {% endif %}
-        {% if workspace and workspace.id and workspace.storyboard_prompts %}
-          <a class="nav-item {% if active_nav == 'video' %}is-active{% endif %}" href="{% url 'studio:video' workspace.id %}">
+        {% if workspace and workspace.id and workspace.script_id and workspace.storyboard_prompts %}
+          <a class="nav-item {% if active_nav == 'video' %}is-active{% endif %}" href="{% url 'studio:video_script_episode' workspace.id workspace.script_id 1 %}">
             <span>4</span>
             <strong>视频成片</strong>
           </a>

@@ -23,6 +23,11 @@ urlpatterns = [
         name="episode_script",
     ),
     path(
+        "script/<str:workspace_id>/item/<int:script_id>/episode/<int:episode_number>/",
+        views.script_episode_context_page,
+        name="script_episode_context",
+    ),
+    path(
         "script/<str:workspace_id>/episode/<int:episode_number>/generate/",
         views.generate_episode_script_view,
         name="generate_episode_script",
@@ -59,8 +64,28 @@ urlpatterns = [
         views.generate_storyboard_view,
         name="generate_storyboard_episode",
     ),
+    path(
+        "workbench/<str:workspace_id>/open/",
+        views.workbench_context_view,
+        name="workbench_context",
+    ),
+    path(
+        "storyboard/<str:workspace_id>/script/<int:script_id>/episode/<int:episode_number>/",
+        views.storyboard_script_episode_page,
+        name="storyboard_script_episode",
+    ),
+    path(
+        "storyboard/<str:workspace_id>/script/<int:script_id>/episode/<int:episode_number>/generate/",
+        views.generate_storyboard_script_view,
+        name="generate_storyboard_script",
+    ),
     path("system/", video_views.system_settings_page, name="system_settings"),
     path("video/<str:workspace_id>/", video_views.video_page, name="video"),
+    path(
+        "video/<str:workspace_id>/script/<int:script_id>/episode/<int:episode_number>/",
+        video_views.video_script_episode_page,
+        name="video_script_episode",
+    ),
     path(
         "video/<str:workspace_id>/episode/<int:episode_number>/",
         video_views.video_episode_page,
@@ -75,6 +100,11 @@ urlpatterns = [
         "video/<str:workspace_id>/episode/<int:episode_number>/batch/",
         video_views.batch_video_view,
         name="batch_videos",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/sync-character-assets/",
+        video_views.sync_character_assets_view,
+        name="sync_character_assets",
     ),
     path(
         "video/<str:workspace_id>/episode/<int:episode_number>/shot/<uuid:shot_id>/generate/",

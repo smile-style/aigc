@@ -5,6 +5,27 @@
 
 {% block content %}
 <section class="stack">
+  <form class="context-switcher surface-panel" method="get" action="{% url 'studio:workbench_context' workspace.id %}">
+    <input type="hidden" name="stage" value="storyboard">
+    <label>
+      <span>&#20316;&#21697;</span>
+      <select name="script_id" aria-label="&#36873;&#25321;&#20316;&#21697;">
+        {% for script in workspace.script_choices %}
+          <option value="{{ script.id }}" {% if script.id == workspace.script_id %}selected{% endif %}>S{{ script.id|stringformat:"06d" }} &#183; {{ script.title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>&#20998;&#38598;</span>
+      <select name="episode_number" aria-label="&#36873;&#25321;&#20998;&#38598;">
+        {% for item in workspace.episodes %}
+          <option value="{{ item.episode }}" {% if item.episode == workspace.selected_episode.episode %}selected{% endif %}>&#31532; {{ item.episode }} &#38598; &#183; {{ item.title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="ghost-button" type="submit">&#20999;&#25442;</button>
+    <a class="secondary-button" href="{% url 'studio:video_script_episode' workspace.id workspace.script_id workspace.selected_episode.episode %}">&#35270;&#39057;&#25104;&#29255;</a>
+  </form>
   {% with episode=workspace.selected_episode task=workspace.storyboard_task %}
     <section class="hero-panel">
       <div>
@@ -13,9 +34,9 @@
         <p class="hero-copy">{{ episode.summary }}</p>
       </div>
       <div class="hero-actions">
-        <a class="ghost-button" href="{% url 'studio:episode_script' workspace.id episode.episode %}">查看本集剧本</a>
+        <a class="ghost-button" href="{% url 'studio:script_episode_context' workspace.id workspace.script_id episode.episode %}">查看本集剧本</a>
         {% if episode.has_script %}
-          <form method="post" action="{% url 'studio:generate_storyboard_episode' workspace.id episode.episode %}" data-submit-guard data-storyboard-form>
+          <form method="post" action="{% url 'studio:generate_storyboard_script' workspace.id workspace.script_id episode.episode %}" data-submit-guard data-storyboard-form>
             {% csrf_token %}
             <button class="primary-button" type="submit" data-loading-text="提交中..." {% if task.status == "pending" or task.status == "running" %}disabled{% endif %}>{% if episode.has_storyboard %}重新生成本集分镜{% else %}生成本集分镜{% endif %}</button>
           </form>
@@ -57,7 +78,7 @@
         <div class="empty-state">
           <h2>本集还没有完整剧本</h2>
           <p>先生成第 {{ episode.episode }} 集完整剧本，审核后再制作分镜。</p>
-          <a class="primary-button" href="{% url 'studio:episode_script' workspace.id episode.episode %}">前往生成剧本</a>
+          <a class="primary-button" href="{% url 'studio:script_episode_context' workspace.id workspace.script_id episode.episode %}">前往生成剧本</a>
         </div>
       {% elif workspace.storyboard_prompts %}
         <div class="shot-grid">

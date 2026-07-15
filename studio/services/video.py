@@ -4,16 +4,16 @@ import re
 import shutil
 import subprocess
 import tempfile
-import uuid
 from pathlib import Path
 
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Q
 from django.utils import timezone
 
 from studio.models import (
     Character,
+    CharacterAsset,
     GenerationTask,
     ModelAssignment,
     ModelConfig,
@@ -116,6 +116,24 @@ def bind_shot_characters(shot, character_ids):
     shot.save(update_fields=["character_names", "updated_at"])
 
 
+def sync_latest_character_assets(episode):
+    references = (
+        ShotCharacterReference.objects.filter(shot__storyboard__episode=episode)
+        .select_related("character", "asset")
+        .prefetch_related("character__assets")
+    )
+    updated = 0
+    with transaction.atomic():
+        for reference in references:
+            latest = reference.character.assets.first()
+            if latest is None or latest.id == reference.asset_id:
+                continue
+            reference.asset = latest
+            reference.save(update_fields=["asset"])
+            updated += 1
+    return updated
+
+
 def queue_shot_video(shot, force=False):
     active = shot.video_assets.filter(status__in=ACTIVE_VIDEO_STATUSES).first()
     if active:
@@ -211,10 +229,18 @@ def process_video_asset(asset_id):
                 asset.error_message = ""
                 asset.save(update_fields=["status", "error_message", "updated_at"])
                 _start_task(task)
-                references = list(asset.shot.character_references.select_related("asset").all())
+                reference_ids = [
+                    item["asset_id"]
+                    for item in asset.input_snapshot.get("references", [])
+                ]
+                reference_map = {
+                    item.id: item
+                    for item in CharacterAsset.objects.filter(pk__in=reference_ids)
+                }
+                references = [reference_map[item_id] for item_id in reference_ids if item_id in reference_map]
                 submission = provider.submit_video(
                     asset.prompt_snapshot,
-                    [reference.asset.image.path for reference in references],
+                    [reference.image.path for reference in references],
                     parameters=asset.input_snapshot.get("parameters"),
                     negative_prompt=asset.shot.negative_prompt,
                 )
@@ -240,8 +266,7 @@ def process_video_asset(asset_id):
             asset.status = VideoAsset.STATUS_DOWNLOADING
             asset.save(update_fields=["status", "updated_at"])
             content = provider.download(video_url)
-            filename = f"shot-{asset.shot.shot_number}-v{asset.version}-{uuid.uuid4().hex[:8]}.mp4"
-            asset.video.save(filename, ContentFile(content), save=False)
+            asset.video.save("result.mp4", ContentFile(content), save=False)
             asset.source_url = video_url
             asset.result_snapshot = result.payload
             asset.status = VideoAsset.STATUS_READY
@@ -266,40 +291,47 @@ def process_video_asset(asset_id):
 
 
 def queue_export(episode):
-    composition, _ = VideoComposition.objects.get_or_create(episode=episode)
     active = episode.script.project.generation_tasks.filter(
         task_type=GenerationTask.TYPE_VIDEO_EXPORT,
-        target_id=str(episode.id),
         status__in=[GenerationTask.STATUS_PENDING, GenerationTask.STATUS_RUNNING],
+    ).filter(
+        Q(input_snapshot__episode_id=episode.id)
+        | Q(target_id=str(episode.id))
     ).first()
     if active:
         return active, False
     selected = [shot.video_assets.filter(is_selected=True, status=VideoAsset.STATUS_READY).first() for shot in sync_episode_shots(episode)]
     if not selected or any(asset is None for asset in selected):
         raise ValueError("所有分镜都生成并选定视频后才能导出。")
+    version = (episode.video_compositions.aggregate(value=Max("version"))["value"] or 0) + 1
+    composition = VideoComposition.objects.create(
+        episode=episode,
+        version=version,
+        status=VideoComposition.STATUS_EXPORTING,
+    )
     task = GenerationTask.objects.create(
         project=episode.script.project,
         task_type=GenerationTask.TYPE_VIDEO_EXPORT,
-        target_id=str(episode.id),
-        input_snapshot={"video_asset_ids": [asset.id for asset in selected]},
+        target_id=str(composition.id),
+        input_snapshot={
+            "episode_id": episode.id,
+            "composition_version": version,
+            "video_asset_ids": [asset.id for asset in selected],
+        },
     )
-    composition.status = VideoComposition.STATUS_EXPORTING
-    composition.error_message = ""
-    composition.save(update_fields=["status", "error_message", "updated_at"])
     return task, True
 
 
 def process_export_task(task_id):
     task = GenerationTask.objects.select_related("project").get(pk=task_id)
-    composition = VideoComposition.objects.select_related("episode").get(episode_id=task.target_id)
+    composition = VideoComposition.objects.select_related("episode__script__outline").get(pk=task.target_id)
     try:
         _start_task(task)
         assets = list(VideoAsset.objects.filter(pk__in=task.input_snapshot["video_asset_ids"]).select_related("shot"))
         asset_map = {asset.id: asset for asset in assets}
         ordered = [asset_map[asset_id] for asset_id in task.input_snapshot["video_asset_ids"]]
         content = _ffmpeg_concat(ordered)
-        filename = f"episode-{composition.episode.episode_number}-{uuid.uuid4().hex[:8]}.mp4"
-        composition.video.save(filename, ContentFile(content), save=False)
+        composition.video.save("result.mp4", ContentFile(content), save=False)
         composition.status = VideoComposition.STATUS_READY
         composition.error_message = ""
         composition.exported_at = timezone.now()
@@ -329,7 +361,10 @@ def video_page_data(episode, sync=False):
         else list(StoryboardShot.objects.filter(storyboard__episode=episode).order_by("position", "shot_number", "id"))
     )
     for shot in shots:
-        shot.references_for_page = list(shot.character_references.select_related("character", "asset"))
+        shot.references_for_page = list(
+            shot.character_references.select_related("character", "asset")
+            .prefetch_related("character__assets")
+        )
         shot.latest_video = shot.video_assets.first()
         shot.selected_video = shot.video_assets.filter(is_selected=True, status=VideoAsset.STATUS_READY).first()
         shot.storyboard_prompt_for_page = storyboard_video_prompt(shot)
@@ -340,9 +375,17 @@ def video_page_data(episode, sync=False):
             and shot.video_prompt_override_source_hash != _prompt_hash(shot.storyboard_prompt_for_page)
         )
     composition = VideoComposition.objects.filter(episode=episode).first()
+    asset_updates_available = sum(
+        1
+        for shot in shots
+        for reference in shot.references_for_page
+        if reference.character.assets.first()
+        and reference.character.assets.first().id != reference.asset_id
+    )
     return {
         "shots": shots,
         "composition": composition,
+        "asset_updates_available": asset_updates_available,
         "counts": {
             "total": len(shots),
             "ready": sum(bool(shot.selected_video) for shot in shots),

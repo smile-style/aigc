@@ -4,7 +4,7 @@ from django.urls import reverse
 
 from studio.llm.image_provider import ImageResult
 from studio.constants import GENRES
-from studio.models import GenerationTask, Outline, Project
+from studio.models import Episode, GenerationTask, Outline, Project, Script
 from studio.repositories.workspace import WorkspaceRepository
 
 pytestmark = pytest.mark.django_db
@@ -596,6 +596,58 @@ def test_storyboard_for_arbitrary_episode_is_saved_independently(monkeypatch):
     assert len(episode_12["storyboard_prompts"]) == 12
     assert episode_12["selected_episode"]["has_storyboard"] is True
     assert episode_1["storyboard_prompts"] == []
+
+
+def test_storyboard_workspace_can_open_a_script_without_changing_global_selection(client):
+    first = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script="Script A",
+    )
+    repository = WorkspaceRepository()
+    project = Project.objects.get(workspace_id=first["id"])
+    first_script = Script.objects.get(outline=project.selected_outline)
+    second_outline = Outline.objects.create(
+        project=project,
+        outline_id="outline-b",
+        position=99,
+        title="Story B",
+        core_premise="B",
+        protagonist="B",
+        hook="B",
+        arc_summary="B",
+        is_usable=True,
+    )
+    second_script = Script.objects.create(project=project, outline=second_outline)
+    Episode.objects.create(
+        script=second_script,
+        episode_number=1,
+        title="Episode B",
+        summary="B",
+        key_conflict="B",
+        cliffhanger="B",
+        full_script="Script B",
+    )
+    project.selected_outline = second_outline
+    project.save(update_fields=["selected_outline"])
+
+    workspace = repository.get_episode_workspace(
+        project.workspace_id,
+        1,
+        script_id=first_script.id,
+    )
+
+    project.refresh_from_db()
+    assert workspace["script_id"] == first_script.id
+    assert workspace["selected_episode"]["full_script"] == "Script A"
+    assert project.selected_outline_id == second_outline.id
+    response = client.get(
+        reverse(
+            "studio:storyboard_script_episode",
+            args=[project.workspace_id, first_script.id, 1],
+        )
+    )
+    assert response.status_code == 200
+    assert response.context["workspace"]["script_id"] == first_script.id
 
 
 def test_task_status_points_to_requested_episode(client):

@@ -1,8 +1,36 @@
 import uuid
+from pathlib import Path
 
 from django.db import models
+from django.utils.text import slugify
 
 from .models import Character, CharacterAsset, Episode, GenerationTask, StoryboardPrompt
+
+
+def script_storage_key(script):
+    title = slugify(script.outline.title, allow_unicode=True)[:80] or "script"
+    return f"S{script.id:06d}-{title}"
+
+
+def shot_video_upload_to(instance, filename):
+    shot = instance.shot
+    episode = shot.storyboard.episode
+    suffix = Path(filename).suffix.lower() or ".mp4"
+    return (
+        f"videos/{script_storage_key(episode.script)}/"
+        f"episode-{episode.episode_number:03d}/shots/"
+        f"shot-{shot.shot_number:03d}/v{instance.version:03d}{suffix}"
+    )
+
+
+def composition_video_upload_to(instance, filename):
+    episode = instance.episode
+    suffix = Path(filename).suffix.lower() or ".mp4"
+    return (
+        f"videos/{script_storage_key(episode.script)}/"
+        f"episode-{episode.episode_number:03d}/compositions/"
+        f"v{instance.version:03d}{suffix}"
+    )
 
 
 class ProviderConfig(models.Model):
@@ -191,7 +219,7 @@ class VideoAsset(models.Model):
     input_snapshot = models.JSONField(default=dict, blank=True)
     result_snapshot = models.JSONField(default=dict, blank=True)
     source_url = models.URLField(blank=True, max_length=1500)
-    video = models.FileField(upload_to="videos/shots/%Y/%m/%d", blank=True)
+    video = models.FileField(upload_to=shot_video_upload_to, blank=True)
     error_message = models.TextField(blank=True)
     is_selected = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -217,13 +245,24 @@ class VideoComposition(models.Model):
         (STATUS_FAILED, "Failed"),
     ]
 
-    episode = models.OneToOneField(Episode, on_delete=models.CASCADE, related_name="video_composition")
+    episode = models.ForeignKey(
+        Episode,
+        on_delete=models.CASCADE,
+        related_name="video_compositions",
+    )
+    version = models.PositiveIntegerField(default=1)
     status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_DRAFT)
-    video = models.FileField(upload_to="videos/exports/%Y/%m/%d", blank=True)
+    video = models.FileField(upload_to=composition_video_upload_to, blank=True)
     error_message = models.TextField(blank=True)
     exported_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-version", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["episode", "version"], name="unique_episode_export_version")
+        ]
 
 
 GenerationTask.TYPE_SHOT_VIDEO = "shot_video"

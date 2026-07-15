@@ -143,7 +143,7 @@
             <div class="episode-row-actions">
               {% if episode.has_script %}
                 <button class="ghost-button" type="button" data-modal-target="episode-script-{{ episode.episode }}">查看剧本</button>
-                <a class="secondary-link" href="{% url 'studio:storyboard_episode' workspace.id episode.episode %}">{% if episode.has_storyboard %}查看分镜{% else %}生成分镜{% endif %}</a>
+                <a class="secondary-link" href="{% url 'studio:storyboard_script_episode' workspace.id workspace.script_id episode.episode %}">{% if episode.has_storyboard %}查看分镜{% else %}生成分镜{% endif %}</a>
               {% elif episode.script_status == "generating" %}
                 <button class="secondary-button" type="button" disabled>生成中</button>
               {% else %}

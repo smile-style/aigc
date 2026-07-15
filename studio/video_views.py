@@ -26,8 +26,10 @@ from studio.services.video import (
     reorder_shots,
     save_video_prompt_override,
     storyboard_video_prompt,
+    sync_latest_character_assets,
     video_page_data,
 )
+from studio.video_models import script_storage_key
 
 
 def system_settings_page(request):
@@ -73,9 +75,17 @@ def video_page(request, workspace_id):
 
 
 def video_episode_page(request, workspace_id, episode_number):
+    return _render_video_episode(request, workspace_id, episode_number)
+
+
+def video_script_episode_page(request, workspace_id, script_id, episode_number):
+    return _render_video_episode(request, workspace_id, episode_number, script_id=script_id)
+
+
+def _render_video_episode(request, workspace_id, episode_number, script_id=None):
     repository = WorkspaceRepository()
-    workspace = repository.get_episode_workspace(workspace_id, episode_number)
-    episode = _episode(workspace_id, episode_number)
+    workspace = repository.get_episode_workspace(workspace_id, episode_number, script_id=script_id)
+    episode = _episode(workspace_id, episode_number, script_id=script_id)
     has_synced_shots = StoryboardShot.objects.filter(storyboard__episode=episode).exists()
     data = video_page_data(episode, sync=not has_synced_shots)
     characters = list(
@@ -92,6 +102,8 @@ def video_episode_page(request, workspace_id, episode_number):
             "shots": data["shots"],
             "counts": data["counts"],
             "composition": data["composition"],
+            "asset_updates_available": data["asset_updates_available"],
+            "sync_result": request.GET.get("synced"),
             "characters": characters,
             "active_tab": request.GET.get("tab", "shots"),
             "active_nav": "video",
@@ -101,19 +113,21 @@ def video_episode_page(request, workspace_id, episode_number):
 
 @require_POST
 def generate_shot_video_view(request, workspace_id, episode_number, shot_id):
-    shot = _shot(workspace_id, episode_number, shot_id)
+    script_id = _request_script_id(request)
+    shot = _shot(workspace_id, episode_number, shot_id, script_id=script_id)
     try:
         queue_shot_video(shot, force=request.POST.get("force") == "1")
     except ValueError as exc:
-        return _video_error(request, workspace_id, episode_number, str(exc))
-    return _video_redirect(workspace_id, episode_number)
+        return _video_error(request, workspace_id, episode_number, str(exc), script_id=script_id)
+    return _video_redirect(workspace_id, episode_number, script_id=script_id)
 
 
 
 
 @require_POST
 def save_shot_video_prompt_view(request, workspace_id, episode_number, shot_id):
-    shot = _shot(workspace_id, episode_number, shot_id)
+    script_id = _request_script_id(request)
+    shot = _shot(workspace_id, episode_number, shot_id, script_id=script_id)
     try:
         action = request.POST.get("action", "save")
         if action == "reset":
@@ -124,52 +138,69 @@ def save_shot_video_prompt_view(request, workspace_id, episode_number, shot_id):
         if action == "save_and_generate":
             queue_shot_video(shot, force=shot.video_assets.exists())
     except ValueError as exc:
-        return _video_error(request, workspace_id, episode_number, str(exc))
-    return _video_redirect(workspace_id, episode_number)
+        return _video_error(request, workspace_id, episode_number, str(exc), script_id=script_id)
+    return _video_redirect(workspace_id, episode_number, script_id=script_id)
 
 
 @require_POST
 def batch_video_view(request, workspace_id, episode_number):
-    episode = _episode(workspace_id, episode_number)
+    script_id = _request_script_id(request)
+    episode = _episode(workspace_id, episode_number, script_id=script_id)
     _, errors = queue_episode_videos(episode, failed_only=request.POST.get("mode") == "failed")
     if errors:
         return _video_error(request, workspace_id, episode_number, "；".join(errors))
-    return _video_redirect(workspace_id, episode_number)
+    return _video_redirect(workspace_id, episode_number, script_id=script_id)
+
+@require_POST
+def sync_character_assets_view(request, workspace_id, episode_number):
+    script_id = _request_script_id(request)
+    episode = _episode(workspace_id, episode_number, script_id=script_id)
+    updated = sync_latest_character_assets(episode)
+    if script_id:
+        url = reverse("studio:video_script_episode", args=[workspace_id, script_id, episode_number])
+    else:
+        url = reverse("studio:video_episode", args=[workspace_id, episode_number])
+    return redirect(f"{url}?synced={updated}")
+
 
 
 @require_POST
 def bind_shot_characters_view(request, workspace_id, episode_number, shot_id):
-    shot = _shot(workspace_id, episode_number, shot_id)
+    script_id = _request_script_id(request)
+    shot = _shot(workspace_id, episode_number, shot_id, script_id=script_id)
     try:
         bind_shot_characters(shot, request.POST.getlist("character_ids"))
     except ValueError as exc:
-        return _video_error(request, workspace_id, episode_number, str(exc))
-    return _video_redirect(workspace_id, episode_number)
+        return _video_error(request, workspace_id, episode_number, str(exc), script_id=script_id)
+    return _video_redirect(workspace_id, episode_number, script_id=script_id)
 
 
 @require_POST
 def reorder_video_shots_view(request, workspace_id, episode_number):
-    episode = _episode(workspace_id, episode_number)
+    script_id = _request_script_id(request)
+    episode = _episode(workspace_id, episode_number, script_id=script_id)
     try:
         reorder_shots(episode, [value for value in request.POST.get("shot_order", "").split(",") if value])
     except ValueError as exc:
-        return _video_error(request, workspace_id, episode_number, str(exc), tab="assembly")
-    return _video_redirect(workspace_id, episode_number, tab="assembly")
+        return _video_error(request, workspace_id, episode_number, str(exc), tab="assembly", script_id=script_id)
+    return _video_redirect(workspace_id, episode_number, tab="assembly", script_id=script_id)
 
 
 @require_POST
 def export_video_view(request, workspace_id, episode_number):
-    episode = _episode(workspace_id, episode_number)
+    script_id = _request_script_id(request)
+    episode = _episode(workspace_id, episode_number, script_id=script_id)
     try:
         queue_export(episode)
     except ValueError as exc:
-        return _video_error(request, workspace_id, episode_number, str(exc), tab="assembly")
-    return _video_redirect(workspace_id, episode_number, tab="assembly")
+        return _video_error(request, workspace_id, episode_number, str(exc), tab="assembly", script_id=script_id)
+    return _video_redirect(workspace_id, episode_number, tab="assembly", script_id=script_id)
 
 
 @require_GET
 def video_status_view(request, workspace_id, episode_number):
-    episode = _episode(workspace_id, episode_number)
+    script_id = _request_script_id(request)
+    episode = _episode(workspace_id, episode_number, script_id=script_id)
     data = video_page_data(episode, sync=False)
     return JsonResponse(
         {
@@ -189,7 +220,7 @@ def video_status_view(request, workspace_id, episode_number):
 
 @require_GET
 def download_shot_video_view(request, workspace_id, episode_number, video_id):
-    asset = VideoAsset.objects.select_related("shot__storyboard__episode").filter(
+    asset = VideoAsset.objects.select_related("shot__storyboard__episode__script__outline").filter(
         pk=video_id,
         shot__storyboard__project__workspace_id=workspace_id,
         shot__storyboard__episode__episode_number=episode_number,
@@ -198,57 +229,80 @@ def download_shot_video_view(request, workspace_id, episode_number, video_id):
     if asset is None or not asset.video:
         raise Http404("镜头视频不存在。")
     asset.video.open("rb")
-    return FileResponse(asset.video, as_attachment=True, filename=asset.video.name.rsplit("/", 1)[-1])
+    episode = asset.shot.storyboard.episode
+    filename = (
+        f"{script_storage_key(episode.script)}-EP{episode.episode_number:03d}-"
+        f"SH{asset.shot.shot_number:03d}-v{asset.version:03d}.mp4"
+    )
+    return FileResponse(asset.video, as_attachment=True, filename=filename)
 
 
 @require_GET
 def download_composition_view(request, workspace_id, episode_number):
-    composition = VideoComposition.objects.select_related("episode__script__project").filter(
+    script_id = _request_script_id(request)
+    queryset = VideoComposition.objects.select_related("episode__script__project", "episode__script__outline").filter(
         episode__script__project__workspace_id=workspace_id,
         episode__episode_number=episode_number,
         status=VideoComposition.STATUS_READY,
-    ).first()
+    )
+    if script_id:
+        queryset = queryset.filter(episode__script_id=script_id)
+    composition = queryset.first()
     if composition is None or not composition.video:
         raise Http404("成片尚未导出。")
     composition.video.open("rb")
     return FileResponse(
         composition.video,
         as_attachment=True,
-        filename=f"episode-{episode_number}.mp4",
+        filename=f"{script_storage_key(composition.episode.script)}-EP{episode_number:03d}-FINAL-v{composition.version:03d}.mp4",
     )
 
 
-def _episode(workspace_id, episode_number):
+def _request_script_id(request):
+    value = request.POST.get("script_id") or request.GET.get("script_id")
+    return int(value) if value else None
+
+
+def _episode(workspace_id, episode_number, script_id=None):
     try:
-        return Episode.objects.select_related("script__project", "storyboard_prompt").get(
-            script__project__workspace_id=workspace_id,
-            episode_number=episode_number,
-            script__project__selected_outline_id=F("script__outline_id"),
-        )
+        queryset = Episode.objects.select_related("script__project", "script__outline", "storyboard_prompt")
+        filters = {"script__project__workspace_id": workspace_id, "episode_number": episode_number}
+        if script_id:
+            filters["script_id"] = script_id
+        else:
+            filters["script__project__selected_outline_id"] = F("script__outline_id")
+        return queryset.get(**filters)
     except Episode.DoesNotExist as exc:
         raise Http404("剧集不存在。") from exc
 
 
-def _shot(workspace_id, episode_number, shot_id):
+def _shot(workspace_id, episode_number, shot_id, script_id=None):
     try:
-        return StoryboardShot.objects.select_related("storyboard__episode").get(
-            shot_id=shot_id,
-            storyboard__project__workspace_id=workspace_id,
-            storyboard__episode__episode_number=episode_number,
-        )
+        filters = {
+            "shot_id": shot_id,
+            "storyboard__project__workspace_id": workspace_id,
+            "storyboard__episode__episode_number": episode_number,
+        }
+        if script_id:
+            filters["storyboard__script_id"] = script_id
+        return StoryboardShot.objects.select_related("storyboard__episode").get(**filters)
     except StoryboardShot.DoesNotExist as exc:
         raise Http404("分镜不存在。") from exc
 
 
-def _video_redirect(workspace_id, episode_number, tab="shots"):
-    url = reverse("studio:video_episode", args=[workspace_id, episode_number])
+def _video_redirect(workspace_id, episode_number, tab="shots", script_id=None):
+    if script_id:
+        url = reverse("studio:video_script_episode", args=[workspace_id, script_id, episode_number])
+    else:
+        url = reverse("studio:video_episode", args=[workspace_id, episode_number])
     return redirect(f"{url}?tab={tab}")
 
 
-def _video_error(request, workspace_id, episode_number, error, tab="shots"):
+def _video_error(request, workspace_id, episode_number, error, tab="shots", script_id=None):
+    script_id = script_id or _request_script_id(request)
     repository = WorkspaceRepository()
-    workspace = repository.get_episode_workspace(workspace_id, episode_number)
-    episode = _episode(workspace_id, episode_number)
+    workspace = repository.get_episode_workspace(workspace_id, episode_number, script_id=script_id)
+    episode = _episode(workspace_id, episode_number, script_id=script_id)
     data = video_page_data(episode, sync=False)
     return render(
         request,

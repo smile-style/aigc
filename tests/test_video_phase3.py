@@ -20,16 +20,21 @@ from studio.models import (
     StoryboardPrompt,
     StoryboardShot,
     VideoAsset,
+    VideoComposition,
 )
 from studio.services.model_config import ensure_default_video_models, normalize_provider_origin
 from studio.services.video import (
     effective_video_prompt,
+    queue_episode_videos,
+    queue_export,
     queue_shot_video,
     reorder_shots,
     save_video_prompt_override,
     storyboard_video_prompt,
+    sync_latest_character_assets,
     sync_storyboard_shots,
 )
+from studio.video_models import composition_video_upload_to, shot_video_upload_to
 
 
 pytestmark = pytest.mark.django_db
@@ -204,6 +209,89 @@ def test_queue_shot_video_uses_manual_prompt_override():
     assert effective_video_prompt(shot) == custom_prompt
     assert asset.prompt_snapshot == custom_prompt
     assert asset.input_snapshot["prompt_policy"] == "manual_override"
+
+
+def test_sync_latest_character_assets_updates_future_video_references():
+    _, episode, storyboard = make_episode()
+    shot = sync_storyboard_shots(storyboard)[0]
+    reference = ShotCharacterReference.objects.get(shot=shot)
+    latest = CharacterAsset.objects.create(
+        character=reference.character,
+        model="image-model",
+        prompt_snapshot="new portrait",
+        version=2,
+    )
+    latest.image.save("lin-mo-v2.png", ContentFile(b"new-png"))
+
+    updated = sync_latest_character_assets(episode)
+
+    reference.refresh_from_db()
+    assert updated == 1
+    assert reference.asset_id == latest.id
+
+
+def test_one_click_generation_queues_missing_and_failed_but_skips_ready():
+    _, episode, storyboard = make_episode(with_character=False)
+    shots = sync_storyboard_shots(storyboard)
+    ensure_default_video_models()
+    ready, _ = queue_shot_video(shots[0])
+    ready.status = VideoAsset.STATUS_READY
+    ready.save(update_fields=["status"])
+    failed, _ = queue_shot_video(shots[1])
+    failed.status = VideoAsset.STATUS_FAILED
+    failed.save(update_fields=["status"])
+
+    queued, errors = queue_episode_videos(episode)
+
+    assert errors == []
+    assert len(queued) == 1
+    assert queued[0].shot_id == shots[1].id
+    assert queued[0].version == 2
+
+
+def test_video_storage_paths_include_script_episode_shot_and_version():
+    _, episode, storyboard = make_episode(with_character=False)
+    storyboard.script.outline.title = "My Story"
+    storyboard.script.outline.save(update_fields=["title"])
+    shot = sync_storyboard_shots(storyboard)[0]
+    asset = VideoAsset(shot=shot, version=3)
+    composition = VideoComposition(episode=episode, version=2)
+
+    assert shot_video_upload_to(asset, "result.mp4").endswith(
+        f"S{storyboard.script.id:06d}-my-story/episode-001/shots/shot-001/v003.mp4"
+    )
+    assert composition_video_upload_to(composition, "result.mp4").endswith(
+        f"S{storyboard.script.id:06d}-my-story/episode-001/compositions/v002.mp4"
+    )
+
+
+def test_each_export_creates_a_new_composition_version():
+    _, episode, storyboard = make_episode(with_character=False)
+    ensure_default_video_models()
+    for shot in sync_storyboard_shots(storyboard):
+        asset, _ = queue_shot_video(shot)
+        asset.status = VideoAsset.STATUS_READY
+        asset.is_selected = True
+        asset.save(update_fields=["status", "is_selected"])
+
+    first_task, created = queue_export(episode)
+    assert created is True
+    active_task, created = queue_export(episode)
+    assert created is False
+    assert active_task.id == first_task.id
+
+    first_task.status = GenerationTask.STATUS_SUCCEEDED
+    first_task.save(update_fields=["status"])
+    second_task, created = queue_export(episode)
+
+    assert created is True
+    assert list(
+        VideoComposition.objects.filter(episode=episode)
+        .order_by("version")
+        .values_list("version", flat=True)
+    ) == [1, 2]
+    assert first_task.target_id != second_task.target_id
+
 
 def test_video_provider_uses_dashscope_async_endpoint(tmp_path):
     provider_config = ensure_default_video_models()

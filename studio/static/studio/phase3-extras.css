@@ -17,3 +17,45 @@
 .settings-create[open] summary { margin-bottom: 10px; background: rgba(103, 232, 249, .08); }
 .settings-create[open] summary::before { content: "−"; }
 .settings-create summary:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
+
+.context-switcher {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.5fr) minmax(220px, 1fr) auto auto;
+  gap: 12px;
+  align-items: end;
+  padding: 14px 16px;
+}
+
+.context-switcher label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.context-switcher label > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.context-switcher select {
+  width: 100%;
+  min-height: 42px;
+}
+
+.task-status.is-success {
+  border-color: rgba(52, 211, 153, .45);
+  background: rgba(6, 78, 59, .22);
+  color: #a7f3d0;
+}
+
+@media (max-width: 860px) {
+  .context-switcher {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .context-switcher {
+    grid-template-columns: 1fr;
+  }

@@ -1,6 +1,15 @@
 document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll("form[data-submit-guard]").forEach((form) => {
     form.addEventListener("submit", (event) => {
+      const scriptContext = form.closest("[data-script-id]");
+      if (scriptContext instanceof HTMLElement && !form.elements.namedItem("script_id")) {
+        const scriptInput = document.createElement("input");
+        scriptInput.type = "hidden";
+        scriptInput.name = "script_id";
+        scriptInput.value = scriptContext.dataset.scriptId || "";
+        form.appendChild(scriptInput);
+      }
+
       if (form.dataset.submitting === "true") {
         event.preventDefault();
         return;
