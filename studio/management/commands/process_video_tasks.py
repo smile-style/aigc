@@ -1,10 +1,15 @@
+import logging
 import os
 import time
 
 from django.core.management.base import BaseCommand
+from django.utils import timezone
 
-from studio.models import GenerationTask, VideoAsset
+from studio.models import GenerationTask, VideoAsset, VideoComposition
 from studio.services.video import process_export_task, process_video_asset
+
+
+logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
@@ -29,16 +34,75 @@ class Command(BaseCommand):
                 status__in=[VideoAsset.STATUS_QUEUED, VideoAsset.STATUS_SUBMITTING, VideoAsset.STATUS_RUNNING]
             ).order_by("created_at", "id")[:20]
         )
-        for asset in assets:
-            process_video_asset(asset.id)
-            processed += 1
+        processed += self._process_items(
+            assets,
+            process_video_asset,
+            self._record_asset_failure,
+            "video asset",
+        )
         export_tasks = list(
             GenerationTask.objects.filter(
                 task_type=GenerationTask.TYPE_VIDEO_EXPORT,
                 status=GenerationTask.STATUS_PENDING,
             ).order_by("created_at", "id")[:2]
         )
-        for task in export_tasks:
-            process_export_task(task.id)
+        processed += self._process_items(
+            export_tasks,
+            process_export_task,
+            self._record_export_failure,
+            "video export task",
+        )
+        return processed
+
+    def _process_items(self, items, processor, failure_recorder, label):
+        processed = 0
+        for item in items:
+            try:
+                processor(item.id)
+            except Exception as exc:
+                logger.exception("Unhandled failure while processing %s %s", label, item.id)
+                self.stderr.write(self.style.ERROR(f"Failed {label} {item.id}: {exc}"))
+                try:
+                    failure_recorder(item, exc)
+                except Exception:
+                    logger.exception("Could not record failure for %s %s", label, item.id)
             processed += 1
         return processed
+
+    @staticmethod
+    def _record_asset_failure(asset, error):
+        now = timezone.now()
+        VideoAsset.objects.filter(pk=asset.pk).update(
+            status=VideoAsset.STATUS_FAILED,
+            error_message=str(error),
+            finished_at=now,
+            updated_at=now,
+        )
+        if asset.generation_task_id:
+            GenerationTask.objects.filter(pk=asset.generation_task_id).update(
+                status=GenerationTask.STATUS_FAILED,
+                error_message=str(error),
+                finished_at=now,
+            )
+
+    @staticmethod
+    def _record_export_failure(task, error):
+        now = timezone.now()
+        GenerationTask.objects.filter(pk=task.pk).update(
+            status=GenerationTask.STATUS_FAILED,
+            error_message=str(error),
+            finished_at=now,
+        )
+        composition = VideoComposition.objects.filter(pk=task.target_id).first()
+        if composition is None:
+            snapshot = task.input_snapshot or {}
+            composition = VideoComposition.objects.filter(
+                episode_id=snapshot.get("episode_id"),
+                version=snapshot.get("composition_version"),
+            ).first()
+        if composition is not None:
+            VideoComposition.objects.filter(pk=composition.pk).update(
+                status=VideoComposition.STATUS_FAILED,
+                error_message=str(error),
+                updated_at=now,
+            )
