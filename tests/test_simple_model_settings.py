@@ -180,6 +180,7 @@ def test_saving_seedance_video_slot_selects_new_api_protocol():
 
     assert model.provider.provider_type == ProviderConfig.TYPE_OPENAI_COMPATIBLE
     assert model.provider.base_url == "https://video.example/v1"
+    assert model.default_parameters["generate_audio"] is True
     provider = video_provider_for(model)
     try:
         assert provider.__class__.__name__ == "NewApiVideoProvider"

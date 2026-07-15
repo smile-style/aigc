@@ -70,7 +70,7 @@ SLOT_SPECS = {
             "duration": 5,
             "prompt_extend": False,
             "watermark": False,
-            "generate_audio": False,
+            "generate_audio": True,
         },
         "tone": "video",
     },
