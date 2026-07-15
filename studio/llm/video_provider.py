@@ -14,6 +14,14 @@ class VideoSubmission:
     request_id: str
 
 
+@dataclass(frozen=True)
+class VideoTaskResult:
+    status: str
+    video_url: str
+    message: str
+    payload: dict
+
+
 class BailianVideoProvider:
     CREATE_PATH = "/api/v1/services/aigc/video-generation/video-synthesis"
     TASK_PATH = "/api/v1/tasks/{task_id}"
@@ -28,16 +36,16 @@ class BailianVideoProvider:
     def close(self):
         self.client.close()
 
-    def submit_reference_video(self, prompt, image_paths, parameters=None, negative_prompt=""):
-        if not image_paths:
-            raise ValueError("参考生视频至少需要一张角色图片。")
+    def submit_video(self, prompt, image_paths=None, parameters=None, negative_prompt=""):
+        image_paths = list(image_paths or [])
         if len(image_paths) > 5:
             raise ValueError("万相参考生视频最多支持 5 个角色参考素材。")
-        media = [
-            {"type": "reference_image", "url": self._file_data_uri(path)}
-            for path in image_paths
-        ]
-        input_payload = {"prompt": prompt, "media": media}
+        input_payload = {"prompt": prompt}
+        if image_paths:
+            input_payload["media"] = [
+                {"type": "reference_image", "url": self._file_data_uri(path)}
+                for path in image_paths
+            ]
         if negative_prompt.strip():
             input_payload["negative_prompt"] = negative_prompt.strip()
         payload = {
@@ -58,6 +66,9 @@ class BailianVideoProvider:
             raise LLMAPIError("百炼没有返回视频任务 ID。")
         return VideoSubmission(task_id=task_id, request_id=str(data.get("request_id") or ""))
 
+    def submit_reference_video(self, prompt, image_paths, parameters=None, negative_prompt=""):
+        return self.submit_video(prompt, image_paths, parameters, negative_prompt)
+
     def get_task(self, task_id):
         response = self.client.get(
             f"{self._origin()}{self.TASK_PATH.format(task_id=task_id)}",
@@ -65,6 +76,25 @@ class BailianVideoProvider:
             timeout=self.timeout,
         )
         return self._response_json(response)
+
+    def get_task_result(self, task_id):
+        payload = self.get_task(task_id)
+        output = payload.get("output") or {}
+        status = str(output.get("task_status") or "UNKNOWN").upper()
+        status_map = {
+            "PENDING": "pending",
+            "RUNNING": "running",
+            "SUCCEEDED": "succeeded",
+            "FAILED": "failed",
+            "CANCELED": "failed",
+            "CANCELLED": "failed",
+        }
+        return VideoTaskResult(
+            status=status_map.get(status, "running"),
+            video_url=str(output.get("video_url") or ""),
+            message=str(output.get("message") or payload.get("message") or ""),
+            payload=payload,
+        )
 
     def download(self, url):
         response = self.client.get(url, timeout=self.timeout, follow_redirects=True)

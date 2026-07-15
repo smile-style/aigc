@@ -50,7 +50,7 @@
     </section>
   {% else %}
     <section class="surface-panel video-shot-panel">
-      <div class="section-head"><div><p class="eyebrow">Shot Queue</p><h2>分镜视频队列</h2></div><span class="status-pill">720P · 参考生视频</span></div>
+      <div class="section-head"><div><p class="eyebrow">Shot Queue</p><h2>分镜视频队列</h2></div><span class="status-pill">720P · 有参考图则传图，无图则纯 Prompt</span></div>
       <div class="video-shot-list">
         {% for shot in shots %}
           <article class="video-shot-row" data-video-shot="{{ shot.shot_id }}">
@@ -58,7 +58,7 @@
             <div class="video-shot-main">
               <div class="shot-reference-column">
                 <strong>角色参考</strong>
-                <div class="character-ref-list">{% for ref in shot.references_for_page %}<span class="character-ref"><img src="{{ ref.asset.image.url }}" alt=""><b>{{ ref.character.name }}</b><small>v{{ ref.asset.version }}</small></span>{% empty %}<span class="empty-inline">尚未匹配角色</span>{% endfor %}</div>
+                <div class="character-ref-list">{% for ref in shot.references_for_page %}<span class="character-ref"><img src="{{ ref.asset.image.url }}" alt=""><b>{{ ref.character.name }}</b><small>v{{ ref.asset.version }}</small></span>{% empty %}<span class="empty-inline">无参考图，将仅提交完整 Prompt</span>{% endfor %}</div>
                 <button class="secondary-link" type="button" data-modal-target="bind-characters-{{ shot.id }}">调整角色</button>
               </div>
               <div class="shot-prompt-column">
@@ -89,7 +89,7 @@
             {% if shot.latest_video.error_message %}<p class="inline-error" data-shot-error>{{ shot.latest_video.error_message }}</p>{% endif %}
             <footer>
               {% if shot.selected_video %}<a class="ghost-button" href="{% url 'studio:download_shot_video' workspace.id episode.episode_number shot.selected_video.id %}">下载</a>{% endif %}
-              <form method="post" action="{% url 'studio:generate_shot_video' workspace.id episode.episode_number shot.shot_id %}" data-submit-guard>{% csrf_token %}{% if shot.latest_video %}<input type="hidden" name="force" value="1">{% endif %}<button class="primary-button" type="submit" data-loading-text="加入队列中..." {% if not shot.references_for_page or shot.latest_video.status == 'queued' or shot.latest_video.status == 'submitting' or shot.latest_video.status == 'running' or shot.latest_video.status == 'downloading' %}disabled{% endif %}>{% if shot.latest_video %}重新生成{% else %}生成本镜头{% endif %}</button></form>
+              <form method="post" action="{% url 'studio:generate_shot_video' workspace.id episode.episode_number shot.shot_id %}" data-submit-guard>{% csrf_token %}{% if shot.latest_video %}<input type="hidden" name="force" value="1">{% endif %}<button class="primary-button" type="submit" data-loading-text="加入队列中..." {% if shot.latest_video.status == 'queued' or shot.latest_video.status == 'submitting' or shot.latest_video.status == 'running' or shot.latest_video.status == 'downloading' %}disabled{% endif %}>{% if shot.latest_video %}重新生成{% else %}生成本镜头{% endif %}</button></form>
             </footer>
           </article>
           <div class="detail-modal" id="bind-characters-{{ shot.id }}" role="dialog" aria-modal="true" aria-labelledby="bind-title-{{ shot.id }}" hidden>
@@ -119,7 +119,7 @@
                   <button class="ghost-button" type="submit" name="action" value="reset" formnovalidate data-loading-text="恢复中...">恢复分镜</button>
                   <span class="prompt-editor-primary-actions">
                     <button class="ghost-button" type="submit" name="action" value="save" data-loading-text="保存中...">保存</button>
-                    <button class="primary-button" type="submit" name="action" value="save_and_generate" data-loading-text="加入队列中..." {% if not shot.references_for_page or shot.latest_video.status == 'queued' or shot.latest_video.status == 'submitting' or shot.latest_video.status == 'running' or shot.latest_video.status == 'downloading' %}disabled{% endif %}>保存并生成</button>
+                    <button class="primary-button" type="submit" name="action" value="save_and_generate" data-loading-text="加入队列中..." {% if shot.latest_video.status == 'queued' or shot.latest_video.status == 'submitting' or shot.latest_video.status == 'running' or shot.latest_video.status == 'downloading' %}disabled{% endif %}>保存并生成</button>
                   </span>
                 </div>
               </form>

@@ -70,6 +70,7 @@ SLOT_SPECS = {
             "duration": 5,
             "prompt_extend": False,
             "watermark": False,
+            "generate_audio": False,
         },
         "tone": "video",
     },
@@ -85,6 +86,14 @@ STATUS_LABELS = {
 
 def ensure_simple_model_slots():
     ensure_default_video_models()
+    video_model = _slot_model(SLOT_SPECS[CATEGORY_VIDEO])
+    if (
+        video_model
+        and video_model.model_id.lower().startswith("doubao-seedance")
+        and video_model.provider.provider_type != ProviderConfig.TYPE_OPENAI_COMPATIBLE
+    ):
+        video_model.provider.provider_type = ProviderConfig.TYPE_OPENAI_COMPATIBLE
+        video_model.provider.save(update_fields=["provider_type", "updated_at"])
     for category in (CATEGORY_TEXT, CATEGORY_IMAGE):
         spec = SLOT_SPECS[category]
         model = _slot_model(spec)
@@ -140,6 +149,15 @@ def get_simple_model_slots():
                 "tone": spec["tone"],
                 "base_url": provider.base_url if provider else _first_env(spec["base_env_names"]),
                 "model_id": model.model_id if model else _first_env(spec["model_env_names"]),
+                "provider_type": provider.provider_type if provider else spec["provider_type"],
+                "provider_type_choices": (
+                    (
+                        (ProviderConfig.TYPE_OPENAI_COMPATIBLE, "OpenAI / New API 视频"),
+                        (ProviderConfig.TYPE_DASHSCOPE, "阿里百炼 / DashScope"),
+                    )
+                    if category == CATEGORY_VIDEO
+                    else ()
+                ),
                 "token_configured": token_configured,
                 "token_placeholder": (
                     f"已配置 ····{token_tail}" if token_tail else "输入 Token"
@@ -168,8 +186,18 @@ def save_simple_model_slot(category, post):
     base_url = str(post.get("base_url") or "").strip().rstrip("/")
     model_id = str(post.get("model_id") or "").strip()
     token = str(post.get("api_token") or "").strip()
+    provider_type = spec["provider_type"]
     if category == CATEGORY_VIDEO:
-        base_url = normalize_provider_origin(base_url)
+        requested_type = str(post.get("provider_type") or "").strip()
+        if requested_type in {
+            ProviderConfig.TYPE_OPENAI_COMPATIBLE,
+            ProviderConfig.TYPE_DASHSCOPE,
+        }:
+            provider_type = requested_type
+        elif model_id.lower().startswith("doubao-seedance"):
+            provider_type = ProviderConfig.TYPE_OPENAI_COMPATIBLE
+        if provider_type == ProviderConfig.TYPE_DASHSCOPE:
+            base_url = normalize_provider_origin(base_url)
     if not base_url or not model_id:
         raise ValueError("Base URL 和模型 ID 不能为空。")
 
@@ -187,11 +215,12 @@ def save_simple_model_slot(category, post):
 
     configuration_changed = (
         provider.base_url.rstrip("/") != base_url
+        or provider.provider_type != provider_type
         or not current_model
         or current_model.model_id != model_id
         or bool(token)
     )
-    provider.provider_type = spec["provider_type"]
+    provider.provider_type = provider_type
     provider.base_url = base_url
     provider.api_key_env_var = provider.api_key_env_var or _configured_env_name(
         spec["key_env_names"]
@@ -320,6 +349,25 @@ def _verify_image(client, provider, model, api_key):
 
 
 def _verify_video(client, provider, model, api_key):
+    if (
+        provider.provider_type == ProviderConfig.TYPE_OPENAI_COMPATIBLE
+        or model.model_id.lower().startswith("doubao-seedance")
+    ):
+        response = client.get(
+            f"{provider.base_url.rstrip('/')}/models",
+            headers=_headers(api_key),
+            timeout=30,
+        )
+        _raise_for_configuration(response)
+        payload = response.json()
+        model_ids = {
+            str(item.get("id"))
+            for item in payload.get("data", [])
+            if isinstance(item, dict) and item.get("id")
+        }
+        if model_ids and model.model_id not in model_ids:
+            raise ValueError(f"模型 {model.model_id} 不在当前 Token 的可用列表中。")
+        return ModelConfig.VERIFICATION_SUCCESS, "地址、Token 与视频模型权限均正常。"
     response = client.get(
         f"{normalize_provider_origin(provider.base_url)}/api/v1/tasks/config-validation-check",
         headers=_headers(api_key),

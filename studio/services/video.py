@@ -12,7 +12,6 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 
-from studio.llm.video_provider import BailianVideoProvider
 from studio.models import (
     Character,
     GenerationTask,
@@ -24,7 +23,7 @@ from studio.models import (
     VideoAsset,
     VideoComposition,
 )
-from studio.services.model_config import assigned_model, ensure_default_video_models, provider_api_key
+from studio.services.model_config import assigned_model, ensure_default_video_models, video_provider_for
 
 
 ACTIVE_VIDEO_STATUSES = {
@@ -122,8 +121,6 @@ def queue_shot_video(shot, force=False):
     if active:
         return active, False
     references = list(shot.character_references.select_related("character", "asset"))
-    if not references:
-        raise ValueError(f"镜头 {shot.shot_number} 没有可用的角色参考图。")
     ensure_default_video_models()
     model = assigned_model(
         ModelAssignment.PURPOSE_SHOT_VIDEO,
@@ -141,6 +138,8 @@ def queue_shot_video(shot, force=False):
         "shot_id": str(shot.shot_id),
         "shot_number": shot.shot_number,
         "model_id": model.model_id,
+        "provider_type": model.provider.provider_type,
+        "generation_mode": "reference" if references else "prompt_only",
         "prompt_policy": "manual_override" if is_custom_prompt else "full_storyboard_prompt",
         "source_storyboard_prompt": source_prompt,
         "source_storyboard_prompt_hash": _prompt_hash(source_prompt),
@@ -205,7 +204,7 @@ def process_video_asset(asset_id):
     )
     task = asset.generation_task
     try:
-        provider = BailianVideoProvider(asset.model_config, provider_api_key(asset.model_config.provider))
+        provider = video_provider_for(asset.model_config)
         try:
             if asset.status in {VideoAsset.STATUS_QUEUED, VideoAsset.STATUS_SUBMITTING}:
                 asset.status = VideoAsset.STATUS_SUBMITTING
@@ -213,7 +212,7 @@ def process_video_asset(asset_id):
                 asset.save(update_fields=["status", "error_message", "updated_at"])
                 _start_task(task)
                 references = list(asset.shot.character_references.select_related("asset").all())
-                submission = provider.submit_reference_video(
+                submission = provider.submit_video(
                     asset.prompt_snapshot,
                     [reference.asset.image.path for reference in references],
                     parameters=asset.input_snapshot.get("parameters"),
@@ -228,25 +227,23 @@ def process_video_asset(asset_id):
                 return asset
             if asset.status != VideoAsset.STATUS_RUNNING:
                 return asset
-            payload = provider.get_task(asset.provider_task_id)
-            output = payload.get("output") or {}
-            remote_status = str(output.get("task_status") or "UNKNOWN").upper()
-            if remote_status in {"PENDING", "RUNNING"}:
-                asset.result_snapshot = payload
+            result = provider.get_task_result(asset.provider_task_id)
+            if result.status in {"pending", "running"}:
+                asset.result_snapshot = result.payload
                 asset.save(update_fields=["result_snapshot", "updated_at"])
                 return asset
-            if remote_status != "SUCCEEDED":
-                raise RuntimeError(output.get("message") or payload.get("message") or f"视频任务状态：{remote_status}")
-            video_url = str(output.get("video_url") or "")
+            if result.status != "succeeded":
+                raise RuntimeError(result.message or f"视频任务状态：{result.status}")
+            video_url = result.video_url
             if not video_url:
-                raise RuntimeError("百炼任务成功但没有返回视频地址。")
+                raise RuntimeError("视频任务成功但没有返回视频地址。")
             asset.status = VideoAsset.STATUS_DOWNLOADING
             asset.save(update_fields=["status", "updated_at"])
             content = provider.download(video_url)
             filename = f"shot-{asset.shot.shot_number}-v{asset.version}-{uuid.uuid4().hex[:8]}.mp4"
             asset.video.save(filename, ContentFile(content), save=False)
             asset.source_url = video_url
-            asset.result_snapshot = payload
+            asset.result_snapshot = result.payload
             asset.status = VideoAsset.STATUS_READY
             asset.finished_at = timezone.now()
             asset.is_selected = True
@@ -325,7 +322,7 @@ def reorder_shots(episode, shot_ids):
             StoryboardShot.objects.filter(pk=shots[shot_id].pk).update(position=position)
 
 
-def video_page_data(episode, sync=True):
+def video_page_data(episode, sync=False):
     shots = (
         sync_episode_shots(episode)
         if sync

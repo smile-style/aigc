@@ -2,7 +2,9 @@ import json
 import os
 
 from studio.llm.image_provider import ImageConfig, ImageProvider
+from studio.llm.new_api_video_provider import NewApiVideoProvider
 from studio.llm.provider import LLMConfig, LLMConfigurationError, LLMProvider
+from studio.llm.video_provider import BailianVideoProvider
 from studio.models import ModelAssignment, ModelConfig, ProviderConfig
 from studio.services.secret_store import decrypt_secret
 
@@ -114,6 +116,19 @@ def llm_provider_for(purpose):
         ),
         timeout=provider.timeout_seconds,
     )
+
+
+def video_provider_for(model, client=None):
+    provider = model.provider
+    api_key = provider_api_key(provider)
+    if (
+        provider.provider_type == ProviderConfig.TYPE_OPENAI_COMPATIBLE
+        or model.model_id.lower().startswith("doubao-seedance")
+    ):
+        return NewApiVideoProvider(model, api_key, client=client)
+    if provider.provider_type == ProviderConfig.TYPE_DASHSCOPE:
+        return BailianVideoProvider(model, api_key, client=client)
+    raise ValueError(f"不支持的视频接口协议：{provider.get_provider_type_display()}")
 
 
 def image_provider_for():

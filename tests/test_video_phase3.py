@@ -177,6 +177,17 @@ def test_queue_shot_video_pins_model_and_character_asset():
     assert asset.generation_task.task_type == GenerationTask.TYPE_SHOT_VIDEO
 
 
+def test_queue_shot_video_allows_prompt_only_when_no_character_reference():
+    _, _, storyboard = make_episode()
+    ensure_default_video_models()
+    shot = sync_storyboard_shots(storyboard)[1]
+
+    asset, created = queue_shot_video(shot)
+
+    assert created is True
+    assert asset.status == VideoAsset.STATUS_QUEUED
+    assert asset.input_snapshot["references"] == []
+    assert asset.prompt_snapshot == storyboard_video_prompt(shot)
 
 
 def test_queue_shot_video_uses_manual_prompt_override():
@@ -248,6 +259,16 @@ def test_video_page_loads_shots_and_character_reference(client):
     assert "6 秒 · 中景推进" not in content
 
 
+def test_video_page_enables_generation_without_character_reference(client):
+    project, _, _ = make_episode()
+
+    response = client.get(reverse("studio:video_episode", args=[project.workspace_id, 1]))
+
+    content = response.content.decode("utf-8")
+    shot_two = content.split('data-video-shot="', 2)[2].split("</article>", 1)[0]
+    button = shot_two.split("生成本镜头", 1)[0].rsplit("<button", 1)[1]
+    assert "disabled" not in button
+
 
 def test_video_prompt_can_be_saved_and_reset(client):
     project, _, storyboard = make_episode()
@@ -287,6 +308,20 @@ def test_reorder_shots_updates_production_order():
     sync_storyboard_shots(storyboard)
 
     assert list(StoryboardShot.objects.values_list("shot_number", flat=True)) == [2, 1]
+
+
+def test_video_page_does_not_resync_existing_shots(client, monkeypatch):
+    project, _, storyboard = make_episode()
+    sync_storyboard_shots(storyboard)
+
+    def fail_if_called(episode):
+        raise AssertionError("existing shots must make the page read-only")
+
+    monkeypatch.setattr("studio.services.video.sync_episode_shots", fail_if_called)
+
+    response = client.get(reverse("studio:video_episode", args=[project.workspace_id, 1]))
+
+    assert response.status_code == 200
 
 
 def test_video_status_does_not_resync_or_write(client, monkeypatch):

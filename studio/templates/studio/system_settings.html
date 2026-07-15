@@ -29,7 +29,18 @@
           </span>
         </header>
 
-        <div class="model-slot__fields">
+        <div class="model-slot__fields {% if slot.provider_type_choices %}has-provider-type{% endif %}">
+          {% if slot.provider_type_choices %}
+            <label class="model-field">
+              <span>接口协议</span>
+              <select name="provider_type" required>
+                {% for value, label in slot.provider_type_choices %}
+                  <option value="{{ value }}" {% if value == slot.provider_type %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+          {% endif %}
+
           <label class="model-field model-field--url">
             <span>Base URL</span>
             <input

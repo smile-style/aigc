@@ -76,7 +76,8 @@ def video_episode_page(request, workspace_id, episode_number):
     repository = WorkspaceRepository()
     workspace = repository.get_episode_workspace(workspace_id, episode_number)
     episode = _episode(workspace_id, episode_number)
-    data = video_page_data(episode)
+    has_synced_shots = StoryboardShot.objects.filter(storyboard__episode=episode).exists()
+    data = video_page_data(episode, sync=not has_synced_shots)
     characters = list(
         Character.objects.filter(script=episode.script)
         .prefetch_related("assets")
@@ -248,7 +249,7 @@ def _video_error(request, workspace_id, episode_number, error, tab="shots"):
     repository = WorkspaceRepository()
     workspace = repository.get_episode_workspace(workspace_id, episode_number)
     episode = _episode(workspace_id, episode_number)
-    data = video_page_data(episode)
+    data = video_page_data(episode, sync=False)
     return render(
         request,
         "studio/video.html",

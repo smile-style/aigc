@@ -2,8 +2,8 @@ import httpx
 import pytest
 from django.urls import reverse
 
-from studio.models import ModelAssignment, ModelConfig
-from studio.services.model_config import provider_api_key
+from studio.models import ModelAssignment, ModelConfig, ProviderConfig
+from studio.services.model_config import provider_api_key, video_provider_for
 from studio.services.model_slots import (
     CATEGORY_IMAGE,
     CATEGORY_TEXT,
@@ -22,6 +22,13 @@ def slot_payload(base_url, model_id, token=""):
         "model_id": model_id,
         "api_token": token,
     }
+
+
+def video_slot_payload(base_url, model_id, token="", provider_type=""):
+    payload = slot_payload(base_url, model_id, token)
+    if provider_type:
+        payload["provider_type"] = provider_type
+    return payload
 
 
 def test_system_settings_renders_only_three_simple_categories(client):
@@ -159,6 +166,49 @@ def test_video_configuration_validation_is_partial_without_creating_task():
 
     assert model.verification_status == ModelConfig.VERIFICATION_PARTIAL
     assert "首次生成" in model.verification_message
+
+
+def test_saving_seedance_video_slot_selects_new_api_protocol():
+    model = save_simple_model_slot(
+        CATEGORY_VIDEO,
+        video_slot_payload(
+            "https://video.example/v1",
+            "doubao-seedance-2-0-fast-260128",
+            "video-secret",
+        ),
+    )
+
+    assert model.provider.provider_type == ProviderConfig.TYPE_OPENAI_COMPATIBLE
+    assert model.provider.base_url == "https://video.example/v1"
+    provider = video_provider_for(model)
+    try:
+        assert provider.__class__.__name__ == "NewApiVideoProvider"
+    finally:
+        provider.close()
+
+
+def test_seedance_configuration_validation_checks_models_endpoint():
+    save_simple_model_slot(
+        CATEGORY_VIDEO,
+        video_slot_payload(
+            "https://video.example/v1",
+            "doubao-seedance-2-0-fast-260128",
+            "video-secret",
+        ),
+    )
+
+    def handler(request):
+        assert request.method == "GET"
+        assert request.url.path == "/v1/models"
+        return httpx.Response(
+            200,
+            json={"data": [{"id": "doubao-seedance-2-0-fast-260128"}]},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        model = verify_simple_model_slot(CATEGORY_VIDEO, client=client)
+
+    assert model.verification_status == ModelConfig.VERIFICATION_SUCCESS
 
 
 def test_query_string_action_survives_missing_submit_button_value(client):
