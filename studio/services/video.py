@@ -290,7 +290,7 @@ def process_video_asset(asset_id):
         return asset
 
 
-def queue_export(episode, include_subtitles=True):
+def queue_export(episode):
     active = episode.script.project.generation_tasks.filter(
         task_type=GenerationTask.TYPE_VIDEO_EXPORT,
         status__in=[GenerationTask.STATUS_PENDING, GenerationTask.STATUS_RUNNING],
@@ -317,7 +317,6 @@ def queue_export(episode, include_subtitles=True):
             "episode_id": episode.id,
             "composition_version": version,
             "video_asset_ids": [asset.id for asset in selected],
-            "include_subtitles": bool(include_subtitles),
         },
     )
     return task, True
@@ -331,10 +330,7 @@ def process_export_task(task_id):
         assets = list(VideoAsset.objects.filter(pk__in=task.input_snapshot["video_asset_ids"]).select_related("shot"))
         asset_map = {asset.id: asset for asset in assets}
         ordered = [asset_map[asset_id] for asset_id in task.input_snapshot["video_asset_ids"]]
-        content = _ffmpeg_concat(
-            ordered,
-            include_subtitles=task.input_snapshot.get("include_subtitles", True),
-        )
+        content = _ffmpeg_concat(ordered)
         composition.video.save("result.mp4", ContentFile(content), save=False)
         composition.status = VideoComposition.STATUS_READY
         composition.error_message = ""
@@ -508,7 +504,7 @@ def _fail_task(task, error):
     )
 
 
-def _ffmpeg_concat(assets, include_subtitles=True):
+def _ffmpeg_concat(assets):
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("未找到 FFmpeg，请先安装 FFmpeg 后再导出。")
@@ -524,20 +520,6 @@ def _ffmpeg_concat(assets, include_subtitles=True):
                 "scale=720:1280:force_original_aspect_ratio=decrease,"
                 "pad=720:1280:(ow-iw)/2:(oh-ih)/2,fps=25"
             )
-            subtitle = str(asset.shot.dialogue_or_narration or "").strip()
-            if include_subtitles and subtitle:
-                subtitle_file = temp / f"subtitle-{index:03d}.srt"
-                subtitle_file.write_text(
-                    _srt_cue(subtitle, asset.shot.duration_seconds),
-                    encoding="utf-8",
-                )
-                video_filter += (
-                    f",subtitles={subtitle_file.name}:charenc=UTF-8:"
-                    "force_style='FontName=Noto Sans CJK SC,FontSize=24,"
-                    "PrimaryColour=&H00FFFFFF,BackColour=&H90000000,"
-                    "BorderStyle=3,Outline=1,Shadow=0,MarginV=72,Alignment=2'"
-                )
-
             has_audio = _has_audio_stream(ffprobe, asset.video.path)
             command = [ffmpeg, "-y", "-i", asset.video.path]
             if not has_audio:
@@ -600,13 +582,3 @@ def _run_ffmpeg(command, cwd=None):
     except subprocess.CalledProcessError as exc:
         detail = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else str(exc)
         raise RuntimeError(f"FFmpeg 导出失败：{detail[-1200:]}") from exc
-
-
-def _srt_cue(text, duration_seconds):
-    clean_text = str(text).replace("\r\n", "\n").replace("\r", "\n").strip()
-    duration_ms = max(1, int(duration_seconds)) * 1000
-    hours, remainder = divmod(duration_ms, 3_600_000)
-    minutes, remainder = divmod(remainder, 60_000)
-    seconds, milliseconds = divmod(remainder, 1000)
-    end = f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
-    return f"1\n00:00:00,000 --> {end}\n{clean_text}\n"

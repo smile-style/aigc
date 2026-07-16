@@ -72,9 +72,8 @@
         {% else %}
           <div class="export-actions">
             {% if composition.status == 'ready' and composition.video %}<a class="ghost-button" href="{% url 'studio:download_composition' workspace.id episode.episode_number %}">下载当前成片</a>{% endif %}
-            <form class="export-controls" method="post" action="{% url 'studio:export_video' workspace.id episode.episode_number %}" data-submit-guard>
+            <form method="post" action="{% url 'studio:export_video' workspace.id episode.episode_number %}" data-submit-guard>
               {% csrf_token %}
-              <label><input type="checkbox" name="include_subtitles" value="1" checked> 烧录对白 / 旁白字幕</label>
               <button class="primary-button" type="submit" data-loading-text="提交导出中..." {% if counts.ready != counts.total or not counts.total %}disabled{% endif %}>{% if composition.status == 'ready' %}重新导出{% else %}拼接并导出{% endif %}</button>
             </form>
           </div>

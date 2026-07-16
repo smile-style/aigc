@@ -279,17 +279,15 @@ def test_each_export_creates_a_new_composition_version():
 
     first_task, created = queue_export(episode)
     assert created is True
-    assert first_task.input_snapshot["include_subtitles"] is True
     active_task, created = queue_export(episode)
     assert created is False
     assert active_task.id == first_task.id
 
     first_task.status = GenerationTask.STATUS_SUCCEEDED
     first_task.save(update_fields=["status"])
-    second_task, created = queue_export(episode, include_subtitles=False)
+    second_task, created = queue_export(episode)
 
     assert created is True
-    assert second_task.input_snapshot["include_subtitles"] is False
     assert list(
         VideoComposition.objects.filter(episode=episode)
         .order_by("version")
@@ -298,7 +296,7 @@ def test_each_export_creates_a_new_composition_version():
     assert first_task.target_id != second_task.target_id
 
 
-def test_ffmpeg_export_preserves_audio_and_burns_shot_subtitles(tmp_path, monkeypatch):
+def test_ffmpeg_export_preserves_audio_without_subtitles(tmp_path, monkeypatch):
     source = tmp_path / "shot.mp4"
     source.write_bytes(b"source")
     asset = SimpleNamespace(
@@ -321,7 +319,7 @@ def test_ffmpeg_export_preserves_audio_and_burns_shot_subtitles(tmp_path, monkey
 
     monkeypatch.setattr("studio.services.video.subprocess.run", fake_run)
 
-    content = _ffmpeg_concat([asset], include_subtitles=True)
+    content = _ffmpeg_concat([asset])
 
     normalize = next(command for command in commands if "-vf" in command)
     video_filter = normalize[normalize.index("-vf") + 1]
@@ -330,8 +328,7 @@ def test_ffmpeg_export_preserves_audio_and_burns_shot_subtitles(tmp_path, monkey
     assert normalize[normalize.index("-map") + 1] == "0:v:0"
     assert "0:a:0" in normalize
     assert normalize[normalize.index("-c:a") + 1] == "aac"
-    assert "subtitles=subtitle-001.srt" in video_filter
-    assert "Noto Sans CJK SC" in video_filter
+    assert "subtitles=" not in video_filter
 
 
 def test_video_provider_uses_dashscope_async_endpoint(tmp_path):
@@ -416,7 +413,7 @@ def test_ready_composition_can_be_downloaded_and_reexported(client):
     content = response.content.decode("utf-8")
     assert "下载当前成片" in content
     assert "重新导出" in content
-    assert 'name="include_subtitles" value="1" checked' in content
+    assert "include_subtitles" not in content
 
 
 def test_video_prompt_can_be_saved_and_reset(client):
