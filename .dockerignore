@@ -5,9 +5,12 @@ venv
 __pycache__
 *.py[cod]
 .pytest_cache
+.test-runtime
 .env
 deploy/.env
 db.sqlite3
+media
+staticfiles
 workspace/*.json
-logs/*.log
+logs
 .tmp

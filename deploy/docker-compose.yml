@@ -1,57 +1,93 @@
+x-app-environment: &app-environment
+  DJANGO_DEBUG: "false"
+  DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in deploy/.env}"
+  DJANGO_STATIC_ROOT: /app/staticfiles
+  DJANGO_MEDIA_ROOT: /app/media
+  WORKSPACE_DIR: /app/workspace
+  LLM_LOG_PATH: /app/logs/llm.log
+  DB_ENGINE: mysql
+  DB_HOST: mysql
+  DB_PORT: "3306"
+  DB_NAME: "${MYSQL_DATABASE:-AIGC_STUDIO}"
+  DB_USER: "${MYSQL_USER:-aigc_studio}"
+  DB_PASSWORD: "${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in deploy/.env}"
+  VIDEO_WORKER_INTERVAL_SECONDS: "${VIDEO_WORKER_INTERVAL_SECONDS:-5}"
+
+x-app-service: &app-service
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  image: aigc-studio:latest
+  env_file:
+    - .env
+  environment: *app-environment
+  init: true
+  stop_grace_period: 30s
+  volumes:
+    - aigc_workspace:/app/workspace
+    - aigc_logs:/app/logs
+    - aigc_media:/app/media
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
 services:
   mysql:
     image: registry.cn-hangzhou.aliyuncs.com/docker-registry-cache/mysql:8.0
-    restart: always
-    ports:
-      - "3306:3306"
-    container_name: mysql-8
+    restart: unless-stopped
     environment:
-      - "MYSQL_DATABASE=${MYSQL_DATABASE:-AIGC_STUDIO}"
-      - "MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}"
-      - "MYSQL_USER=${MYSQL_USER:-aigc_studio}"
-      - "MYSQL_PASSWORD=${MYSQL_PASSWORD}"
-      - "TZ=Asia/Shanghai"
+      MYSQL_DATABASE: "${MYSQL_DATABASE:-AIGC_STUDIO}"
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in deploy/.env}"
+      MYSQL_USER: "${MYSQL_USER:-aigc_studio}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in deploy/.env}"
+      TZ: Asia/Shanghai
     volumes:
       - mysql_data:/var/lib/mysql
       - ./config/mysql.cnf:/etc/mysql/conf.d/mysql.cnf:ro
-      - ./init:/docker-entrypoint-initdb.d/:ro
+      - ./init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 30s
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
-  aigc-studio:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-    image: aigc-studio:latest
-    container_name: aigc-studio
-    restart: unless-stopped
+  migrate:
+    <<: *app-service
+    restart: "no"
     depends_on:
       mysql:
         condition: service_healthy
-    env_file:
-      - .env
+    command: ["python", "manage.py", "migrate", "--noinput"]
+
+  aigc-studio:
+    <<: *app-service
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     environment:
-      DJANGO_DEBUG: "false"
-      DJANGO_STATIC_ROOT: /app/staticfiles
-      DJANGO_MEDIA_ROOT: /app/media
-      WORKSPACE_DIR: /app/workspace
-      LLM_LOG_PATH: /app/logs/llm.log
-      DB_ENGINE: mysql
-      DB_HOST: mysql
-      DB_PORT: "3306"
-      DB_NAME: "${MYSQL_DATABASE:-AIGC_STUDIO}"
-      DB_USER: "${MYSQL_USER:-aigc_studio}"
-      DB_PASSWORD: "${MYSQL_PASSWORD}"
+      <<: *app-environment
+      GUNICORN_WORKERS: "${GUNICORN_WORKERS:-2}"
+      GUNICORN_TIMEOUT: "${GUNICORN_TIMEOUT:-360}"
+    command:
+      - sh
+      - -c
+      - >-
+        exec gunicorn aigc_site.wsgi:application
+        --bind 0.0.0.0:8000
+        --workers "$${GUNICORN_WORKERS}"
+        --timeout "$${GUNICORN_TIMEOUT}"
     ports:
-      - "8080:8000"
-    volumes:
-      - aigc_workspace:/app/workspace
-      - aigc_logs:/app/logs
-      - aigc_media:/app/media
+      - "${AIGC_HTTP_PORT:-8080}:8000"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/"]
       interval: 30s
@@ -60,33 +96,12 @@ services:
       start_period: 20s
 
   video-worker:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-    image: aigc-studio:latest
-    container_name: aigc-video-worker
+    <<: *app-service
     restart: unless-stopped
     depends_on:
-      mysql:
-        condition: service_healthy
-    env_file:
-      - .env
-    environment:
-      DJANGO_DEBUG: "false"
-      DJANGO_MEDIA_ROOT: /app/media
-      WORKSPACE_DIR: /app/workspace
-      LLM_LOG_PATH: /app/logs/llm.log
-      DB_ENGINE: mysql
-      DB_HOST: mysql
-      DB_PORT: "3306"
-      DB_NAME: "${MYSQL_DATABASE:-AIGC_STUDIO}"
-      DB_USER: "${MYSQL_USER:-aigc_studio}"
-      DB_PASSWORD: "${MYSQL_PASSWORD}"
-    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py process_video_tasks"]
-    volumes:
-      - aigc_workspace:/app/workspace
-      - aigc_logs:/app/logs
-      - aigc_media:/app/media
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "manage.py", "process_video_tasks"]
 
 volumes:
   mysql_data:
