@@ -17,6 +17,8 @@ x-app-service: &app-service
   build:
     context: ..
     dockerfile: deploy/Dockerfile
+    args:
+      BASE_IMAGE: "${AIGC_BASE_IMAGE:-aigc-studio-base:py3.12-v1}"
   image: aigc-studio:latest
   env_file:
     - .env
