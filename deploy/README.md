@@ -117,6 +117,34 @@ docker run --rm \
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs -f --tail=200
 ```
 
+如果 `migrate` 日志出现 MySQL `1045 Access denied`，说明数据库中的应用账号密码与
+`deploy/.env` 中的 `MYSQL_PASSWORD` 不一致。MySQL 只在首次创建数据卷时读取这些
+初始化变量，之后修改 `.env` 不会自动修改已有账号密码。
+
+先用 root 账号进入 MySQL：
+
+```bash
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml exec mysql \
+  mysql -uroot -p
+```
+
+输入 `MYSQL_ROOT_PASSWORD` 后，在 MySQL 中执行以下语句；将占位值替换为
+`deploy/.env` 中的实际值：
+
+```sql
+CREATE USER IF NOT EXISTS 'aigc_studio'@'%' IDENTIFIED BY '<MYSQL_PASSWORD>';
+ALTER USER 'aigc_studio'@'%' IDENTIFIED BY '<MYSQL_PASSWORD>';
+GRANT ALL PRIVILEGES ON AIGC_STUDIO.* TO 'aigc_studio'@'%';
+FLUSH PRIVILEGES;
+```
+
+上面使用的是默认用户名和数据库名；如果修改过 `MYSQL_USER` 或 `MYSQL_DATABASE`，SQL
+中的值也要相应替换。
+
+如果是全新部署且数据库中没有需要保留的数据，也可以停止服务后仅删除 MySQL 数据卷，
+再重新启动，让 MySQL 按当前 `.env` 初始化。不要使用 `docker compose down -v`，它还会
+删除媒体、日志和工作区卷。
+
 重新运行迁移：
 
 ```bash

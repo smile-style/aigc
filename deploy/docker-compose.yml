@@ -50,7 +50,12 @@ services:
       - ./config/mysql.cnf:/etc/mysql/conf.d/mysql.cnf:ro
       - ./init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      test:
+        - CMD-SHELL
+        - >-
+          mysql --protocol=TCP -h 127.0.0.1
+          -u"$${MYSQL_USER}" -p"$${MYSQL_PASSWORD}"
+          -e "SELECT 1" "$${MYSQL_DATABASE}" >/dev/null 2>&1
       interval: 10s
       timeout: 5s
       retries: 12
@@ -107,6 +112,7 @@ services:
 
 volumes:
   mysql_data:
+    name: deploy_mysql_data
   aigc_workspace:
   aigc_logs:
   aigc_media:
