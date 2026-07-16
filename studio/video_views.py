@@ -191,7 +191,10 @@ def export_video_view(request, workspace_id, episode_number):
     script_id = _request_script_id(request)
     episode = _episode(workspace_id, episode_number, script_id=script_id)
     try:
-        queue_export(episode)
+        queue_export(
+            episode,
+            include_subtitles=request.POST.get("include_subtitles") == "1",
+        )
     except ValueError as exc:
         return _video_error(request, workspace_id, episode_number, str(exc), tab="assembly", script_id=script_id)
     return _video_redirect(workspace_id, episode_number, tab="assembly", script_id=script_id)

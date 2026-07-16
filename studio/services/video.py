@@ -290,7 +290,7 @@ def process_video_asset(asset_id):
         return asset
 
 
-def queue_export(episode):
+def queue_export(episode, include_subtitles=True):
     active = episode.script.project.generation_tasks.filter(
         task_type=GenerationTask.TYPE_VIDEO_EXPORT,
         status__in=[GenerationTask.STATUS_PENDING, GenerationTask.STATUS_RUNNING],
@@ -317,6 +317,7 @@ def queue_export(episode):
             "episode_id": episode.id,
             "composition_version": version,
             "video_asset_ids": [asset.id for asset in selected],
+            "include_subtitles": bool(include_subtitles),
         },
     )
     return task, True
@@ -330,7 +331,10 @@ def process_export_task(task_id):
         assets = list(VideoAsset.objects.filter(pk__in=task.input_snapshot["video_asset_ids"]).select_related("shot"))
         asset_map = {asset.id: asset for asset in assets}
         ordered = [asset_map[asset_id] for asset_id in task.input_snapshot["video_asset_ids"]]
-        content = _ffmpeg_concat(ordered)
+        content = _ffmpeg_concat(
+            ordered,
+            include_subtitles=task.input_snapshot.get("include_subtitles", True),
+        )
         composition.video.save("result.mp4", ContentFile(content), save=False)
         composition.status = VideoComposition.STATUS_READY
         composition.error_message = ""
@@ -504,29 +508,105 @@ def _fail_task(task, error):
     )
 
 
-def _ffmpeg_concat(assets):
+def _ffmpeg_concat(assets, include_subtitles=True):
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("未找到 FFmpeg，请先安装 FFmpeg 后再导出。")
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise RuntimeError("未找到 FFprobe，请安装完整的 FFmpeg 后再导出。")
     with tempfile.TemporaryDirectory(prefix="aigc-video-") as temp_dir:
         temp = Path(temp_dir)
         normalized = []
         for index, asset in enumerate(assets, start=1):
             output = temp / f"normalized-{index:03d}.mp4"
-            command = [
-                ffmpeg, "-y", "-i", asset.video.path,
-                "-vf", "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,fps=25",
-                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", str(output),
-            ]
-            subprocess.run(command, check=True, capture_output=True, timeout=300)
+            video_filter = (
+                "scale=720:1280:force_original_aspect_ratio=decrease,"
+                "pad=720:1280:(ow-iw)/2:(oh-ih)/2,fps=25"
+            )
+            subtitle = str(asset.shot.dialogue_or_narration or "").strip()
+            if include_subtitles and subtitle:
+                subtitle_file = temp / f"subtitle-{index:03d}.srt"
+                subtitle_file.write_text(
+                    _srt_cue(subtitle, asset.shot.duration_seconds),
+                    encoding="utf-8",
+                )
+                video_filter += (
+                    f",subtitles={subtitle_file.name}:charenc=UTF-8:"
+                    "force_style='FontName=Noto Sans CJK SC,FontSize=24,"
+                    "PrimaryColour=&H00FFFFFF,BackColour=&H90000000,"
+                    "BorderStyle=3,Outline=1,Shadow=0,MarginV=72,Alignment=2'"
+                )
+
+            has_audio = _has_audio_stream(ffprobe, asset.video.path)
+            command = [ffmpeg, "-y", "-i", asset.video.path]
+            if not has_audio:
+                command.extend(
+                    [
+                        "-f", "lavfi", "-i",
+                        "anullsrc=channel_layout=stereo:sample_rate=48000",
+                    ]
+                )
+            command.extend(
+                [
+                    "-map", "0:v:0",
+                    "-map", "0:a:0" if has_audio else "1:a:0",
+                    "-vf", video_filter,
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
+                    "-af", "apad", "-shortest", "-movflags", "+faststart",
+                    str(output),
+                ]
+            )
+            _run_ffmpeg(command, cwd=temp)
             normalized.append(output)
         concat_file = temp / "concat.txt"
         concat_file.write_text("".join(f"file '{path.as_posix()}'\n" for path in normalized), encoding="utf-8")
         result = temp / "episode.mp4"
+        _run_ffmpeg(
+            [
+                ffmpeg, "-y", "-f", "concat", "-safe", "0",
+                "-i", str(concat_file), "-c", "copy",
+                "-movflags", "+faststart", str(result),
+            ],
+            cwd=temp,
+        )
+        return result.read_bytes()
+
+
+def _has_audio_stream(ffprobe, video_path):
+    result = subprocess.run(
+        [
+            ffprobe, "-v", "error", "-select_streams", "a:0",
+            "-show_entries", "stream=index", "-of", "csv=p=0", video_path,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return bool(result.stdout.strip())
+
+
+def _run_ffmpeg(command, cwd=None):
+    try:
         subprocess.run(
-            [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", str(result)],
+            command,
             check=True,
             capture_output=True,
             timeout=300,
+            cwd=cwd,
         )
-        return result.read_bytes()
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else str(exc)
+        raise RuntimeError(f"FFmpeg 导出失败：{detail[-1200:]}") from exc
+
+
+def _srt_cue(text, duration_seconds):
+    clean_text = str(text).replace("\r\n", "\n").replace("\r", "\n").strip()
+    duration_ms = max(1, int(duration_seconds)) * 1000
+    hours, remainder = divmod(duration_ms, 3_600_000)
+    minutes, remainder = divmod(remainder, 60_000)
+    seconds, milliseconds = divmod(remainder, 1000)
+    end = f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+    return f"1\n00:00:00,000 --> {end}\n{clean_text}\n"

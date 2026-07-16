@@ -197,6 +197,10 @@
 .assembly-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
 .export-bar { justify-content: space-between; gap: 18px; margin-top: 16px; padding: 14px; border-top: 1px solid var(--border); background: #101722; }
 .export-bar p { margin: 4px 0 0; color: var(--subtle); font-size: 12px; }
+.export-actions { display: flex; align-items: center; gap: 8px; }
+.export-controls { display: flex; align-items: center; gap: 12px; }
+.export-controls label { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.export-controls input { accent-color: #22d3ee; }
 
 @media (max-width: 1080px) {
   .settings-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -228,6 +232,8 @@
   .timeline-list li > div { min-width: calc(100% - 110px); }
   .timeline-list video { margin-left: 46px; }
   .export-bar { align-items: stretch; flex-direction: column; }
+  .export-actions,
+  .export-controls { align-items: stretch; flex-direction: column; }
   .export-bar form,
   .export-bar .primary-button { width: 100%; }
 }

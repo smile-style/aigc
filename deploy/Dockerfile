@@ -1,7 +1,11 @@
-ARG BASE_IMAGE=aigc-studio-base:py3.12-v1
+ARG BASE_IMAGE=registry.cn-hangzhou.aliyuncs.com/docker-registry-cache/aigc-studio-base:py3.12-v1
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
+
+COPY requirements.txt /app/requirements.txt
+RUN pip install --upgrade pip \
+    && pip install -r /app/requirements.txt
 
 COPY . /app
 

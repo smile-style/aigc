@@ -14,13 +14,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ffmpeg \
+    && apt-get install -y --no-install-recommends curl ffmpeg fonts-noto-cjk \
     && ffmpeg -version \
     && ffprobe -version \
     && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt /app/requirements.txt
-RUN pip install --upgrade pip \
-    && pip install -r /app/requirements.txt
 
 RUN mkdir -p /app/workspace /app/logs /app/media /app/staticfiles

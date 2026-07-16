@@ -14,18 +14,23 @@ cp deploy/.env.example deploy/.env
 
 ## 2. 构建基础镜像
 
-基础镜像包含 Python、FFmpeg 和 `requirements.txt` 中的依赖。首次部署时先构建：
+基础镜像只包含 Python、FFmpeg、字体等系统运行环境，不包含项目代码或 Python 项目依赖。首次部署时先构建：
 
 ```bash
 docker build \
   -f deploy/Dockerfile.base \
-  -t aigc-studio-base:py3.12-v1 \
+  -t registry.cn-hangzhou.aliyuncs.com/docker-registry-cache/aigc-studio-base:py3.12-v1 \
   .
 ```
 
-日常只修改 Python、模板或静态文件时，不需要重新构建基础镜像。修改 `requirements.txt`、Python 版本或系统包后，应使用新标签重新构建，并同步修改 `deploy/.env` 中的 `AIGC_BASE_IMAGE`。
+日常修改 Python、模板、静态文件或 `requirements.txt` 时，不需要重新构建基础镜像；应用镜像会根据当前 `requirements.txt` 安装依赖。只有修改 Python 版本或系统包后，才应使用新标签重新构建基础镜像，并同步修改 `deploy/.env` 中的 `AIGC_BASE_IMAGE`。
 
-生产环境可将基础镜像推送到私有镜像仓库，再把 `AIGC_BASE_IMAGE` 设置为完整仓库地址，部署机器便不需要重复构建基础层。
+在同一台机器上继续构建应用镜像时，本地的上述标签可以直接使用。需要在其他部署机器上拉取时，先登录并推送基础镜像：
+
+```bash
+docker login registry.cn-hangzhou.aliyuncs.com
+docker push registry.cn-hangzhou.aliyuncs.com/docker-registry-cache/aigc-studio-base:py3.12-v1
+```
 
 ## 3. 校验并启动
 
@@ -86,7 +91,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 
 每次启动会先执行一次数据库迁移，成功后 Web 和 worker 才会更新。
 
-上面的更新命令只重建应用代码层。依赖发生变化时，先按照“构建基础镜像”步骤生成新标签，再更新 `AIGC_BASE_IMAGE`。
+上面的更新命令会重建应用镜像；`requirements.txt` 发生变化时会在应用镜像中重新安装依赖，无需重建基础镜像。
 
 ## 7. 备份
 

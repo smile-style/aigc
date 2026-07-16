@@ -1,4 +1,6 @@
 import base64
+from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -33,6 +35,7 @@ from studio.services.video import (
     storyboard_video_prompt,
     sync_latest_character_assets,
     sync_storyboard_shots,
+    _ffmpeg_concat,
 )
 from studio.video_models import composition_video_upload_to, shot_video_upload_to
 
@@ -276,21 +279,59 @@ def test_each_export_creates_a_new_composition_version():
 
     first_task, created = queue_export(episode)
     assert created is True
+    assert first_task.input_snapshot["include_subtitles"] is True
     active_task, created = queue_export(episode)
     assert created is False
     assert active_task.id == first_task.id
 
     first_task.status = GenerationTask.STATUS_SUCCEEDED
     first_task.save(update_fields=["status"])
-    second_task, created = queue_export(episode)
+    second_task, created = queue_export(episode, include_subtitles=False)
 
     assert created is True
+    assert second_task.input_snapshot["include_subtitles"] is False
     assert list(
         VideoComposition.objects.filter(episode=episode)
         .order_by("version")
         .values_list("version", flat=True)
     ) == [1, 2]
     assert first_task.target_id != second_task.target_id
+
+
+def test_ffmpeg_export_preserves_audio_and_burns_shot_subtitles(tmp_path, monkeypatch):
+    source = tmp_path / "shot.mp4"
+    source.write_bytes(b"source")
+    asset = SimpleNamespace(
+        video=SimpleNamespace(path=str(source)),
+        shot=SimpleNamespace(
+            dialogue_or_narration="林默：开始吧",
+            duration_seconds=6,
+        ),
+    )
+    commands = []
+
+    monkeypatch.setattr("studio.services.video.shutil.which", lambda name: name)
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if command[0] == "ffprobe":
+            return SimpleNamespace(stdout="0\n")
+        Path(command[-1]).write_bytes(b"exported-video")
+        return SimpleNamespace(stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("studio.services.video.subprocess.run", fake_run)
+
+    content = _ffmpeg_concat([asset], include_subtitles=True)
+
+    normalize = next(command for command in commands if "-vf" in command)
+    video_filter = normalize[normalize.index("-vf") + 1]
+    assert content == b"exported-video"
+    assert "-an" not in normalize
+    assert normalize[normalize.index("-map") + 1] == "0:v:0"
+    assert "0:a:0" in normalize
+    assert normalize[normalize.index("-c:a") + 1] == "aac"
+    assert "subtitles=subtitle-001.srt" in video_filter
+    assert "Noto Sans CJK SC" in video_filter
 
 
 def test_video_provider_uses_dashscope_async_endpoint(tmp_path):
@@ -356,6 +397,26 @@ def test_video_page_enables_generation_without_character_reference(client):
     shot_two = content.split('data-video-shot="', 2)[2].split("</article>", 1)[0]
     button = shot_two.split("生成本镜头", 1)[0].rsplit("<button", 1)[1]
     assert "disabled" not in button
+
+
+def test_ready_composition_can_be_downloaded_and_reexported(client):
+    project, episode, _ = make_episode()
+    VideoComposition.objects.create(
+        episode=episode,
+        version=1,
+        status=VideoComposition.STATUS_READY,
+        video="videos/exports/existing.mp4",
+    )
+
+    response = client.get(
+        reverse("studio:video_episode", args=[project.workspace_id, 1]),
+        {"tab": "assembly"},
+    )
+
+    content = response.content.decode("utf-8")
+    assert "下载当前成片" in content
+    assert "重新导出" in content
+    assert 'name="include_subtitles" value="1" checked' in content
 
 
 def test_video_prompt_can_be_saved_and_reset(client):
