@@ -8,10 +8,10 @@
   <form class="context-switcher surface-panel" method="get" action="{% url 'studio:workbench_context' workspace.id %}">
     <input type="hidden" name="stage" value="storyboard">
     <label>
-      <span>&#20316;&#21697;</span>
-      <select name="script_id" aria-label="&#36873;&#25321;&#20316;&#21697;">
+      <span>&#39033;&#30446;</span>
+      <select name="script_id" aria-label="&#36873;&#25321;&#39033;&#30446;">
         {% for script in workspace.script_choices %}
-          <option value="{{ script.id }}" {% if script.id == workspace.script_id %}selected{% endif %}>S{{ script.id|stringformat:"06d" }} &#183; {{ script.title }}</option>
+          <option value="{{ script.id }}" {% if script.id == workspace.script_id %}selected{% endif %}>P{{ script.project_id|stringformat:"06d" }} &#183; {{ script.title }}</option>
         {% endfor %}
       </select>
     </label>

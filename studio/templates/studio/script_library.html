@@ -1,18 +1,18 @@
 ﻿{% extends "studio/base.html" %}
 
-{% block title %}剧本加工 | AI 漫剧生成工具{% endblock %}
-{% block page_heading %}剧本加工{% endblock %}
+{% block title %}项目工作台 | AI 漫剧生成工具{% endblock %}
+{% block page_heading %}项目工作台{% endblock %}
 
 {% block content %}
 <section class="workspace-grid">
   <div class="hero-panel compact-hero library-hero">
     <div>
-      <p class="eyebrow">Step 2 / 3</p>
-      <h2>可用大纲列表</h2>
-      <p class="hero-copy">这里只显示已经从大纲工作台标记为可用的故事方向。可以查看详情、生成剧本，或打开已生成结果。</p>
+      <p class="eyebrow">Production Projects</p>
+      <h2>可用项目</h2>
+      <p class="hero-copy">每个可用大纲都是一个独立制作项目。</p>
     </div>
-    <section class="metric-row compact-metrics" aria-label="剧本库统计">
-      <div class="metric-card"><span>可用大纲</span><strong>{{ usable_outlines|length }} 个</strong></div>
+    <section class="metric-row compact-metrics" aria-label="项目统计">
+      <div class="metric-card"><span>项目数量</span><strong>{{ usable_outlines|length }} 个</strong></div>
       <div class="metric-card"><span>目标集数</span><strong>{{ workspace.episode_count }} 集</strong></div>
       <div class="metric-card"><span>单集时长</span><strong>{{ workspace.episode_duration_minutes }} 分钟</strong></div>
     </section>
@@ -25,7 +25,7 @@
           <thead>
             <tr>
               <th>序号</th>
-              <th>大纲标题</th>
+              <th>项目名称</th>
               <th>主角</th>
               <th>核心设定</th>
               <th>状态</th>
@@ -54,23 +54,7 @@
                 <td>
                   <div class="table-actions">
                     <button class="ghost-button" type="button" data-outline-detail-target="usable-outline-detail-{{ forloop.counter }}">查看</button>
-                    {% if outline.has_script or outline.script_status == "ready" %}
-                      <form method="post" action="{% url 'studio:select_outline' %}" data-submit-guard>
-                        {% csrf_token %}
-                        <input type="hidden" name="workspace_id" value="{{ workspace.id }}">
-                        <input type="hidden" name="outline_id" value="{{ outline.id }}">
-                        <button class="secondary-button" type="submit" data-loading-text="打开中...">查看剧本</button>
-                      </form>
-                    {% elif outline.script_status == "generating" %}
-                      <button class="secondary-button" type="button" disabled>生成中</button>
-                    {% else %}
-                      <form method="post" action="{% url 'studio:generate_script' workspace.id %}" data-submit-guard>
-                        {% csrf_token %}
-                        <input type="hidden" name="outline_id" value="{{ outline.id }}">
-                        <input type="hidden" name="next" value="script_index">
-                        <button class="primary-button small" type="submit" data-loading-text="提交中...">{% if outline.script_status == "failed" %}重新生成{% else %}生成剧本{% endif %}</button>
-                      </form>
-                    {% endif %}
+                    <a class="secondary-button" href="{% url 'studio:project_workbench' outline.project_id %}">打开项目</a>
                   </div>
 
                   <div class="detail-modal" id="usable-outline-detail-{{ forloop.counter }}" hidden>
@@ -99,8 +83,8 @@
       </div>
     {% else %}
       <div class="empty-state">
-        <h2>还没有可用大纲</h2>
-        <p>回到大纲工作台，在候选卡片中点击“设为可用”。</p>
+        <h2>还没有项目</h2>
+        <p>在大纲工坊中将候选大纲设为可用后，项目会出现在这里。</p>
       </div>
     {% endif %}
   </section>

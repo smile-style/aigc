@@ -5,6 +5,18 @@
 
 {% block content %}
 <section class="stack" data-workspace-view="{{ script_view }}">
+  <form class="context-switcher project-switcher surface-panel" method="get" action="{% url 'studio:workbench_context' workspace.id %}">
+    <input type="hidden" name="stage" value="script">
+    <label>
+      <span>&#39033;&#30446;</span>
+      <select name="project_id" aria-label="&#36873;&#25321;&#39033;&#30446;">
+        {% for project in workspace.usable_outlines %}
+          <option value="{{ project.project_id }}" {% if project.project_id == workspace.project_id %}selected{% endif %}>P{{ project.project_id|stringformat:"06d" }} &#183; {{ project.title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="ghost-button" type="submit">&#20999;&#25442;&#39033;&#30446;</button>
+  </form>
   <section class="hero-panel compact-hero">
     <div>
       <p class="eyebrow">Step 2 / 3</p>
@@ -15,7 +27,7 @@
       <form method="post" action="{% url 'studio:generate_script' workspace.id %}" data-submit-guard>
         {% csrf_token %}
         <input type="hidden" name="outline_id" value="{{ selected_outline.id }}">
-        <input type="hidden" name="next" value="script">
+        <input type="hidden" name="next" value="project">
         <button class="primary-button" type="submit" data-loading-text="提交中..." {% if selected_outline.script_status == "generating" %}disabled{% endif %}>{% if workspace.episodes %}重新生成规划{% else %}生成 60 集规划{% endif %}</button>
       </form>
     {% endif %}
@@ -47,6 +59,7 @@
       {% if workspace.episodes %}
         <form method="post" action="{% url 'studio:generate_characters' workspace.id %}" data-submit-guard>
           {% csrf_token %}
+          <input type="hidden" name="script_id" value="{{ workspace.script_id }}">
           <fieldset class="style-segmented">
             <legend>角色画风</legend>
             <label>
@@ -98,6 +111,7 @@
               </dl>
               <form method="post" action="{% url 'studio:generate_character_image' workspace.id character.id %}" data-submit-guard>
                 {% csrf_token %}
+                <input type="hidden" name="script_id" value="{{ workspace.script_id }}">
                 <label class="field"><span>角色图片 Prompt</span><textarea name="image_prompt" rows="6">{{ character.image_prompt }}</textarea></label>
                 <div class="character-image-actions">
                 <button class="primary-button" type="submit" data-loading-text="提交中...">{% if character.image_url %}重新生成原图{% else %}生成角色原图{% endif %}</button>
@@ -147,7 +161,7 @@
               {% elif episode.script_status == "generating" %}
                 <button class="secondary-button" type="button" disabled>生成中</button>
               {% else %}
-                <form method="post" action="{% url 'studio:generate_episode_script' workspace.id episode.episode %}" data-submit-guard>{% csrf_token %}<button class="primary-button small" type="submit" data-loading-text="提交中...">生成剧本</button></form>
+                <form method="post" action="{% url 'studio:generate_episode_script' workspace.id episode.episode %}" data-submit-guard>{% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}"><button class="primary-button small" type="submit" data-loading-text="提交中...">生成剧本</button></form>
               {% endif %}
             </div>
           </article>
@@ -159,7 +173,7 @@
                 <div class="modal-head"><div><p class="eyebrow">Episode {{ episode.episode }}</p><h3 id="episode-title-{{ episode.episode }}">第 {{ episode.episode }} 集 · {{ episode.title }}</h3></div><button class="icon-button" type="button" data-modal-close aria-label="关闭剧本"><span aria-hidden="true">&times;</span></button></div>
                 <dl class="three-column-list"><div><dt>摘要</dt><dd>{{ episode.summary }}</dd></div><div><dt>冲突</dt><dd>{{ episode.key_conflict }}</dd></div><div><dt>悬念</dt><dd>{{ episode.cliffhanger }}</dd></div></dl>
                 <pre class="script-block modal-script">{{ episode.full_script }}</pre>
-                <div class="modal-actions"><form method="post" action="{% url 'studio:generate_episode_script' workspace.id episode.episode %}" data-submit-guard>{% csrf_token %}<button class="secondary-button" type="submit">重新生成</button></form><a class="primary-button" href="{% url 'studio:storyboard_episode' workspace.id episode.episode %}">进入分镜</a></div>
+                <div class="modal-actions"><form method="post" action="{% url 'studio:generate_episode_script' workspace.id episode.episode %}" data-submit-guard>{% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}"><button class="secondary-button" type="submit">重新生成</button></form><a class="primary-button" href="{% url 'studio:storyboard_script_episode' workspace.id workspace.script_id episode.episode %}">进入分镜</a></div>
               </section>
             </div>
           {% endif %}

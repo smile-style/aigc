@@ -25,42 +25,21 @@
         </span>
       </a>
 
-      <nav class="nav-stack" aria-label="创作流程">
-        <p class="nav-kicker">Workflow</p>
+      <nav class="nav-stack" aria-label="主导航">
+        <p class="nav-kicker">Studio</p>
         <a class="nav-item {% if active_nav == 'outline' %}is-active{% endif %}" href="{% url 'studio:outline' %}">
-          <span>1</span>
-          <strong>大纲工作台</strong>
+          <span>01</span><strong>大纲工坊</strong>
         </a>
-        <a class="nav-item {% if active_nav == 'script' %}is-active{% endif %}" href="{% url 'studio:script_index' %}">
-          <span>2</span>
-          <strong>剧本加工</strong>
+        <a class="nav-item {% if active_nav == 'projects' or active_nav == 'script' or active_nav == 'storyboard' or active_nav == 'video' %}is-active{% endif %}" href="{% url 'studio:script_index' %}">
+          <span>02</span><strong>项目工作台</strong>
         </a>
-        {% if workspace and workspace.id and workspace.script_id %}
-          <a class="nav-item {% if active_nav == 'storyboard' %}is-active{% endif %}" href="{% url 'studio:storyboard_script_episode' workspace.id workspace.script_id 1 %}">
-            <span>3</span>
-            <strong>分镜 Prompt</strong>
-          </a>
-        {% else %}
-          <div class="nav-item is-disabled" aria-disabled="true">
-            <span>3</span>
-            <strong>分镜 Prompt</strong>
-          </div>
-        {% endif %}
-        {% if workspace and workspace.id and workspace.script_id and workspace.storyboard_prompts %}
-          <a class="nav-item {% if active_nav == 'video' %}is-active{% endif %}" href="{% url 'studio:video_script_episode' workspace.id workspace.script_id 1 %}">
-            <span>4</span>
-            <strong>视频成片</strong>
-          </a>
-        {% else %}
-          <div class="nav-item is-disabled" aria-disabled="true">
-            <span>4</span>
-            <strong>视频成片</strong>
-          </div>
-        {% endif %}
+        <a class="nav-item {% if active_nav == 'films' %}is-active{% endif %}" href="{% url 'studio:finished_films' %}">
+          <span>03</span><strong>成片库</strong>
+        </a>
       </nav>
 
       <a class="system-nav-link {% if active_nav == 'system' %}is-active{% endif %}" href="{% url 'studio:system_settings' %}">
-        <span aria-hidden="true">⚙</span>
+        <span aria-hidden="true">S</span>
         <strong>系统管理</strong>
       </a>
 
@@ -84,6 +63,21 @@
           <span aria-hidden="true">&larr;</span>
         </a>
       </header>
+      {% if workspace and workspace.project_id %}
+        <nav class="project-stage-nav" aria-label="项目制作流程">
+          <a href="{% url 'studio:project_workbench' workspace.project_id %}" {% if active_nav == 'script' %}aria-current="page"{% endif %}>剧本与角色</a>
+          {% if workspace.script_id and workspace.episodes %}
+            <a href="{% url 'studio:storyboard_script_episode' workspace.id workspace.script_id 1 %}" {% if active_nav == 'storyboard' %}aria-current="page"{% endif %}>分镜</a>
+          {% else %}
+            <span aria-disabled="true">分镜</span>
+          {% endif %}
+          {% if workspace.script_id and workspace.storyboard_prompts %}
+            <a href="{% url 'studio:video_script_episode' workspace.id workspace.script_id 1 %}" {% if active_nav == 'video' %}aria-current="page"{% endif %}>视频制作</a>
+          {% else %}
+            <span aria-disabled="true">视频制作</span>
+          {% endif %}
+        </nav>
+      {% endif %}
 
       {% if error %}
         <div class="alert" role="alert">{{ error }}</div>

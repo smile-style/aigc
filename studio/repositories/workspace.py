@@ -69,6 +69,19 @@ class WorkspaceRepository:
                 raise FileNotFoundError(f"Script not found: {script_id}") from exc
         return self._workspace_to_dict(project, script_override=script)
 
+    def get_project_workspace(self, project_id):
+        try:
+            outline = (
+                Outline.objects.select_related("project", "script")
+                .get(pk=project_id, is_usable=True)
+            )
+        except Outline.DoesNotExist as exc:
+            raise FileNotFoundError(f"Project not found: {project_id}") from exc
+        return self._workspace_to_dict(
+            outline.project,
+            outline_override=outline,
+        )
+
     def save_workspace(self, workspace):
         workspace_id = workspace["id"]
         project = Project.objects.get(workspace_id=workspace_id)
@@ -297,6 +310,10 @@ class WorkspaceRepository:
     def _storyboard_task_target(script_id, episode_number):
         return f"script:{script_id}:episode:{episode_number}" if script_id else str(episode_number)
 
+    @staticmethod
+    def _episode_task_target(script_id, episode_number):
+        return f"script:{script_id}:episode:{episode_number}" if script_id else str(episode_number)
+
 
     def get_episode(self, workspace_id, episode_number, script_id=None):
         episode = self._get_episode_model(workspace_id, episode_number, script_id=script_id)
@@ -318,20 +335,26 @@ class WorkspaceRepository:
         workspace["episode_script_task"] = self._latest_task_dict(
             project,
             GenerationTask.TYPE_EPISODE_SCRIPT,
-            target_id=str(episode_number),
+            target_id=self._episode_task_target(script_id, episode_number),
         )
         return workspace
 
-    def create_episode_script_task(self, workspace_id, episode_number):
+    def create_episode_script_task(self, workspace_id, episode_number, script_id=None):
         with transaction.atomic():
             try:
                 project = Project.objects.select_for_update().get(workspace_id=workspace_id)
             except Project.DoesNotExist as exc:
                 raise FileNotFoundError(f"Workspace not found: {workspace_id}") from exc
-            episode = self._get_episode_model(workspace_id, episode_number, for_update=True)
+            episode = self._get_episode_model(
+                workspace_id,
+                episode_number,
+                for_update=True,
+                script_id=script_id,
+            )
+            target_id = self._episode_task_target(script_id, episode_number)
             running_task = project.generation_tasks.filter(
                 task_type=GenerationTask.TYPE_EPISODE_SCRIPT,
-                target_id=str(episode_number),
+                target_id=target_id,
                 status__in=[GenerationTask.STATUS_PENDING, GenerationTask.STATUS_RUNNING],
             ).order_by("-created_at", "-id").first()
             if running_task:
@@ -351,21 +374,28 @@ class WorkspaceRepository:
                     "script_finished_at",
                 ]
             )
+            input_snapshot = self._episode_to_dict(episode)
+            input_snapshot["script_id"] = script_id
             task = GenerationTask.objects.create(
                 project=project,
                 task_type=GenerationTask.TYPE_EPISODE_SCRIPT,
-                target_id=str(episode_number),
-                input_snapshot=self._episode_to_dict(episode),
+                target_id=target_id,
+                input_snapshot=input_snapshot,
             )
             task_data = self._task_to_dict(task)
             task_data["created"] = True
             return task_data
 
-    def save_episode_script(self, workspace_id, episode_number, full_script):
+    def save_episode_script(self, workspace_id, episode_number, full_script, script_id=None):
         if not isinstance(full_script, str) or not full_script.strip():
             raise ValueError("Episode script must be a non-empty string")
         with transaction.atomic():
-            episode = self._get_episode_model(workspace_id, episode_number, for_update=True)
+            episode = self._get_episode_model(
+                workspace_id,
+                episode_number,
+                for_update=True,
+                script_id=script_id,
+            )
             episode.full_script = full_script
             episode.script_status = Episode.SCRIPT_READY
             episode.script_error = ""
@@ -383,11 +413,18 @@ class WorkspaceRepository:
                 episode.script.episode_1_script = full_script
                 episode.script.save(update_fields=["episode_1_script", "updated_at"])
             StoryboardPrompt.objects.filter(episode=episode).delete()
-        return self.get_episode(workspace_id, episode_number)
+        return self.get_episode(workspace_id, episode_number, script_id=script_id)
 
-    def mark_episode_script_generation_failed(self, workspace_id, episode_number, error):
+    def mark_episode_script_generation_failed(
+        self, workspace_id, episode_number, error, script_id=None
+    ):
         with transaction.atomic():
-            episode = self._get_episode_model(workspace_id, episode_number, for_update=True)
+            episode = self._get_episode_model(
+                workspace_id,
+                episode_number,
+                for_update=True,
+                script_id=script_id,
+            )
             episode.script_status = Episode.SCRIPT_FAILED
             episode.script_error = str(error)
             episode.script_finished_at = timezone.now()
@@ -484,10 +521,10 @@ class WorkspaceRepository:
         task = project.generation_tasks.filter(task_type=task_type).order_by("-created_at", "-id").first()
         return self._task_to_dict(task) if task else None
 
-    def create_character_profile_task(self, workspace_id, visual_style=None):
+    def create_character_profile_task(self, workspace_id, visual_style=None, script_id=None):
         with transaction.atomic():
             project = Project.objects.select_for_update().get(workspace_id=workspace_id)
-            script = self._script_for_selected_outline(project)
+            script = self._script_for_context(project, script_id)
             if script is None:
                 raise ValueError("请先生成剧集规划，再生成角色设定。")
             selected_style = visual_style or script.character_visual_style
@@ -511,16 +548,20 @@ class WorkspaceRepository:
                 project=project,
                 task_type=GenerationTask.TYPE_CHARACTER_PROFILE,
                 target_id=target_id,
-                input_snapshot={"script_id": script.id, "visual_style": selected_style},
+                input_snapshot={
+                    "script_id": script.id,
+                    "project_id": script.outline_id,
+                    "visual_style": selected_style,
+                },
             )
             data = self._task_to_dict(task)
             data["created"] = True
             return data
 
-    def save_character_profiles(self, workspace_id, profiles):
+    def save_character_profiles(self, workspace_id, profiles, script_id=None):
         with transaction.atomic():
             project = Project.objects.select_for_update().get(workspace_id=workspace_id)
-            script = self._script_for_selected_outline(project)
+            script = self._script_for_context(project, script_id)
             if script is None:
                 raise ValueError("Script is required")
             names = []
@@ -539,7 +580,7 @@ class WorkspaceRepository:
                     },
                 )
             script.characters.exclude(name__in=names).filter(assets__isnull=True).delete()
-        return self.get_workspace(workspace_id)
+        return self.get_workspace(workspace_id, script_id=script_id)
 
     def create_character_image_task(self, workspace_id, character_id, prompt):
         if not isinstance(prompt, str) or not prompt.strip():
@@ -548,7 +589,7 @@ class WorkspaceRepository:
             project = Project.objects.select_for_update().get(workspace_id=workspace_id)
             character = Character.objects.select_for_update().get(
                 pk=character_id,
-                script__outline_id=project.selected_outline_id,
+                script__project=project,
             )
             character.image_prompt = prompt.strip()
             character.save(update_fields=["image_prompt", "updated_at"])
@@ -566,6 +607,8 @@ class WorkspaceRepository:
                 task_type=GenerationTask.TYPE_CHARACTER_IMAGE,
                 target_id=str(character.id),
                 input_snapshot={
+                    "script_id": character.script_id,
+                    "project_id": character.script.outline_id,
                     "prompt": character.image_prompt,
                     "character_name": character.name,
                     "visual_style": character.script.character_visual_style,
@@ -703,11 +746,15 @@ class WorkspaceRepository:
             suffix += 1
         return candidate
 
-    def _workspace_to_dict(self, project, script_override=None):
+    def _workspace_to_dict(self, project, script_override=None, outline_override=None):
         active_outlines = project.outlines.filter(is_archived=False).order_by("position", "id")
         usable_outlines = project.outlines.filter(is_usable=True).order_by("-usable_at", "-id")
-        script = script_override or self._script_for_selected_outline(project)
-        selected_outline = script.outline if script_override else project.selected_outline
+        selected_outline = outline_override or (
+            script_override.outline if script_override else project.selected_outline
+        )
+        script = script_override
+        if script is None and selected_outline is not None:
+            script = getattr(selected_outline, "script", None)
         episodes = list(script.episodes.select_related("storyboard_prompt").order_by("episode_number")) if script else []
         characters = list(script.characters.prefetch_related("assets")) if script else []
         script_choices = list(
@@ -728,6 +775,7 @@ class WorkspaceRepository:
             "selected_outline_id": (
                 selected_outline.outline_id if selected_outline else None
             ),
+            "project_id": selected_outline.pk if selected_outline else None,
             "selected_outline": (
                 self._outline_to_dict(selected_outline)
                 if selected_outline
@@ -736,7 +784,11 @@ class WorkspaceRepository:
             "script_id": script.id if script else None,
             "script_title": script.outline.title if script else "",
             "script_choices": [
-                {"id": item.id, "title": item.outline.title}
+                {
+                    "id": item.id,
+                    "project_id": item.outline_id,
+                    "title": item.outline.title,
+                }
                 for item in script_choices
             ],
             "script_plan": script.plan_payload if script else [],
@@ -768,6 +820,7 @@ class WorkspaceRepository:
         payload.update(
             {
                 "id": outline.outline_id,
+                "project_id": outline.pk,
                 "source_id": payload.get("source_id", outline.outline_id),
                 "title": outline.title,
                 "core_premise": outline.core_premise,
@@ -805,6 +858,16 @@ class WorkspaceRepository:
         if project.selected_outline_id is None:
             return None
         return getattr(project.selected_outline, "script", None)
+
+    def _script_for_context(self, project, script_id=None):
+        if script_id is None:
+            return self._script_for_selected_outline(project)
+        try:
+            return Script.objects.get(pk=script_id, project=project)
+        except Script.DoesNotExist as exc:
+            raise FileNotFoundError(
+                f"Script not found: {script_id}"
+            ) from exc
 
     def _sync_episodes(self, script, script_plan, episode_1_script):
         if not isinstance(script_plan, list):

@@ -260,6 +260,12 @@ class VideoComposition(models.Model):
 
     class Meta:
         ordering = ["-version", "-id"]
+        indexes = [
+            models.Index(
+                fields=["status", "-exported_at"],
+                name="video_comp_status_export_idx",
+            )
+        ]
         constraints = [
             models.UniqueConstraint(fields=["episode", "version"], name="unique_episode_export_version")
         ]

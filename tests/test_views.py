@@ -201,7 +201,10 @@ def test_select_outline_redirects_to_script_page(client):
     )
 
     assert response.status_code == 302
-    assert response["Location"] == reverse("studio:script", args=[workspace["id"]])
+    selected_project = Outline.objects.get(
+        project__workspace_id=workspace["id"], outline_id="outline-2"
+    )
+    assert response["Location"] == reverse("studio:project_workbench", args=[selected_project.id])
 
     saved = read_workspace(workspace["id"])
     assert saved["selected_outline_id"] == "outline-2"
@@ -457,7 +460,7 @@ def test_script_library_page_lists_usable_outlines(client):
     assert response.status_code == 200
     content = response.content.decode("utf-8")
     assert "Outline title 1" in content
-    assert "生成剧本" in content
+    assert "打开项目" in content
 
 def test_script_library_action_shows_view_script_when_script_exists(client):
     workspace = WorkspaceRepository().replace_current_outline_set(GENRES[0], outline_payload())
@@ -475,8 +478,8 @@ def test_script_library_action_shows_view_script_when_script_exists(client):
 
     assert response.status_code == 200
     content = response.content.decode("utf-8")
-    assert "查看剧本" in content
-    assert ">生成剧本</button>" not in content
+    assert "打开项目" in content
+    assert reverse("studio:project_workbench", args=[Outline.objects.get(outline_id=first_outline_id).id]) in content
 
 
 def test_selecting_unscripted_outline_does_not_show_previous_script(client):
@@ -791,11 +794,12 @@ def test_character_image_task_persists_edited_prompt_and_character_target():
     saved_character = repository.get_character(workspace["id"], character["id"])
     assert saved_character["image_prompt"] == "Edited cinematic character prompt"
     assert task["target_id"] == str(character["id"])
-    assert task["input_snapshot"] == {
-        "prompt": "Edited cinematic character prompt",
-        "character_name": "Chen Mo",
-        "visual_style": "comic",
-    }
+    snapshot = task["input_snapshot"]
+    assert snapshot["prompt"] == "Edited cinematic character prompt"
+    assert snapshot["character_name"] == "Chen Mo"
+    assert snapshot["visual_style"] == "comic"
+    assert snapshot["script_id"]
+    assert snapshot["project_id"]
 
 
 

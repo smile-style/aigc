@@ -59,3 +59,249 @@
   .context-switcher {
     grid-template-columns: 1fr;
   }
+
+.project-stage-nav {
+  display: flex;
+  min-height: 46px;
+  align-items: stretch;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #0d1420;
+}
+
+.project-stage-nav a,
+.project-stage-nav span {
+  display: inline-flex;
+  min-width: 120px;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.project-stage-nav a {
+  transition: background 180ms ease, color 180ms ease;
+}
+
+.project-stage-nav a:hover,
+.project-stage-nav a[aria-current="page"] {
+  background: rgba(103, 232, 249, 0.12);
+  color: var(--text);
+}
+
+.project-stage-nav span[aria-disabled="true"] {
+  color: var(--subtle);
+  opacity: 0.5;
+}
+
+.context-switcher.project-switcher {
+  grid-template-columns: minmax(280px, 1fr) auto;
+}
+
+.film-library-header,
+.film-project-header,
+.film-project-meta,
+.film-card-title,
+.film-card-meta,
+.film-library-count {
+  display: flex;
+  align-items: center;
+}
+
+.film-library-header {
+  min-height: 72px;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 4px 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.film-library-header h2,
+.film-project-header h2 {
+  margin: 4px 0 0;
+}
+
+.film-library-count {
+  gap: 8px;
+  color: var(--muted);
+}
+
+.film-library-count strong {
+  color: var(--text);
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+.film-library-count span + strong {
+  margin-left: 14px;
+}
+
+.film-project-list {
+  display: grid;
+  gap: 32px;
+}
+
+.film-project-section {
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.film-project-section + .film-project-section {
+  padding-top: 28px;
+  border-top: 1px solid var(--border);
+}
+
+.film-project-header {
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 14px;
+}
+
+.film-project-meta {
+  justify-content: flex-end;
+  gap: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.film-project-meta time {
+  color: var(--subtle);
+}
+
+.film-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.film-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #111827;
+}
+
+.film-preview {
+  aspect-ratio: 16 / 9;
+  background: #030712;
+}
+
+.film-preview video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.film-card-body {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.film-card-title,
+.film-card-meta {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.film-card-title h3 {
+  margin: 2px 0 0;
+  font-size: 16px;
+}
+
+.film-card-title div > span,
+.film-card-meta time {
+  color: var(--subtle);
+  font-size: 12px;
+}
+
+.film-card-meta .ghost-button {
+  min-height: 36px;
+  padding: 6px 10px;
+}
+
+.film-history {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.film-history summary {
+  min-height: 36px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.film-history-list {
+  display: grid;
+  gap: 6px;
+}
+
+.film-history-list div {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.film-history-list a {
+  color: var(--cyan);
+}
+
+@media (max-width: 1100px) {
+  .film-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .film-project-header,
+  .film-project-meta {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 680px) {
+  .project-stage-nav {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    margin-inline: -4px;
+  }
+
+  .project-stage-nav a,
+  .project-stage-nav span {
+    min-width: 0;
+    flex: 1;
+    font-size: 13px;
+  }
+
+  .context-switcher.project-switcher,
+  .film-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .film-library-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .film-project-meta {
+    width: 100%;
+  }
+
+  .film-project-meta .secondary-button {
+    width: 100%;
+  }

@@ -1,5 +1,5 @@
 from django.http import FileResponse, Http404, JsonResponse
-from django.db.models import F
+from django.db.models import Count, F
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
@@ -68,6 +68,105 @@ def system_settings_page(request):
             "success": success,
             "active_nav": "system",
         },
+    )
+
+def finished_films_page(request):
+    compositions = list(
+        VideoComposition.objects.filter(status=VideoComposition.STATUS_READY)
+        .exclude(video="")
+        .select_related(
+            "episode__script__outline",
+            "episode__script__project",
+        )
+        .order_by(
+            "episode__script_id",
+            "episode__episode_number",
+            "-version",
+            "-id",
+        )
+    )
+    script_ids = {item.episode.script_id for item in compositions}
+    episode_totals = {
+        row["script_id"]: row["total"]
+        for row in (
+            Episode.objects.filter(script_id__in=script_ids)
+            .values("script_id")
+            .annotate(total=Count("id"))
+        )
+    }
+
+    projects = {}
+    for composition in compositions:
+        episode = composition.episode
+        script = episode.script
+        outline = script.outline
+        project = projects.setdefault(
+            outline.pk,
+            {
+                "project_id": outline.pk,
+                "workspace_id": script.project.workspace_id,
+                "title": outline.title,
+                "total_episodes": episode_totals.get(script.id, 0),
+                "episodes": {},
+                "latest_exported": None,
+            },
+        )
+        exported_at = composition.exported_at or composition.updated_at
+        if project["latest_exported"] is None or exported_at > project["latest_exported"]:
+            project["latest_exported"] = exported_at
+        episode_item = project["episodes"].get(episode.episode_number)
+        if episode_item is None:
+            project["episodes"][episode.episode_number] = {
+                "number": episode.episode_number,
+                "title": episode.title,
+                "latest": composition,
+                "history": [],
+            }
+        else:
+            episode_item["history"].append(composition)
+
+    project_rows = []
+    for project in projects.values():
+        project["episodes"] = list(project["episodes"].values())
+        project["ready_count"] = len(project["episodes"])
+        project_rows.append(project)
+    project_rows.sort(
+        key=lambda item: item["latest_exported"].timestamp() if item["latest_exported"] else 0,
+        reverse=True,
+    )
+    return render(
+        request,
+        "studio/films.html",
+        {
+            "film_projects": project_rows,
+            "film_count": len(compositions),
+            "active_nav": "films",
+        },
+    )
+
+
+@require_GET
+def download_finished_film_view(request, composition_id):
+    composition = (
+        VideoComposition.objects.select_related("episode__script__outline")
+        .filter(
+            pk=composition_id,
+            status=VideoComposition.STATUS_READY,
+        )
+        .exclude(video="")
+        .first()
+    )
+    if composition is None or not composition.video:
+        raise Http404("Finished film not found")
+    composition.video.open("rb")
+    return FileResponse(
+        composition.video,
+        as_attachment=True,
+        filename=(
+            f"{script_storage_key(composition.episode.script)}-"
+            f"EP{composition.episode.episode_number:03d}-"
+            f"FINAL-v{composition.version:03d}.mp4"
+        ),
     )
 
 def video_page(request, workspace_id):

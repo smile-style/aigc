@@ -92,8 +92,10 @@ def select_outline_view(request):
             genre=workspace.get("genre"),
         )
 
-    repository.update_workspace(workspace_id, selected_outline_id=outline_id)
-    return redirect("studio:script", workspace_id=workspace_id)
+    workspace = repository.update_workspace(
+        workspace_id, selected_outline_id=outline_id
+    )
+    return redirect("studio:project_workbench", project_id=workspace["project_id"])
 
 
 def script_library_page(request):
@@ -114,6 +116,14 @@ def script_library_page(request):
 def script_page(request, workspace_id):
     repository = WorkspaceRepository()
     workspace = repository.get_workspace(workspace_id)
+    return _render_script(request, workspace)
+
+def project_workbench_page(request, project_id):
+    repository = WorkspaceRepository()
+    try:
+        workspace = repository.get_project_workspace(project_id)
+    except FileNotFoundError as exc:
+        raise Http404(str(exc)) from exc
     return _render_script(request, workspace)
 
 
@@ -147,6 +157,8 @@ def generate_script_view(request, workspace_id):
 
     if next_page == "script_index":
         return redirect("studio:script_index")
+    if next_page == "project":
+        return redirect("studio:project_workbench", project_id=outline["project_id"])
     return redirect("studio:script", workspace_id=workspace_id)
 
 
@@ -167,9 +179,14 @@ def script_episode_context_page(request, workspace_id, script_id, episode_number
 @require_POST
 def generate_episode_script_view(request, workspace_id, episode_number):
     repository = WorkspaceRepository()
-    workspace = repository.get_workspace(workspace_id)
+    script_id = int(request.POST.get("script_id") or 0) or None
+    workspace = repository.get_workspace(workspace_id, script_id=script_id)
     try:
-        task = repository.create_episode_script_task(workspace_id, episode_number)
+        task = repository.create_episode_script_task(
+            workspace_id,
+            episode_number,
+            script_id=script_id,
+        )
         if task["created"]:
             _start_background_episode_script_generation(task["id"])
     except EXPECTED_GENERATION_ERRORS as exc:
@@ -187,6 +204,13 @@ def generate_episode_script_view(request, workspace_id, episode_number):
             error=str(exc),
             selected_episode=selected_episode,
         )
+    if script_id:
+        return redirect(
+            "studio:script_episode_context",
+            workspace_id=workspace_id,
+            script_id=script_id,
+            episode_number=episode_number,
+        )
     return redirect(
         "studio:episode_script",
         workspace_id=workspace_id,
@@ -198,20 +222,33 @@ def generate_episode_script_view(request, workspace_id, episode_number):
 @require_POST
 def generate_characters_view(request, workspace_id):
     repository = WorkspaceRepository()
+    script_id = int(request.POST.get("script_id") or 0) or None
+    workspace = repository.get_workspace(workspace_id, script_id=script_id)
     try:
-        task = repository.create_character_profile_task(workspace_id, request.POST.get("visual_style"))
+        task = repository.create_character_profile_task(
+            workspace_id,
+            request.POST.get("visual_style"),
+            script_id=script_id,
+        )
         if task["created"]:
             _start_background_character_profile_generation(task["id"])
     except EXPECTED_GENERATION_ERRORS as exc:
         return _render_script(
-            request, repository.get_workspace(workspace_id), error=str(exc), script_view="characters"
+            request,
+            workspace,
+            error=str(exc),
+            script_view="characters",
         )
+    if script_id:
+        return redirect(f'{reverse("studio:project_workbench", args=[workspace["project_id"]])}?view=characters')
     return redirect(f'{reverse("studio:script", args=[workspace_id])}?view=characters')
 
 
 @require_POST
 def generate_character_image_view(request, workspace_id, character_id):
     repository = WorkspaceRepository()
+    script_id = int(request.POST.get("script_id") or 0) or None
+    workspace = repository.get_workspace(workspace_id, script_id=script_id)
     try:
         task = repository.create_character_image_task(
             workspace_id,
@@ -222,8 +259,13 @@ def generate_character_image_view(request, workspace_id, character_id):
             _start_background_character_image_generation(task["id"])
     except EXPECTED_GENERATION_ERRORS as exc:
         return _render_script(
-            request, repository.get_workspace(workspace_id), error=str(exc), script_view="characters"
+            request,
+            workspace,
+            error=str(exc),
+            script_view="characters",
         )
+    if script_id:
+        return redirect(f'{reverse("studio:project_workbench", args=[workspace["project_id"]])}?view=characters')
     return redirect(f'{reverse("studio:script", args=[workspace_id])}?view=characters')
 
 
@@ -301,10 +343,16 @@ def generate_storyboard_script_view(request, workspace_id, script_id, episode_nu
 
 @require_GET
 def workbench_context_view(request, workspace_id):
+    stage = request.GET.get("stage", "storyboard")
+    repository = WorkspaceRepository()
+    if stage == "script":
+        project_id = int(request.GET.get("project_id", "0"))
+        repository.get_project_workspace(project_id)
+        return redirect("studio:project_workbench", project_id=project_id)
+
     script_id = int(request.GET.get("script_id", "0"))
     episode_number = int(request.GET.get("episode_number", "1"))
-    stage = request.GET.get("stage", "storyboard")
-    WorkspaceRepository().get_episode_workspace(workspace_id, episode_number, script_id=script_id)
+    repository.get_episode_workspace(workspace_id, episode_number, script_id=script_id)
     route_name = "studio:video_script_episode" if stage == "video" else "studio:storyboard_script_episode"
     return redirect(route_name, workspace_id=workspace_id, script_id=script_id, episode_number=episode_number)
 
@@ -323,10 +371,17 @@ def task_status_view(request, task_id):
             GenerationTask.TYPE_CHARACTER_PROFILE,
             GenerationTask.TYPE_CHARACTER_IMAGE,
         }:
-            task["result_url"] = request.build_absolute_uri(
-                f'{reverse("studio:script", args=[task["workspace_id"]])}'
-                "?view=characters"
-            )
+            project_id = task["input_snapshot"].get("project_id")
+            if project_id:
+                task["result_url"] = request.build_absolute_uri(
+                    f'{reverse("studio:project_workbench", args=[project_id])}'
+                    "?view=characters"
+                )
+            else:
+                task["result_url"] = request.build_absolute_uri(
+                    f'{reverse("studio:script", args=[task["workspace_id"]])}'
+                    "?view=characters"
+                )
         elif task["task_type"] == GenerationTask.TYPE_STORYBOARD:
             episode_number = int(task["input_snapshot"].get("episode_number") or task["target_id"] or 1)
             script_id = task["input_snapshot"].get("script_id")
@@ -336,13 +391,14 @@ def task_status_view(request, task_id):
                 else "studio:storyboard_episode"
             )
         elif task["task_type"] == GenerationTask.TYPE_EPISODE_SCRIPT:
-            episode_number = int(task["target_id"] or 1)
-            route_name = "studio:episode_script"
+            episode_number = int(task["input_snapshot"].get("episode") or task["target_id"] or 1)
+            script_id = task["input_snapshot"].get("script_id")
+            route_name = "studio:script_episode_context" if script_id else "studio:episode_script"
         else:
             route_name = None
         if task["task_type"] not in {GenerationTask.TYPE_CHARACTER_PROFILE, GenerationTask.TYPE_CHARACTER_IMAGE} and route_name:
             args = [task["workspace_id"], episode_number]
-            if task["task_type"] == GenerationTask.TYPE_STORYBOARD and script_id:
+            if script_id:
                 args = [task["workspace_id"], script_id, episode_number]
             task["result_url"] = request.build_absolute_uri(
                 reverse(route_name, args=args)
@@ -364,14 +420,15 @@ def _run_character_profile_generation(task_id):
     repository = WorkspaceRepository()
     try:
         task = repository.start_task(task_id)
-        workspace = repository.get_workspace(task["workspace_id"])
+        script_id = task["input_snapshot"].get("script_id")
+        workspace = repository.get_workspace(task["workspace_id"], script_id=script_id)
         profiles = generate_character_profiles(
             llm_provider_for(ModelAssignment.PURPOSE_CHARACTER_PROFILE),
             workspace["selected_outline"],
             workspace.get("episodes", []),
             task["input_snapshot"].get("visual_style", workspace["character_visual_style"]),
         )
-        repository.save_character_profiles(task["workspace_id"], profiles)
+        repository.save_character_profiles(task["workspace_id"], profiles, script_id=script_id)
         repository.finish_task(task_id, result={"character_count": len(profiles)})
     except Exception as exc:
         logger.exception("Character profile generation task %s failed", task_id)
@@ -440,8 +497,9 @@ def _run_episode_script_generation(task_id):
     try:
         task = repository.start_task(task_id)
         workspace_id = task["workspace_id"]
-        episode_number = int(task["target_id"])
-        workspace = repository.get_workspace(workspace_id)
+        script_id = task["input_snapshot"].get("script_id")
+        episode_number = int(task["input_snapshot"].get("episode") or task["target_id"])
+        workspace = repository.get_workspace(workspace_id, script_id=script_id)
         episodes = workspace.get("episodes", [])
         episode = next(
             item for item in episodes if item.get("episode") == episode_number
@@ -469,7 +527,7 @@ def _run_episode_script_generation(task_id):
             previous_episode=previous_episode,
             next_episode=next_episode,
         )
-        repository.save_episode_script(workspace_id, episode_number, full_script)
+        repository.save_episode_script(workspace_id, episode_number, full_script, script_id=script_id)
         repository.finish_task(task_id, result={"episode_number": episode_number})
     except Exception as exc:
         logger.exception("Episode script generation task %s failed", task_id)
@@ -477,8 +535,9 @@ def _run_episode_script_generation(task_id):
             try:
                 repository.mark_episode_script_generation_failed(
                     task["workspace_id"],
-                    int(task["target_id"]),
+                    int(task["input_snapshot"].get("episode") or task["target_id"]),
                     exc,
+                    script_id=task["input_snapshot"].get("script_id"),
                 )
             except Exception:
                 logger.exception("Could not mark episode script task %s failed", task_id)
@@ -597,7 +656,7 @@ def _render_script_library(request, data, error=None):
             "workspace": data,
             "usable_outlines": data.get("usable_outlines", []),
             "error": error,
-            "active_nav": "script",
+            "active_nav": "projects",
         },
     )
 

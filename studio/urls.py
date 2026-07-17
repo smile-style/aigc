@@ -10,6 +10,17 @@ urlpatterns = [
     path("outlines/generate/", views.generate_outlines_view, name="generate_outlines"),
     path("outlines/usable/", views.mark_outline_usable_view, name="mark_outline_usable"),
     path("outlines/select/", views.select_outline_view, name="select_outline"),
+    path(
+        "projects/<int:project_id>/",
+        views.project_workbench_page,
+        name="project_workbench",
+    ),
+    path("films/", video_views.finished_films_page, name="finished_films"),
+    path(
+        "films/<int:composition_id>/download/",
+        video_views.download_finished_film_view,
+        name="download_finished_film",
+    ),
     path("script/", views.script_library_page, name="script_index"),
     path("script/<str:workspace_id>/", views.script_page, name="script"),
     path(

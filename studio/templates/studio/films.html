@@ -1,0 +1,75 @@
+{% extends "studio/base.html" %}
+
+{% block title %}成片库 | 漫剧工坊{% endblock %}
+{% block page_heading %}成片库{% endblock %}
+
+{% block content %}
+<section class="stack film-library">
+  <header class="film-library-header">
+    <div>
+      <p class="eyebrow">Finished Films</p>
+      <h2>已完成拼接的成片</h2>
+    </div>
+    <div class="film-library-count" aria-label="成片统计">
+      <strong>{{ film_projects|length }}</strong><span>个项目</span>
+      <strong>{{ film_count }}</strong><span>个版本</span>
+    </div>
+  </header>
+
+  {% if film_projects %}
+    <div class="film-project-list">
+      {% for project in film_projects %}
+        <section class="film-project-section" aria-labelledby="film-project-{{ project.project_id }}">
+          <header class="film-project-header">
+            <div>
+              <p class="eyebrow">P{{ project.project_id|stringformat:"06d" }}</p>
+              <h2 id="film-project-{{ project.project_id }}">{{ project.title }}</h2>
+            </div>
+            <div class="film-project-meta">
+              <span>{{ project.ready_count }} / {{ project.total_episodes }} 集已有成片</span>
+              <time datetime="{{ project.latest_exported|date:'c' }}">更新于 {{ project.latest_exported|date:"Y-m-d H:i" }}</time>
+              <a class="secondary-button" href="{% url 'studio:project_workbench' project.project_id %}">打开项目</a>
+            </div>
+          </header>
+
+          <div class="film-grid">
+            {% for episode in project.episodes %}
+              <article class="film-card">
+                <div class="film-preview">
+                  <video controls playsinline preload="metadata" src="{{ episode.latest.video.url }}" aria-label="第 {{ episode.number }} 集成片预览"></video>
+                </div>
+                <div class="film-card-body">
+                  <div class="film-card-title">
+                    <div><span>第 {{ episode.number }} 集</span><h3>{{ episode.title }}</h3></div>
+                    <span class="status-pill success">v{{ episode.latest.version }}</span>
+                  </div>
+                  <div class="film-card-meta">
+                    <time datetime="{{ episode.latest.exported_at|date:'c' }}">{{ episode.latest.exported_at|date:"Y-m-d H:i" }}</time>
+                    <a class="ghost-button" href="{% url 'studio:download_finished_film' episode.latest.id %}">下载成片</a>
+                  </div>
+                  {% if episode.history %}
+                    <details class="film-history">
+                      <summary>历史版本 {{ episode.history|length }}</summary>
+                      <div class="film-history-list">
+                        {% for version in episode.history %}
+                          <div><span>v{{ version.version }} · {{ version.exported_at|date:"Y-m-d H:i" }}</span><a href="{% url 'studio:download_finished_film' version.id %}">下载</a></div>
+                        {% endfor %}
+                      </div>
+                    </details>
+                  {% endif %}
+                </div>
+              </article>
+            {% endfor %}
+          </div>
+        </section>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <h2>还没有成片</h2>
+      <p>完成任意分集的镜头拼接与导出后，成片会自动出现在这里。</p>
+      <a class="primary-button" href="{% url 'studio:script_index' %}">进入项目工作台</a>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}
