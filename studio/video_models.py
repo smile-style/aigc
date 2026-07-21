@@ -253,6 +253,7 @@ class VideoComposition(models.Model):
     version = models.PositiveIntegerField(default=1)
     status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_DRAFT)
     video = models.FileField(upload_to=composition_video_upload_to, blank=True)
+    content_hash = models.CharField(max_length=64, blank=True, db_index=True)
     error_message = models.TextField(blank=True)
     exported_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -273,3 +274,6 @@ class VideoComposition(models.Model):
 
 GenerationTask.TYPE_SHOT_VIDEO = "shot_video"
 GenerationTask.TYPE_VIDEO_EXPORT = "video_export"
+
+# Expose publishing models through studio.models while keeping a separate domain module.
+from .publishing_models import *  # noqa: E402,F401,F403

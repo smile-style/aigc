@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import include, path
 
 from . import video_views, views
 
@@ -6,6 +6,7 @@ from . import video_views, views
 app_name = "studio"
 
 urlpatterns = [
+    path("publishing/", include("studio.publishing.urls")),
     path("", views.outline_page, name="outline"),
     path("outlines/generate/", views.generate_outlines_view, name="generate_outlines"),
     path("outlines/usable/", views.mark_outline_usable_view, name="mark_outline_usable"),

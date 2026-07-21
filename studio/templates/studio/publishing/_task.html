@@ -1,0 +1,20 @@
+<article class="publishing-task" data-publishing-task="{{ task.id }}" data-status="{{ task.status }}">
+  <div class="publishing-task__identity">
+    <span class="publishing-platform-mark" aria-hidden="true">B</span>
+    <div><strong>第 {{ task.composition.episode.episode_number }} 集 · v{{ task.composition.version }}</strong><small>{{ task.composition.episode.title }} · {{ task.account.display_name }}</small></div>
+  </div>
+  <div class="publishing-task__progress">
+    <div><span data-task-stage>{{ task.get_stage_display }}</span><strong data-task-percent>{{ task.progress_percent }}%</strong></div>
+    <progress max="100" value="{{ task.progress_percent }}" data-task-progress>{{ task.progress_percent }}%</progress>
+    <small data-task-error>{% if task.error_message %}{{ task.error_message }}{% else %}尝试 {{ task.attempt_count }} / {{ task.max_attempts }}{% endif %}</small>
+  </div>
+  <span class="status-pill publish-status-{{ task.status }}" data-task-status>{{ task.get_status_display }}</span>
+  <div class="publishing-task__actions">
+    {% if task.remote_url %}<a class="ghost-button small" href="{{ task.remote_url }}" target="_blank" rel="noopener">打开视频</a>{% endif %}
+    {% if task.status == 'queued' or task.status == 'running' or task.status == 'retry_wait' %}<form method="post" action="{% url 'studio:publishing_task_cancel' task.id %}">{% csrf_token %}<button class="ghost-button small" type="submit">取消</button></form>{% endif %}
+    {% if task.status == 'failed' or task.status == 'rejected' %}<form method="post" action="{% url 'studio:publishing_task_retry' task.id %}">{% csrf_token %}<button class="secondary-button small" type="submit">重试</button></form>{% endif %}
+    {% if task.status == 'submitted' or task.status == 'outcome_unknown' and task.remote_video_id %}<form method="post" action="{% url 'studio:publishing_task_reconcile' task.id %}">{% csrf_token %}<button class="secondary-button small" type="submit">核对平台</button></form>{% endif %}
+    {% if task.status == 'outcome_unknown' and not task.remote_video_id %}<small>请先在创作中心确认是否已有稿件</small>{% endif %}
+  </div>
+    {% if task.status == 'outcome_unknown' %}<form method="post" action="{% url 'studio:publishing_task_republish' task.id %}" onsubmit="return confirm('请先确认 Bilibili 创作中心没有对应稿件。仍要再次发布吗？')">{% csrf_token %}<button class="ghost-button small" type="submit">确认后再次发布</button></form>{% endif %}
+</article>

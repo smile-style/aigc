@@ -4,7 +4,7 @@
 {% block page_heading %}成片库{% endblock %}
 
 {% block content %}
-<section class="stack film-library">
+<section class="stack film-library" data-publishing-status-url="{% url 'studio:publishing_task_status' %}">
   <header class="film-library-header">
     <div>
       <p class="eyebrow">Finished Films</p>
@@ -47,6 +47,20 @@
                     <time datetime="{{ episode.latest.exported_at|date:'c' }}">{{ episode.latest.exported_at|date:"Y-m-d H:i" }}</time>
                     <a class="ghost-button" href="{% url 'studio:download_finished_film' episode.latest.id %}">下载成片</a>
                   </div>
+                  <div class="film-publish-actions">
+                    {% if publishing_accounts %}<button class="secondary-button" type="button" data-modal-target="publish-composition-{{ episode.latest.id }}">发布到 Bilibili</button>{% else %}<a class="secondary-button" href="{% url 'studio:system_settings' %}">连接发布账号</a>{% endif %}
+                  </div>
+                  {% if episode.latest.latest_publishing_task %}
+                    {% with task=episode.latest.latest_publishing_task %}
+                      <div class="film-publish-state" data-publishing-task="{{ task.id }}" data-status="{{ task.status }}">
+                        <div><span data-task-stage>{{ task.get_stage_display }}</span><strong data-task-status>{{ task.get_status_display }}</strong></div>
+                        <progress max="100" value="{{ task.progress_percent }}" data-task-progress></progress>
+                        <span data-task-percent>{{ task.progress_percent }}%</span>
+                        <small data-task-error>{{ task.error_message }}</small>
+                        {% if task.remote_url %}<a href="{{ task.remote_url }}" target="_blank" rel="noopener">打开视频</a>{% endif %}
+                      </div>
+                    {% endwith %}
+                  {% endif %}
                   {% if episode.history %}
                     <details class="film-history">
                       <summary>历史版本 {{ episode.history|length }}</summary>
@@ -58,6 +72,7 @@
                     </details>
                   {% endif %}
                 </div>
+                {% include "studio/publishing/_dialog.html" with composition=episode.latest %}
               </article>
             {% endfor %}
           </div>

@@ -1,0 +1,21 @@
+<div class="detail-modal publish-dialog" id="publish-composition-{{ composition.id }}" role="dialog" aria-modal="true" aria-labelledby="publish-title-{{ composition.id }}" hidden>
+  <div class="detail-backdrop" data-modal-close></div>
+  <section class="detail-panel publish-dialog__panel">
+    <button class="modal-close" type="button" data-modal-close aria-label="关闭">&times;</button>
+    <header><p class="eyebrow">Bilibili</p><h2 id="publish-title-{{ composition.id }}">发布第 {{ episode.number }} 集成片</h2><p>v{{ composition.version }} · {{ episode.title }}</p></header>
+    <form method="post" action="{% url 'studio:publishing_task_create' %}" data-publish-form>
+      {% csrf_token %}<input type="hidden" name="composition_id" value="{{ composition.id }}">
+      <div class="publish-form-grid">
+        <label><span>发布账号</span><select name="account_id" required><option value="">请选择账号</option>{% for account in publishing_accounts %}<option value="{{ account.id }}">{{ account.display_name }}</option>{% endfor %}</select></label>
+        <label><span>稿件分区</span><select name="tid" required><option value="21">生活 · 日常</option><option value="138">生活 · 搞笑</option><option value="47">动画 · 短片</option><option value="172">游戏 · 手机游戏</option></select></label>
+        <label class="field-wide"><span>标题</span><input type="text" name="title" maxlength="80" value="{{ episode.title }}" required><small><span data-character-count>0</span> / 80</small></label>
+        <label class="field-wide"><span>简介</span><textarea name="description" rows="5">{{ composition.episode.summary }}</textarea></label>
+        <label class="field-wide"><span>标签</span><input type="text" name="tags" placeholder="漫剧, AI动画, 短剧"><small>使用逗号分隔</small></label>
+        <fieldset><legend>稿件类型</legend><label><input type="radio" name="copyright" value="1" checked> 自制</label><label><input type="radio" name="copyright" value="2"> 转载</label></fieldset>
+        <label data-source-field hidden><span>原作地址</span><input type="url" name="source" placeholder="https://"></label>
+      </div>
+      <p class="inline-error" data-publish-error role="alert" hidden></p>
+      <footer><button class="ghost-button" type="button" data-modal-close>取消</button><button class="primary-button" type="submit">检查并发布</button></footer>
+    </form>
+  </section>
+</div>

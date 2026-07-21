@@ -12,6 +12,11 @@ x-app-environment: &app-environment
   DB_USER: "${MYSQL_USER:-aigc_studio}"
   DB_PASSWORD: "${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in deploy/.env}"
   VIDEO_WORKER_INTERVAL_SECONDS: "${VIDEO_WORKER_INTERVAL_SECONDS:-5}"
+  PUBLISH_WORKER_INTERVAL_SECONDS: "${PUBLISH_WORKER_INTERVAL_SECONDS:-3}"
+  PUBLISH_MAX_CONCURRENCY: "${PUBLISH_MAX_CONCURRENCY:-2}"
+  PUBLISH_LEASE_SECONDS: "${PUBLISH_LEASE_SECONDS:-180}"
+  PUBLISH_TASK_TIMEOUT_SECONDS: "${PUBLISH_TASK_TIMEOUT_SECONDS:-7200}"
+  PUBLISHING_CREDENTIAL_ENCRYPTION_KEY: "${PUBLISHING_CREDENTIAL_ENCRYPTION_KEY:-}"
 
 x-app-service: &app-service
   build:
@@ -109,6 +114,14 @@ services:
       migrate:
         condition: service_completed_successfully
     command: ["python", "manage.py", "process_video_tasks"]
+
+  publish-worker:
+    <<: *app-service
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "manage.py", "process_publish_tasks"]
 
 volumes:
   mysql_data:

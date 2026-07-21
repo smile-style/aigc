@@ -10,8 +10,10 @@
   <link rel="stylesheet" href="{% static 'studio/phase3-extras.css' %}?v=20260713-video">
   <link rel="stylesheet" href="{% static 'studio/simple-settings.css' %}?v=20260714-simple-models">
   <link rel="stylesheet" href="{% static 'studio/phase3-prompt.css' %}?v=20260713-prompt-audit">
+  <link rel="stylesheet" href="{% static 'studio/publishing.css' %}?v=20260720-publishing">
   <script src="{% static 'studio/app.js' %}?v=20260714-submit-actions" defer></script>
   <script src="{% static 'studio/phase3.js' %}?v=20260713-video" defer></script>
+  <script src="{% static 'studio/publishing.js' %}?v=20260720-publishing" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -35,6 +37,9 @@
         </a>
         <a class="nav-item {% if active_nav == 'films' %}is-active{% endif %}" href="{% url 'studio:finished_films' %}">
           <span>03</span><strong>成片库</strong>
+        </a>
+        <a class="nav-item {% if active_nav == 'publishing' %}is-active{% endif %}" href="{% url 'studio:publishing_tasks' %}">
+          <span>04</span><strong>发布任务</strong>
         </a>
       </nav>
 

@@ -8,6 +8,8 @@ from studio.models import (
     Character,
     Episode,
     GenerationTask,
+    PublishingAccount,
+    PublishingTask,
     StoryboardShot,
     VideoAsset,
     VideoComposition,
@@ -64,6 +66,9 @@ def system_settings_page(request):
         {
             "workspace": workspace,
             "slot_rows": get_simple_model_slots(),
+            "publishing_accounts": PublishingAccount.objects.all(),
+            "publishing_success": request.GET.get("publishing_success", ""),
+            "publishing_error": request.GET.get("publishing_error", ""),
             "error": error,
             "success": success,
             "active_nav": "system",
@@ -84,6 +89,16 @@ def finished_films_page(request):
             "-version",
             "-id",
         )
+    )
+    task_map = {}
+    for task in PublishingTask.objects.filter(
+        composition_id__in=[item.id for item in compositions]
+    ).select_related("account").order_by("-created_at", "-id"):
+        task_map.setdefault(task.composition_id, task)
+    for composition in compositions:
+        composition.latest_publishing_task = task_map.get(composition.id)
+    publishing_accounts = PublishingAccount.objects.filter(
+        status=PublishingAccount.STATUS_CONNECTED
     )
     script_ids = {item.episode.script_id for item in compositions}
     episode_totals = {
@@ -140,6 +155,8 @@ def finished_films_page(request):
         {
             "film_projects": project_rows,
             "film_count": len(compositions),
+            "publishing_accounts": publishing_accounts,
+            "publishing_task_id": request.GET.get("publishing_task", ""),
             "active_nav": "films",
         },
     )
@@ -185,6 +202,7 @@ def _render_video_episode(request, workspace_id, episode_number, script_id=None)
     repository = WorkspaceRepository()
     workspace = repository.get_episode_workspace(workspace_id, episode_number, script_id=script_id)
     episode = _episode(workspace_id, episode_number, script_id=script_id)
+    episode.number = episode.episode_number
     has_synced_shots = StoryboardShot.objects.filter(storyboard__episode=episode).exists()
     data = video_page_data(episode, sync=not has_synced_shots)
     characters = list(
@@ -201,6 +219,9 @@ def _render_video_episode(request, workspace_id, episode_number, script_id=None)
             "shots": data["shots"],
             "counts": data["counts"],
             "composition": data["composition"],
+            "publishing_accounts": PublishingAccount.objects.filter(
+                status=PublishingAccount.STATUS_CONNECTED
+            ),
             "asset_updates_available": data["asset_updates_available"],
             "sync_result": request.GET.get("synced"),
             "characters": characters,

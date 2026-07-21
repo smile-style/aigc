@@ -1,0 +1,28 @@
+{% extends "studio/base.html" %}
+
+{% block title %}发布任务 | 漫剧工坊{% endblock %}
+{% block page_heading %}发布任务{% endblock %}
+
+{% block content %}
+<section class="publishing-workspace" data-publishing-status-url="{% url 'studio:publishing_task_status' %}">
+  <header class="publishing-page-head">
+    <div><p class="eyebrow">Distribution Queue</p><h2>平台投稿进度</h2></div>
+    <nav class="publishing-filters" aria-label="发布任务筛选">
+      <a href="{% url 'studio:publishing_tasks' %}" {% if not status_filter %}aria-current="page"{% endif %}>全部</a>
+      <a href="?status=active" {% if status_filter == 'active' %}aria-current="page"{% endif %}>进行中</a>
+      <a href="?status=attention" {% if status_filter == 'attention' %}aria-current="page"{% endif %}>待处理</a>
+      <a href="?status=published" {% if status_filter == 'published' %}aria-current="page"{% endif %}>已发布</a>
+    </nav>
+  </header>
+
+  {% if publishing_tasks %}
+    <div class="publishing-task-list">
+      {% for task in publishing_tasks %}
+        {% include "studio/publishing/_task.html" with task=task %}
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state"><h2>没有符合条件的发布任务</h2><p>从成片库选择一个成片版本开始发布。</p><a class="primary-button" href="{% url 'studio:finished_films' %}">打开成片库</a></div>
+  {% endif %}
+</section>
+{% endblock %}

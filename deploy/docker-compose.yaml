@@ -7,6 +7,11 @@ x-app-environment: &app-environment
   LLM_LOG_PATH: /app/logs/llm.log
   DB_ENGINE: sqlite
   VIDEO_WORKER_INTERVAL_SECONDS: "${VIDEO_WORKER_INTERVAL_SECONDS:-5}"
+  PUBLISH_WORKER_INTERVAL_SECONDS: "${PUBLISH_WORKER_INTERVAL_SECONDS:-3}"
+  PUBLISH_MAX_CONCURRENCY: "${PUBLISH_MAX_CONCURRENCY:-1}"
+  PUBLISH_LEASE_SECONDS: "${PUBLISH_LEASE_SECONDS:-180}"
+  PUBLISH_TASK_TIMEOUT_SECONDS: "${PUBLISH_TASK_TIMEOUT_SECONDS:-7200}"
+  PUBLISHING_CREDENTIAL_ENCRYPTION_KEY: "${PUBLISHING_CREDENTIAL_ENCRYPTION_KEY:-}"
 
 x-app-service: &app-service
   build:
@@ -87,3 +92,11 @@ services:
       migrate:
         condition: service_completed_successfully
     command: ["python", "manage.py", "process_video_tasks"]
+
+  publish-worker:
+    <<: *app-service
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "manage.py", "process_publish_tasks"]

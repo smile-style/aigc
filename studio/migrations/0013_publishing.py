@@ -1,0 +1,113 @@
+import django.db.models.deletion
+import uuid
+
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+    dependencies = [("studio", "0012_videocomposition_status_export_index")]
+
+    operations = [
+        migrations.AddField(
+            model_name="videocomposition",
+            name="content_hash",
+            field=models.CharField(blank=True, db_index=True, max_length=64),
+        ),
+        migrations.CreateModel(
+            name="PublishingAccount",
+            fields=[
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("platform", models.CharField(choices=[("bilibili", "Bilibili")], db_index=True, max_length=32)),
+                ("remote_account_id", models.CharField(blank=True, db_index=True, max_length=120)),
+                ("display_name", models.CharField(max_length=160)),
+                ("credential_ciphertext", models.TextField()),
+                ("status", models.CharField(choices=[("connected", "已连接"), ("expired", "登录已失效"), ("error", "连接异常")], db_index=True, default="connected", max_length=24)),
+                ("profile_snapshot", models.JSONField(blank=True, default=dict)),
+                ("platform_options", models.JSONField(blank=True, default=dict)),
+                ("max_concurrency", models.PositiveIntegerField(default=1)),
+                ("last_checked_at", models.DateTimeField(blank=True, null=True)),
+                ("last_error", models.TextField(blank=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+            ],
+            options={"ordering": ["platform", "display_name", "id"]},
+        ),
+        migrations.AddConstraint(
+            model_name="publishingaccount",
+            constraint=models.UniqueConstraint(fields=("platform", "remote_account_id"), name="unique_publishing_platform_account"),
+        ),
+        migrations.CreateModel(
+            name="PublishingLoginSession",
+            fields=[
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("session_id", models.UUIDField(default=uuid.uuid4, editable=False, unique=True)),
+                ("platform", models.CharField(choices=[("bilibili", "Bilibili")], max_length=32)),
+                ("provider_key_ciphertext", models.TextField()),
+                ("login_url", models.URLField(max_length=2000)),
+                ("status", models.CharField(choices=[("pending", "等待扫码"), ("scanned", "已扫码，等待确认"), ("succeeded", "登录成功"), ("expired", "二维码已过期"), ("failed", "登录失败")], default="pending", max_length=24)),
+                ("error_message", models.TextField(blank=True)),
+                ("expires_at", models.DateTimeField()),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("account", models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name="login_sessions", to="studio.publishingaccount")),
+            ],
+        ),
+        migrations.CreateModel(
+            name="PublishingTask",
+            fields=[
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("platform", models.CharField(choices=[("bilibili", "Bilibili")], db_index=True, max_length=32)),
+                ("status", models.CharField(choices=[("queued", "等待发布"), ("running", "发布中"), ("retry_wait", "等待重试"), ("submitted", "已提交"), ("published", "已发布"), ("rejected", "平台退回"), ("outcome_unknown", "平台结果待确认"), ("failed", "发布失败"), ("cancelled", "已取消")], db_index=True, default="queued", max_length=32)),
+                ("stage", models.CharField(choices=[("validating", "检查账号和稿件"), ("preparing", "准备上传"), ("uploading", "上传成片"), ("submitting", "提交稿件"), ("processing", "等待平台处理"), ("reconciling", "核对平台结果")], default="validating", max_length=32)),
+                ("progress_percent", models.PositiveSmallIntegerField(default=0)),
+                ("uploaded_bytes", models.PositiveBigIntegerField(default=0)),
+                ("total_bytes", models.PositiveBigIntegerField(default=0)),
+                ("metadata_snapshot", models.JSONField(default=dict)),
+                ("content_hash", models.CharField(db_index=True, max_length=64)),
+                ("dedup_key", models.CharField(max_length=64, unique=True)),
+                ("attempt_count", models.PositiveIntegerField(default=0)),
+                ("max_attempts", models.PositiveIntegerField(default=3)),
+                ("next_retry_at", models.DateTimeField(blank=True, db_index=True, null=True)),
+                ("lease_owner", models.CharField(blank=True, db_index=True, max_length=120)),
+                ("lease_expires_at", models.DateTimeField(blank=True, db_index=True, null=True)),
+                ("heartbeat_at", models.DateTimeField(blank=True, null=True)),
+                ("cancel_requested", models.BooleanField(default=False)),
+                ("error_code", models.CharField(blank=True, max_length=80)),
+                ("error_message", models.TextField(blank=True)),
+                ("error_details", models.JSONField(blank=True, default=dict)),
+                ("remote_video_id", models.CharField(blank=True, db_index=True, max_length=160)),
+                ("remote_url", models.URLField(blank=True, max_length=2000)),
+                ("remote_status", models.CharField(blank=True, max_length=80)),
+                ("remote_payload", models.JSONField(blank=True, default=dict)),
+                ("upload_snapshot", models.JSONField(blank=True, default=dict)),
+                ("started_at", models.DateTimeField(blank=True, null=True)),
+                ("submitted_at", models.DateTimeField(blank=True, null=True)),
+                ("finished_at", models.DateTimeField(blank=True, null=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("account", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="tasks", to="studio.publishingaccount")),
+                ("composition", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="publishing_tasks", to="studio.videocomposition")),
+            ],
+            options={"ordering": ["-created_at", "-id"]},
+        ),
+        migrations.AddIndex(model_name="publishingtask", index=models.Index(fields=["status", "next_retry_at", "created_at"], name="publish_task_queue_idx")),
+        migrations.AddIndex(model_name="publishingtask", index=models.Index(fields=["account", "status"], name="publish_account_status_idx")),
+        migrations.CreateModel(
+            name="PublishingAttempt",
+            fields=[
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("attempt_number", models.PositiveIntegerField()),
+                ("stage", models.CharField(blank=True, max_length=32)),
+                ("error_code", models.CharField(blank=True, max_length=80)),
+                ("error_message", models.TextField(blank=True)),
+                ("retryable", models.BooleanField(default=False)),
+                ("provider_response", models.JSONField(blank=True, default=dict)),
+                ("upload_session", models.JSONField(blank=True, default=dict)),
+                ("started_at", models.DateTimeField(auto_now_add=True)),
+                ("finished_at", models.DateTimeField(blank=True, null=True)),
+                ("task", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="attempts", to="studio.publishingtask")),
+            ],
+            options={"ordering": ["attempt_number", "id"]},
+        ),
+        migrations.AddConstraint(model_name="publishingattempt", constraint=models.UniqueConstraint(fields=("task", "attempt_number"), name="unique_publish_attempt_number")),
+    ]

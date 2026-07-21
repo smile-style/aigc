@@ -332,6 +332,7 @@ def process_export_task(task_id):
         ordered = [asset_map[asset_id] for asset_id in task.input_snapshot["video_asset_ids"]]
         content = _ffmpeg_concat(ordered)
         composition.video.save("result.mp4", ContentFile(content), save=False)
+        composition.content_hash = hashlib.sha256(content).hexdigest()
         composition.status = VideoComposition.STATUS_READY
         composition.error_message = ""
         composition.exported_at = timezone.now()
