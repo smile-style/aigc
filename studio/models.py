@@ -119,6 +119,8 @@ class Episode(models.Model):
     key_conflict = models.TextField()
     cliffhanger = models.TextField()
     full_script = models.TextField(blank=True)
+    plan_payload = models.JSONField(default=dict, blank=True)
+    pacing_payload = models.JSONField(default=dict, blank=True)
     script_status = models.CharField(
         max_length=20,
         choices=SCRIPT_STATUS_CHOICES,
@@ -215,6 +217,41 @@ class CharacterAsset(models.Model):
         return f"{self.character} v{self.version}"
 
 
+class CoverTemplate(models.Model):
+    script = models.OneToOneField(
+        Script, on_delete=models.CASCADE, related_name="cover_template"
+    )
+    prompt_snapshot = models.TextField()
+    background = models.FileField(upload_to="covers/templates/%Y/%m/%d")
+    source_url = models.URLField(blank=True, max_length=1000)
+    model = models.CharField(max_length=120)
+    style_payload = models.JSONField(default=dict, blank=True)
+    version = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Cover template for {self.script} v{self.version}"
+
+
+class EpisodeCover(models.Model):
+    template = models.ForeignKey(
+        CoverTemplate, on_delete=models.CASCADE, related_name="episode_covers"
+    )
+    episode = models.OneToOneField(
+        Episode, on_delete=models.CASCADE, related_name="cover"
+    )
+    title = models.CharField(max_length=20)
+    title_customized = models.BooleanField(default=False)
+    image = models.FileField(upload_to="covers/episodes/%Y/%m/%d")
+    template_version = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["episode__episode_number"]
+
+
 class GenerationTask(models.Model):
     TYPE_OUTLINE = "outline"
     TYPE_SCRIPT = "script"
@@ -222,6 +259,7 @@ class GenerationTask(models.Model):
     TYPE_STORYBOARD = "storyboard"
     TYPE_CHARACTER_PROFILE = "character_profile"
     TYPE_CHARACTER_IMAGE = "character_image"
+    TYPE_COVER_IMAGE = "cover_image"
     TYPE_CHOICES = [
         (TYPE_OUTLINE, "Outline"),
         (TYPE_SCRIPT, "Script"),
@@ -229,6 +267,7 @@ class GenerationTask(models.Model):
         (TYPE_STORYBOARD, "Storyboard"),
         (TYPE_CHARACTER_PROFILE, "Character profile"),
         (TYPE_CHARACTER_IMAGE, "Character image"),
+        (TYPE_COVER_IMAGE, "Cover image"),
     ]
 
     STATUS_PENDING = "pending"

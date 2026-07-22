@@ -1,6 +1,13 @@
-﻿import re
+import json
+import re
 
-from studio.constants import MAX_STORYBOARD_SHOTS, MIN_STORYBOARD_SHOTS
+from studio.constants import (
+    EPISODE_DURATION_MAX_SECONDS,
+    EPISODE_DURATION_MIN_SECONDS,
+    EPISODE_DURATION_TARGET_SECONDS,
+    MAX_STORYBOARD_SHOTS,
+    MIN_STORYBOARD_SHOTS,
+)
 
 
 REQUIRED_STORYBOARD_FIELDS = {
@@ -15,11 +22,21 @@ REQUIRED_STORYBOARD_FIELDS = {
 }
 REQUIRED_STORYBOARD_FIELD_LIST = ", ".join(sorted(REQUIRED_STORYBOARD_FIELDS))
 REQUIRED_STORYBOARD_TEXT_FIELDS = REQUIRED_STORYBOARD_FIELDS - {"shot_number"}
+MIN_SHOT_DURATION_SECONDS = 4
+MAX_SHOT_DURATION_SECONDS = 15
 
 
-def generate_storyboard(provider, episode_script, episode_number=1):
+def generate_storyboard(provider, episode_script, episode_number=1, pacing=None):
     if not isinstance(episode_script, str) or not episode_script.strip():
         raise ValueError("episode_script must be a non-empty string")
+
+    expected_duration = _pacing_duration(pacing)
+    pacing_context = ""
+    if pacing:
+        pacing_context = (
+            "\n必须逐段继承以下已审核剧情节拍，不得改变事件顺序或信息出现时间：\n"
+            + json.dumps(pacing, ensure_ascii=False)
+        )
 
     payload = provider.generate_json(
         [
@@ -33,24 +50,31 @@ def generate_storyboard(provider, episode_script, episode_number=1):
             {
                 "role": "user",
                 "content": (
-                    f"请将下面这个 2 分钟第 {episode_number} 集剧本拆解成适合 AI 漫画和视频生成的分镜。\n"
+                    f"请将下面这个第 {episode_number} 集剧本拆解成适合 AI 漫画和视频生成的分镜。\n"
+                    f"剧本已经根据对白、动作和停顿估算出自然总时长 {expected_duration} 秒。"
+                    f"{EPISODE_DURATION_MIN_SECONDS} 到 {EPISODE_DURATION_MAX_SECONDS} 秒仅是"
+                    "安全边界；分镜必须忠实承接该估时，不得通过压缩台词或删减表演来缩短。\n"
                     f"分镜数量必须在 {MIN_STORYBOARD_SHOTS} 到 {MAX_STORYBOARD_SHOTS} 之间。\n"
                     "storyboard_prompts 中的每个分镜都必须包含字段："
                     f"{REQUIRED_STORYBOARD_FIELD_LIST}。\n"
                     "shot_number 尽量使用整数；如果输出成字符串，也必须能明确解析为顺序编号。\n"
                     "所有文本字段都必须是非空字符串，内容要具体、可直接用于图像和视频生成。\n"
                     "另外输出 character_names 字符串数组和 duration_seconds 整数；"
-                    "character_names 只填写本镜头实际出场的角色姓名，duration_seconds 范围为 2 到 15。\n"
+                    f"character_names 只填写本镜头实际出场的角色姓名，duration_seconds 范围为 "
+                    f"{MIN_SHOT_DURATION_SECONDS} 到 {MAX_SHOT_DURATION_SECONDS}。\n"
+                    f"所有 duration_seconds 相加必须恰好等于 {expected_duration} 秒，"
+                    "并让危机、目标、两次阻碍、解决或反转、下集危机保持原有顺序和时间位置。"
+                    f"{pacing_context}\n"
                     f"第 {episode_number} 集剧本如下：\n{episode_script}"
                 ),
             },
         ],
         temperature=0.6,
     )
-    return validate_storyboard_payload(payload)
+    return validate_storyboard_payload(payload, expected_duration_seconds=expected_duration)
 
 
-def validate_storyboard_payload(payload):
+def validate_storyboard_payload(payload, expected_duration_seconds=None):
     if not isinstance(payload, dict):
         raise ValueError("Model response must be an object")
 
@@ -65,6 +89,7 @@ def validate_storyboard_payload(payload):
             f"{MIN_STORYBOARD_SHOTS} and {MAX_STORYBOARD_SHOTS}, got {prompt_count}"
         )
 
+    total_duration = 0
     for index, shot in enumerate(storyboard_prompts, start=1):
         if not isinstance(shot, dict):
             raise ValueError(f"Shot {index} must be an object")
@@ -95,6 +120,17 @@ def validate_storyboard_payload(payload):
             index,
             strict=has_explicit_duration,
         )
+        total_duration += shot["duration_seconds"]
+
+    if not EPISODE_DURATION_MIN_SECONDS <= total_duration <= EPISODE_DURATION_MAX_SECONDS:
+        raise ValueError(
+            f"分镜总时长 duration 为 {total_duration} 秒，必须在 "
+            f"{EPISODE_DURATION_MIN_SECONDS} 到 {EPISODE_DURATION_MAX_SECONDS} 秒之间"
+        )
+    if expected_duration_seconds is not None and total_duration != expected_duration_seconds:
+        raise ValueError(
+            f"Expected storyboard duration {expected_duration_seconds} seconds, got {total_duration}"
+        )
     return storyboard_prompts
 
 
@@ -121,6 +157,22 @@ def normalize_duration_seconds(value, index, strict=True):
     else:
         match = re.search(r"\d+", str(value or ""))
         seconds = int(match.group(0)) if match else 5
-    if strict and not 2 <= seconds <= 15:
-        raise ValueError(f"第 {index} 个镜头的 duration_seconds 必须在 2 到 15 之间")
-    return max(2, min(15, seconds))
+    if strict and not MIN_SHOT_DURATION_SECONDS <= seconds <= MAX_SHOT_DURATION_SECONDS:
+        raise ValueError(
+            f"第 {index} 个镜头的 duration_seconds 必须在 "
+            f"{MIN_SHOT_DURATION_SECONDS} 到 {MAX_SHOT_DURATION_SECONDS} 之间"
+        )
+    return max(MIN_SHOT_DURATION_SECONDS, min(MAX_SHOT_DURATION_SECONDS, seconds))
+
+
+def _pacing_duration(pacing):
+    if not isinstance(pacing, dict):
+        return EPISODE_DURATION_TARGET_SECONDS
+    duration = pacing.get("duration_seconds")
+    if (
+        isinstance(duration, int)
+        and not isinstance(duration, bool)
+        and EPISODE_DURATION_MIN_SECONDS <= duration <= EPISODE_DURATION_MAX_SECONDS
+    ):
+        return duration
+    return EPISODE_DURATION_TARGET_SECONDS

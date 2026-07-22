@@ -7,7 +7,13 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 
-from studio.constants import EPISODE_COUNT, EPISODE_DURATION_MINUTES, GENRES
+from studio.constants import (
+    EPISODE_COUNT,
+    EPISODE_DURATION_LABEL,
+    EPISODE_DURATION_MINUTES,
+    GENRES,
+    PACING_PROFILE_VERSION,
+)
 from studio.models import Character, CharacterAsset, Episode, GenerationTask, Outline, Project, Script, StoryboardPrompt
 
 CURRENT_WORKSPACE_ID = "current"
@@ -243,7 +249,14 @@ class WorkspaceRepository:
 
             return self._outline_to_dict(outline)
 
-    def save_script_for_outline(self, workspace_id, outline_id, script_plan, episode_1_script):
+    def save_script_for_outline(
+        self,
+        workspace_id,
+        outline_id,
+        script_plan,
+        episode_1_script,
+        episode_1_pacing=None,
+    ):
         with transaction.atomic():
             try:
                 project = Project.objects.select_for_update().get(workspace_id=workspace_id)
@@ -267,6 +280,8 @@ class WorkspaceRepository:
                     "raw_payload": {
                         "script_plan": script_plan,
                         "episode_1_script": episode_1_script,
+                        "episode_1_pacing": episode_1_pacing or {},
+                        "pacing_profile_version": PACING_PROFILE_VERSION,
                     },
                 },
             )
@@ -280,7 +295,12 @@ class WorkspaceRepository:
                     "script_finished_at",
                 ]
             )
-            self._sync_episodes(script, script_plan, episode_1_script)
+            self._sync_episodes(
+                script,
+                script_plan,
+                episode_1_script,
+                episode_1_pacing=episode_1_pacing,
+            )
             StoryboardPrompt.objects.filter(project=project).exclude(script=script).delete()
 
         return self.get_workspace(workspace_id)
@@ -386,7 +406,14 @@ class WorkspaceRepository:
             task_data["created"] = True
             return task_data
 
-    def save_episode_script(self, workspace_id, episode_number, full_script, script_id=None):
+    def save_episode_script(
+        self,
+        workspace_id,
+        episode_number,
+        full_script,
+        script_id=None,
+        pacing_payload=None,
+    ):
         if not isinstance(full_script, str) or not full_script.strip():
             raise ValueError("Episode script must be a non-empty string")
         with transaction.atomic():
@@ -398,6 +425,8 @@ class WorkspaceRepository:
             )
             episode.full_script = full_script
             episode.script_status = Episode.SCRIPT_READY
+            if isinstance(pacing_payload, dict):
+                episode.pacing_payload = pacing_payload
             episode.script_error = ""
             episode.script_finished_at = timezone.now()
             episode.save(
@@ -405,6 +434,7 @@ class WorkspaceRepository:
                     "full_script",
                     "script_status",
                     "script_error",
+                    "pacing_payload",
                     "script_finished_at",
                     "updated_at",
                 ]
@@ -706,6 +736,7 @@ class WorkspaceRepository:
             "episode_count": project.episode_count,
             "episode_duration_minutes": project.episode_duration_minutes,
             "usable_outlines": [self._outline_to_dict(outline) for outline in outlines],
+            "episode_duration_label": EPISODE_DURATION_LABEL,
         }
 
     def _create_outlines(self, project, outlines, batch_id=None):
@@ -772,6 +803,7 @@ class WorkspaceRepository:
             "episode_duration_minutes": project.episode_duration_minutes,
             "outlines": [self._outline_to_dict(outline) for outline in active_outlines],
             "usable_outlines": [self._outline_to_dict(outline) for outline in usable_outlines],
+            "episode_duration_label": EPISODE_DURATION_LABEL,
             "selected_outline_id": (
                 selected_outline.outline_id if selected_outline else None
             ),
@@ -803,6 +835,7 @@ class WorkspaceRepository:
                 target_id=f"script:{script.id}" if script else "",
             ) if script else None,
             "episode_1_script": episode_1.full_script if episode_1 else "",
+            "episode_1_pacing": episode_1.pacing_payload if episode_1 else {},
             "storyboard_prompts": (
                 storyboard_prompt.prompts_payload if storyboard_prompt else []
             ),
@@ -869,7 +902,13 @@ class WorkspaceRepository:
                 f"Script not found: {script_id}"
             ) from exc
 
-    def _sync_episodes(self, script, script_plan, episode_1_script):
+    def _sync_episodes(
+        self,
+        script,
+        script_plan,
+        episode_1_script,
+        episode_1_pacing=None,
+    ):
         if not isinstance(script_plan, list):
             return
         if not script_plan and isinstance(episode_1_script, str) and episode_1_script.strip():
@@ -904,11 +943,14 @@ class WorkspaceRepository:
             episode.summary = str(item.get("summary") or "")
             episode.key_conflict = str(item.get("key_conflict") or "")
             episode.cliffhanger = str(item.get("cliffhanger") or "")
+            episode.plan_payload = item
             if episode_number == 1 and isinstance(episode_1_script, str):
                 episode.full_script = episode_1_script
                 episode.script_status = (
                     Episode.SCRIPT_READY if episode_1_script.strip() else Episode.SCRIPT_PENDING
                 )
+                if isinstance(episode_1_pacing, dict):
+                    episode.pacing_payload = episode_1_pacing
                 episode.script_error = ""
             episode.save()
 
@@ -950,6 +992,13 @@ class WorkspaceRepository:
             "has_script": bool(episode.full_script.strip()),
             "script_status": episode.script_status,
             "script_error": episode.script_error,
+            "episode_goal": episode.plan_payload.get("episode_goal", ""),
+            "obstacle_1": episode.plan_payload.get("obstacle_1", ""),
+            "obstacle_2": episode.plan_payload.get("obstacle_2", ""),
+            "resolution_or_reversal": episode.plan_payload.get("resolution_or_reversal", ""),
+            "next_crisis": episode.plan_payload.get("next_crisis", ""),
+            "plan_payload": episode.plan_payload,
+            "pacing_payload": episode.pacing_payload,
             "has_storyboard": storyboard is not None,
             "storyboard_count": len(storyboard.prompts_payload) if storyboard else 0,
             "script_started_at": (

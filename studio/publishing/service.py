@@ -180,7 +180,10 @@ def create_publishing_task(composition, account, metadata, *, force_republish=Fa
     normalized = normalize_metadata(metadata)
     normalized = get_platform(account.platform).checker.check_submission(composition, normalized)
     content_hash = ensure_composition_hash(composition)
-    key_source = f"{account.platform}:{account.id}:{content_hash}"
+    metadata_hash = hashlib.sha256(
+        json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    key_source = f"{account.platform}:{account.id}:{content_hash}:{metadata_hash}"
     if force_republish:
         key_source = f"{key_source}:{secrets.token_hex(12)}"
     dedup_key = hashlib.sha256(key_source.encode("utf-8")).hexdigest()

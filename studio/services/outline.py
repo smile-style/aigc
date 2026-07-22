@@ -1,4 +1,9 @@
-from studio.constants import EPISODE_COUNT, EPISODE_DURATION_MINUTES, OUTLINE_CANDIDATE_COUNT
+from studio.constants import (
+    EPISODE_COUNT,
+    EPISODE_DURATION_MAX_SECONDS,
+    EPISODE_DURATION_MIN_SECONDS,
+    OUTLINE_CANDIDATE_COUNT,
+)
 
 
 REQUIRED_OUTLINE_FIELDS = {
@@ -18,18 +23,21 @@ def generate_outlines(provider, genre):
             {
                 "role": "system",
                 "content": (
-                    "你是爆款AI漫剧策划。只返回JSON，不要返回Markdown。"
-                    'JSON格式为 {"outlines": [...]}。'
+                    "你是爆款 AI 漫剧策划。只返回 JSON，不要返回 Markdown。"
+                    'JSON 格式为 {"outlines": [...]}。'
                 ),
             },
             {
                 "role": "user",
                 "content": (
                     f"题材：{genre}\n"
-                    f"目标：生成{OUTLINE_CANDIDATE_COUNT}个AI漫剧大纲候选。\n"
-                    f"固定规格：{EPISODE_COUNT}集，每集{EPISODE_DURATION_MINUTES}分钟。\n"
+                    f"目标：生成 {OUTLINE_CANDIDATE_COUNT} 个 AI 漫剧大纲候选。\n"
+                    f"固定规格：{EPISODE_COUNT}集；单集时长由剧情内容决定，"
+                    f"仅以 {EPISODE_DURATION_MIN_SECONDS} 到 {EPISODE_DURATION_MAX_SECONDS} 秒"
+                    "作为合理安全边界，不得为了凑时长压缩对白、动作或情绪停顿。\n"
                     f"每个候选必须包含 {REQUIRED_OUTLINE_FIELD_LIST}。"
-                    "核心设定由你随机生成，要适合短视频漫剧。"
+                    "核心设定由你随机生成，要适合高密度短视频漫剧；"
+                    "每集都应支持危机前置、明确目标、两次阻碍、解决或反转和下集新危机。"
                 ),
             },
         ],

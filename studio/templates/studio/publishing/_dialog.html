@@ -3,6 +3,14 @@
   <section class="detail-panel publish-dialog__panel">
     <button class="modal-close" type="button" data-modal-close aria-label="关闭">&times;</button>
     <header><p class="eyebrow">Bilibili</p><h2 id="publish-title-{{ composition.id }}">发布第 {{ episode.number }} 集成片</h2><p>v{{ composition.version }} · {{ episode.title }}</p></header>
+    {% with cover=composition.episode.cover %}
+      {% if cover and cover.image %}
+        <figure class="publish-cover-preview">
+          <img src="{{ cover.image.url }}" alt="第 {{ composition.episode.episode_number }} 集发布封面">
+          <figcaption>{{ cover.title }}</figcaption>
+        </figure>
+      {% endif %}
+    {% endwith %}
     <form method="post" action="{% url 'studio:publishing_task_create' %}" data-publish-form>
       {% csrf_token %}<input type="hidden" name="composition_id" value="{{ composition.id }}">
       <div class="publish-form-grid">

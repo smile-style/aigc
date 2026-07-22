@@ -81,6 +81,7 @@ document.addEventListener("DOMContentLoaded", () => {
       storyboard: "本集分镜",
       "character-profile": "角色设定",
       "character-image": "角色原图",
+      "cover-image": "封面母版",
     };
     const taskName = names[taskPoller.dataset.taskKind] || "生成任务";
     let pollTimer = null;

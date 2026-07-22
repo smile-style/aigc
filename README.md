@@ -48,7 +48,8 @@ Docker 部署文件位于 `deploy/`，包含 MySQL、Web 服务、环境变量�
 
 ```bash
 cp deploy/.env.example deploy/.env
-docker compose -f deploy/docker-compose.yml up -d --build
+docker compose --env-file deploy/.env -f deploy/docker-compose.build.yml build --pull
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 ```
 
 部署后访问：

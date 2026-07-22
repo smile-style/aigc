@@ -9,7 +9,7 @@
     <div>
       <p class="eyebrow">Step 1 / 3</p>
       <h2>生成候选大纲，筛出可进入剧本加工的故事</h2>
-      <p class="hero-copy">固定 60 集、每集 2 分钟。每次刷新生成 6 个候选，你可以查看详情并把成熟的大纲加入剧本库。</p>
+      <p class="hero-copy">固定 60 集，单集按剧情内容自然估时。每次刷新生成 6 个候选，你可以查看详情并把成熟的大纲加入剧本库。</p>
     </div>
     <form class="control-row" method="post" action="{% url 'studio:generate_outlines' %}" data-submit-guard>
       {% csrf_token %}
@@ -27,7 +27,7 @@
 
   <section class="metric-row" aria-label="生成约束">
     <div class="metric-card"><span>目标集数</span><strong>{{ episode_count }} 集</strong></div>
-    <div class="metric-card"><span>单集时长</span><strong>{{ episode_duration_minutes }} 分钟</strong></div>
+    <div class="metric-card"><span>单集时长</span><strong>{{ episode_duration_label }}</strong></div>
     <div class="metric-card"><span>候选数量</span><strong>{% if workspace and workspace.outlines %}{{ workspace.outlines|length }} 个{% else %}0 个{% endif %}</strong></div>
   </section>
 

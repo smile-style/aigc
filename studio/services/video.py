@@ -20,10 +20,12 @@ from studio.models import (
     ShotCharacterReference,
     StoryboardPrompt,
     StoryboardShot,
+    SubtitleTrack,
     VideoAsset,
     VideoComposition,
 )
 from studio.services.model_config import assigned_model, ensure_default_video_models, video_provider_for
+from studio.services.subtitles import is_subtitle_stale, render_ass, render_srt, subtitle_snapshot
 
 
 ACTIVE_VIDEO_STATUSES = {
@@ -303,11 +305,24 @@ def queue_export(episode):
     selected = [shot.video_assets.filter(is_selected=True, status=VideoAsset.STATUS_READY).first() for shot in sync_episode_shots(episode)]
     if not selected or any(asset is None for asset in selected):
         raise ValueError("所有分镜都生成并选定视频后才能导出。")
+    track = SubtitleTrack.objects.filter(episode=episode).first()
+    include_subtitles = bool(track and track.enabled)
+    subtitle_data = {}
+    if include_subtitles:
+        if track.status == SubtitleTrack.STATUS_ALIGNING:
+            raise ValueError("\u5b57\u5e55\u6b63\u5728\u81ea\u52a8\u5bf9\u9f50\uff0c\u8bf7\u7a0d\u540e\u518d\u5bfc\u51fa\u3002")
+        if not track.cues.exists():
+            raise ValueError("\u5b57\u5e55\u5df2\u5f00\u542f\uff0c\u4f46\u8fd8\u6ca1\u6709\u53ef\u5bfc\u51fa\u7684\u5b57\u5e55\u5185\u5bb9\u3002")
+        if is_subtitle_stale(track):
+            raise ValueError("\u955c\u5934\u3001\u987a\u5e8f\u6216\u53f0\u8bcd\u5df2\u53d8\u66f4\uff0c\u8bf7\u5148\u91cd\u65b0\u5bf9\u9f50\u5b57\u5e55\u3002")
+        subtitle_data = subtitle_snapshot(track)
     version = (episode.video_compositions.aggregate(value=Max("version"))["value"] or 0) + 1
     composition = VideoComposition.objects.create(
         episode=episode,
         version=version,
         status=VideoComposition.STATUS_EXPORTING,
+        include_subtitles=include_subtitles,
+        subtitle_snapshot=subtitle_data,
     )
     task = GenerationTask.objects.create(
         project=episode.script.project,
@@ -317,6 +332,8 @@ def queue_export(episode):
             "episode_id": episode.id,
             "composition_version": version,
             "video_asset_ids": [asset.id for asset in selected],
+            "include_subtitles": include_subtitles,
+            "subtitle_snapshot": subtitle_data,
         },
     )
     return task, True
@@ -330,8 +347,15 @@ def process_export_task(task_id):
         assets = list(VideoAsset.objects.filter(pk__in=task.input_snapshot["video_asset_ids"]).select_related("shot"))
         asset_map = {asset.id: asset for asset in assets}
         ordered = [asset_map[asset_id] for asset_id in task.input_snapshot["video_asset_ids"]]
-        content = _ffmpeg_concat(ordered)
+        subtitle_data = task.input_snapshot.get("subtitle_snapshot") or {}
+        content = _ffmpeg_concat(ordered, subtitle_snapshot=subtitle_data)
         composition.video.save("result.mp4", ContentFile(content), save=False)
+        if composition.include_subtitles and subtitle_data:
+            composition.subtitle_file.save(
+                "subtitles.srt",
+                ContentFile(render_srt(subtitle_data).encode("utf-8")),
+                save=False,
+            )
         composition.content_hash = hashlib.sha256(content).hexdigest()
         composition.status = VideoComposition.STATUS_READY
         composition.error_message = ""
@@ -505,7 +529,7 @@ def _fail_task(task, error):
     )
 
 
-def _ffmpeg_concat(assets):
+def _ffmpeg_concat(assets, subtitle_snapshot=None):
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("未找到 FFmpeg，请先安装 FFmpeg 后再导出。")
@@ -545,15 +569,31 @@ def _ffmpeg_concat(assets):
             normalized.append(output)
         concat_file = temp / "concat.txt"
         concat_file.write_text("".join(f"file '{path.as_posix()}'\n" for path in normalized), encoding="utf-8")
-        result = temp / "episode.mp4"
+        clean_result = temp / "episode-clean.mp4"
         _run_ffmpeg(
             [
                 ffmpeg, "-y", "-f", "concat", "-safe", "0",
                 "-i", str(concat_file), "-c", "copy",
-                "-movflags", "+faststart", str(result),
+                "-movflags", "+faststart", str(clean_result),
             ],
             cwd=temp,
         )
+        result = clean_result
+        if subtitle_snapshot and subtitle_snapshot.get("cues"):
+            ass_path = temp / "subtitles.ass"
+            ass_path.write_text(render_ass(subtitle_snapshot), encoding="utf-8")
+            result = temp / "episode.mp4"
+            _run_ffmpeg(
+                [
+                    ffmpeg, "-y", "-i", str(clean_result),
+                    "-map", "0:v:0", "-map", "0:a:0?",
+                    "-vf", "ass=subtitles.ass",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-c:a", "copy", "-movflags", "+faststart",
+                    str(result),
+                ],
+                cwd=temp,
+            )
         return result.read_bytes()
 
 

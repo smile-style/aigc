@@ -1,0 +1,8 @@
+services:
+  aigc-studio-image:
+    image: "${AIGC_IMAGE:-aigc-studio:latest}"
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        BASE_IMAGE: "${AIGC_BASE_IMAGE:-registry.cn-hangzhou.aliyuncs.com/docker-registry-cache/aigc-studio-base:py3.12-v1}"

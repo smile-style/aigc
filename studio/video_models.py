@@ -253,6 +253,9 @@ class VideoComposition(models.Model):
     version = models.PositiveIntegerField(default=1)
     status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_DRAFT)
     video = models.FileField(upload_to=composition_video_upload_to, blank=True)
+    include_subtitles = models.BooleanField(default=False)
+    subtitle_snapshot = models.JSONField(default=dict, blank=True)
+    subtitle_file = models.FileField(upload_to="videos/subtitles/%Y/%m/%d", blank=True)
     content_hash = models.CharField(max_length=64, blank=True, db_index=True)
     error_message = models.TextField(blank=True)
     exported_at = models.DateTimeField(null=True, blank=True)
@@ -272,8 +275,69 @@ class VideoComposition(models.Model):
         ]
 
 
+class SubtitleTrack(models.Model):
+    STATUS_DRAFT = "draft"
+    STATUS_ALIGNING = "aligning"
+    STATUS_NEEDS_REVIEW = "needs_review"
+    STATUS_CONFIRMED = "confirmed"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_ALIGNING, "Aligning"),
+        (STATUS_NEEDS_REVIEW, "Needs review"),
+        (STATUS_CONFIRMED, "Confirmed"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    episode = models.OneToOneField(
+        Episode,
+        on_delete=models.CASCADE,
+        related_name="subtitle_track",
+    )
+    enabled = models.BooleanField(default=True)
+    status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_DRAFT, db_index=True)
+    source_hash = models.CharField(max_length=64, blank=True, db_index=True)
+    style_options = models.JSONField(default=dict, blank=True)
+    global_offset_ms = models.IntegerField(default=0)
+    revision = models.PositiveIntegerField(default=1)
+    error_message = models.TextField(blank=True)
+    aligned_at = models.DateTimeField(null=True, blank=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class SubtitleCue(models.Model):
+    track = models.ForeignKey(SubtitleTrack, on_delete=models.CASCADE, related_name="cues")
+    shot = models.ForeignKey(
+        StoryboardShot,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="subtitle_cues",
+    )
+    position = models.PositiveIntegerField()
+    source_text = models.TextField(blank=True)
+    recognized_text = models.TextField(blank=True)
+    text = models.TextField()
+    start_ms = models.PositiveIntegerField()
+    end_ms = models.PositiveIntegerField()
+    confidence = models.FloatField(default=0.0)
+    needs_review = models.BooleanField(default=True, db_index=True)
+    is_manually_edited = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["position", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["track", "position"], name="unique_subtitle_cue_position")
+        ]
+
+
 GenerationTask.TYPE_SHOT_VIDEO = "shot_video"
 GenerationTask.TYPE_VIDEO_EXPORT = "video_export"
+GenerationTask.TYPE_SUBTITLE_ALIGN = "subtitle_align"
 
 # Expose publishing models through studio.models while keeping a separate domain module.
 from .publishing_models import *  # noqa: E402,F401,F403

@@ -32,18 +32,26 @@ docker login registry.cn-hangzhou.aliyuncs.com
 docker push registry.cn-hangzhou.aliyuncs.com/docker-registry-cache/aigc-studio-base:py3.12-v1
 ```
 
-## 3. 校验并启动
+## 3. 构建应用镜像
 
-先检查 Compose 展开结果：
+构建流程只生成 `AIGC_IMAGE` 指定的应用镜像，不会创建或启动业务容器：
+
+```bash
+docker compose --env-file deploy/.env -f deploy/docker-compose.build.yml build --pull
+```
+
+## 4. 校验并启动
+
+运行 Compose 只引用已构建的 `AIGC_IMAGE`，其中不包含 `build:` 配置。先检查展开结果：
 
 ```bash
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml config
 ```
 
-构建应用代码层并启动：
+再启动服务；此命令不会构建应用镜像：
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 ```
 
 查看状态：
@@ -60,7 +68,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
 http://<服务器 IP 或域名>:8080/
 ```
 
-## 4. 验证视频环境
+## 5. 验证视频环境
 
 ```bash
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml exec aigc-studio ffmpeg -version
@@ -68,9 +76,10 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml exec video-wo
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs -f --tail=200 video-worker
 ```
 
-成片导出提示“未找到 FFmpeg”通常说明仍在运行旧镜像。重新执行 `up -d --build` 后再检查版本。
+成片导出提示“未找到 FFmpeg”通常说明仍在运行旧镜像。先用 `docker-compose.build.yml`
+重新构建，再执行运行 Compose 的 `up -d`，然后检查版本。
 
-## 5. 数据位置
+## 6. 数据位置
 
 运行数据保存在 Docker 命名卷中：
 
@@ -81,11 +90,11 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs -f --tai
 
 `docker compose down` 不会删除这些卷。生产环境不要使用 `down -v`，它会删除数据库和媒体数据。
 
-## 6. 更新版本
+## 7. 更新版本
 
 ```bash
 git pull
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml build --pull
+docker compose --env-file deploy/.env -f deploy/docker-compose.build.yml build --pull
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 ```
 
@@ -93,7 +102,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 
 上面的更新命令会重建应用镜像；`requirements.txt` 发生变化时会在应用镜像中重新安装依赖，无需重建基础镜像。
 
-## 7. 备份
+## 8. 备份
 
 备份数据库：
 
@@ -114,7 +123,7 @@ docker run --rm \
 
 恢复前应停止 Web 和 worker，并同时确认数据库备份与媒体备份完整。
 
-## 8. 常用排查
+## 9. 常用排查
 
 查看全部日志：
 

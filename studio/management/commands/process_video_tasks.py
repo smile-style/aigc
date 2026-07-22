@@ -5,7 +5,8 @@ import time
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from studio.models import GenerationTask, VideoAsset, VideoComposition
+from studio.models import GenerationTask, SubtitleTrack, VideoAsset, VideoComposition
+from studio.services.subtitles import process_subtitle_task
 from studio.services.video import process_export_task, process_video_asset
 
 
@@ -39,6 +40,18 @@ class Command(BaseCommand):
             process_video_asset,
             self._record_asset_failure,
             "video asset",
+        )
+        subtitle_tasks = list(
+            GenerationTask.objects.filter(
+                task_type=GenerationTask.TYPE_SUBTITLE_ALIGN,
+                status=GenerationTask.STATUS_PENDING,
+            ).order_by("created_at", "id")[:2]
+        )
+        processed += self._process_items(
+            subtitle_tasks,
+            process_subtitle_task,
+            self._record_subtitle_failure,
+            "subtitle alignment task",
         )
         export_tasks = list(
             GenerationTask.objects.filter(
@@ -84,6 +97,20 @@ class Command(BaseCommand):
                 error_message=str(error),
                 finished_at=now,
             )
+
+    @staticmethod
+    def _record_subtitle_failure(task, error):
+        now = timezone.now()
+        GenerationTask.objects.filter(pk=task.pk).update(
+            status=GenerationTask.STATUS_FAILED,
+            error_message=str(error),
+            finished_at=now,
+        )
+        SubtitleTrack.objects.filter(pk=task.target_id).update(
+            status=SubtitleTrack.STATUS_FAILED,
+            error_message=str(error),
+            updated_at=now,
+        )
 
     @staticmethod
     def _record_export_failure(task, error):

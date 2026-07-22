@@ -154,6 +154,25 @@ def test_sqlite_compose_uses_server_data_directory():
     assert "source: /data/aigc_data/media" in compose
 
 
+@pytest.mark.parametrize(
+    "compose_path",
+    ["deploy/docker-compose.yml", "deploy/docker-compose.yaml"],
+)
+def test_runtime_compose_uses_prebuilt_application_image(compose_path):
+    compose = Path(compose_path).read_text(encoding="utf-8")
+
+    assert 'image: "${AIGC_IMAGE:-aigc-studio:latest}"' in compose
+    assert "  build:" not in compose
+
+
+def test_build_compose_owns_application_image_build():
+    compose = Path("deploy/docker-compose.build.yml").read_text(encoding="utf-8")
+
+    assert 'image: "${AIGC_IMAGE:-aigc-studio:latest}"' in compose
+    assert "    build:" in compose
+    assert "dockerfile: deploy/Dockerfile" in compose
+
+
 def test_unscripted_project_can_open_without_using_global_selection(client):
     workspace = make_workspace()
     scripted_outline, _, _ = make_project(workspace, "scripted", "Scripted")

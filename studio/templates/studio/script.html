@@ -20,8 +20,8 @@
   <section class="hero-panel compact-hero">
     <div>
       <p class="eyebrow">Step 2 / 3</p>
-      <h2>按集管理剧本与角色资产</h2>
-      <p class="hero-copy">剧本详情通过弹框查看；角色 Prompt 和原图作为整部作品的一致性资产统一维护。</p>
+      <h2>按集管理剧本与视觉资产</h2>
+      <p class="hero-copy">统一维护剧本、角色与封面母版，确保整部作品的叙事和视觉一致。</p>
     </div>
     {% if workspace and selected_outline %}
       <form method="post" action="{% url 'studio:generate_script' workspace.id %}" data-submit-guard>
@@ -49,7 +49,12 @@
     <a href="?view=characters" {% if script_view == "characters" %}aria-current="page"{% endif %}>
       <strong>角色资产</strong><span>{{ workspace.characters|length }} 个角色</span>
     </a>
+    <a href="?view=covers" {% if script_view == "covers" %}aria-current="page"{% endif %}>
+      <strong>封面母版</strong><span>{% if workspace.cover_template %}v{{ workspace.cover_template.version }}{% else %}待生成{% endif %}</span>
+    </a>
   </nav>
+
+  {% if script_view == "covers" %}{% include "studio/_covers.html" %}{% endif %}
 
   {% if script_view == "characters" %}
 
@@ -171,7 +176,17 @@
               <div class="modal-scrim" data-modal-close></div>
               <section class="modal-panel script-modal-panel" role="dialog" aria-modal="true" aria-labelledby="episode-title-{{ episode.episode }}">
                 <div class="modal-head"><div><p class="eyebrow">Episode {{ episode.episode }}</p><h3 id="episode-title-{{ episode.episode }}">第 {{ episode.episode }} 集 · {{ episode.title }}</h3></div><button class="icon-button" type="button" data-modal-close aria-label="关闭剧本"><span aria-hidden="true">&times;</span></button></div>
-                <dl class="three-column-list"><div><dt>摘要</dt><dd>{{ episode.summary }}</dd></div><div><dt>冲突</dt><dd>{{ episode.key_conflict }}</dd></div><div><dt>悬念</dt><dd>{{ episode.cliffhanger }}</dd></div></dl>
+                <dl class="three-column-list">
+                  <div><dt>摘要</dt><dd>{{ episode.summary }}</dd></div><div><dt>冲突</dt><dd>{{ episode.key_conflict }}</dd></div><div><dt>悬念</dt><dd>{{ episode.cliffhanger }}</dd></div>
+                  {% if episode.episode_goal %}<div><dt>本集目标</dt><dd>{{ episode.episode_goal }}</dd></div>{% endif %}
+                  {% if episode.obstacle_1 %}<div><dt>第一次阻碍</dt><dd>{{ episode.obstacle_1 }}</dd></div>{% endif %}
+                  {% if episode.obstacle_2 %}<div><dt>第二次阻碍</dt><dd>{{ episode.obstacle_2 }}</dd></div>{% endif %}
+                  {% if episode.resolution_or_reversal %}<div><dt>解决 / 反转</dt><dd>{{ episode.resolution_or_reversal }}</dd></div>{% endif %}
+                  {% if episode.next_crisis %}<div><dt>下集危机</dt><dd>{{ episode.next_crisis }}</dd></div>{% endif %}
+                </dl>
+                {% if episode.pacing_payload %}
+                  <p class="hero-copy">节奏校验：{{ episode.pacing_payload.duration_seconds }} 秒 · {{ episode.pacing_payload.information_beats|length }} 个信息点</p>
+                {% endif %}
                 <pre class="script-block modal-script">{{ episode.full_script }}</pre>
                 <div class="modal-actions"><form method="post" action="{% url 'studio:generate_episode_script' workspace.id episode.episode %}" data-submit-guard>{% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}"><button class="secondary-button" type="submit">重新生成</button></form><a class="primary-button" href="{% url 'studio:storyboard_script_episode' workspace.id workspace.script_id episode.episode %}">进入分镜</a></div>
               </section>

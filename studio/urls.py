@@ -1,6 +1,6 @@
 from django.urls import include, path
 
-from . import video_views, views
+from . import cover_views, video_views, views
 
 
 app_name = "studio"
@@ -58,6 +58,21 @@ urlpatterns = [
         "script/<str:workspace_id>/characters/<int:character_id>/image/download/",
         views.download_character_image_view,
         name="download_character_image",
+    ),
+    path(
+        "script/<str:workspace_id>/covers/generate/",
+        cover_views.generate_cover_view,
+        name="generate_cover",
+    ),
+    path(
+        "script/<str:workspace_id>/covers/episode/<int:episode_number>/",
+        cover_views.update_episode_cover_view,
+        name="update_episode_cover",
+    ),
+    path(
+        "script/<str:workspace_id>/covers/episode/<int:episode_number>/download/",
+        cover_views.download_episode_cover_view,
+        name="download_episode_cover",
     ),
     path("tasks/<int:task_id>/", views.task_status_view, name="task_status"),
     path("storyboard/<str:workspace_id>/", views.storyboard_page, name="storyboard"),
@@ -137,6 +152,21 @@ urlpatterns = [
         "video/<str:workspace_id>/episode/<int:episode_number>/reorder/",
         video_views.reorder_video_shots_view,
         name="reorder_video_shots",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/subtitles/generate/",
+        video_views.generate_subtitles_view,
+        name="generate_subtitles",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/subtitles/save/",
+        video_views.save_subtitles_view,
+        name="save_subtitles",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/subtitles/download/",
+        video_views.download_subtitles_view,
+        name="download_subtitles",
     ),
     path(
         "video/<str:workspace_id>/episode/<int:episode_number>/export/",

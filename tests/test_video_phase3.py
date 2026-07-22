@@ -21,10 +21,21 @@ from studio.models import (
     ShotCharacterReference,
     StoryboardPrompt,
     StoryboardShot,
+    SubtitleTrack,
     VideoAsset,
     VideoComposition,
 )
 from studio.services.model_config import ensure_default_video_models, normalize_provider_origin
+from studio.services.subtitles import (
+    generate_subtitle_cues,
+    process_subtitle_task,
+    render_ass,
+    render_srt,
+    save_subtitle_track,
+    split_dialogue,
+    subtitle_snapshot,
+    subtitle_source_hash,
+)
 from studio.services.video import (
     effective_video_prompt,
     queue_episode_videos,
@@ -487,3 +498,247 @@ def test_video_status_does_not_resync_or_write(client, monkeypatch):
 
     assert response.status_code == 200
     assert calls == [False]
+
+def test_subtitle_generation_uses_storyboard_text_and_shot_offsets():
+    _, episode, storyboard = make_episode(with_character=False)
+    shots = sync_storyboard_shots(storyboard)
+    assets = []
+    for index, shot in enumerate(shots, start=1):
+        asset = VideoAsset.objects.create(
+            shot=shot,
+            version=1,
+            status=VideoAsset.STATUS_READY,
+            prompt_snapshot="prompt",
+            is_selected=True,
+        )
+        asset.video.save(f"subtitle-shot-{index}.mp4", ContentFile(b"not-a-real-video"))
+        assets.append(asset)
+
+    track = SubtitleTrack.objects.create(episode=episode)
+    generate_subtitle_cues(track, assets, source_hash="source-hash")
+
+    cues = list(track.cues.order_by("position"))
+    assert track.status == SubtitleTrack.STATUS_NEEDS_REVIEW
+    assert track.source_hash == "source-hash"
+    assert len(cues) == 2
+    assert all(cue.text for cue in cues)
+    assert cues[0].start_ms < cues[0].end_ms <= 6000
+    assert cues[1].start_ms >= 6000
+    assert all(cue.needs_review for cue in cues)
+
+
+def test_subtitle_renderers_emit_bottom_center_ass_and_srt():
+    snapshot = {
+        "style": {
+            "font_name": "Noto Sans CJK SC",
+            "font_size": 38,
+            "text_color": "#FFFFFF",
+            "outline_color": "#000000",
+            "outline_size": 3,
+            "margin_bottom": 92,
+        },
+        "cues": [
+            {"position": 1, "text": "first cue", "start_ms": 1200, "end_ms": 3400},
+        ],
+    }
+
+    srt = render_srt(snapshot)
+    ass = render_ass(snapshot)
+
+    assert "00:00:01,200 --> 00:00:03,400" in srt
+    assert "Alignment" in ass
+    assert ",2,46,46,92,1" in ass
+    assert "Dialogue: 0,0:00:01.20,0:00:03.40" in ass
+
+
+def test_subtitle_save_rejects_overlapping_cues():
+    _, episode, storyboard = make_episode(with_character=False)
+    shots = sync_storyboard_shots(storyboard)
+    track = SubtitleTrack.objects.create(episode=episode)
+    first = track.cues.create(
+        shot=shots[0],
+        position=1,
+        source_text="first",
+        text="first",
+        start_ms=0,
+        end_ms=2000,
+    )
+    second = track.cues.create(
+        shot=shots[1],
+        position=2,
+        source_text="second",
+        text="second",
+        start_ms=2200,
+        end_ms=4000,
+    )
+
+    with pytest.raises(ValueError):
+        save_subtitle_track(
+            track,
+            enabled=True,
+            global_offset_ms=0,
+            style={},
+            cues=[
+                {"id": first.id, "text": first.text, "start_ms": 0, "end_ms": 2500, "reviewed": True},
+                {"id": second.id, "text": second.text, "start_ms": 2400, "end_ms": 4000, "reviewed": True},
+            ],
+        )
+
+
+def test_subtitle_snapshot_applies_global_offset():
+    _, episode, storyboard = make_episode(with_character=False)
+    shot = sync_storyboard_shots(storyboard)[0]
+    track = SubtitleTrack.objects.create(episode=episode, global_offset_ms=-200)
+    track.cues.create(
+        shot=shot,
+        position=1,
+        source_text="start",
+        text="start",
+        start_ms=100,
+        end_ms=1000,
+    )
+
+    snapshot = subtitle_snapshot(track)
+
+    assert snapshot["cues"][0]["start_ms"] == 0
+    assert snapshot["cues"][0]["end_ms"] == 800
+
+
+def test_split_dialogue_removes_speaker_and_limits_line_length():
+    text = "\u6797\u9ed8\uff1a\u8fd9\u662f\u4e00\u53e5\u5f88\u957f\u5f88\u957f\u9700\u8981\u81ea\u52a8\u62c6\u5206\u7684\u4e2d\u6587\u5b57\u5e55\uff0c\u968f\u540e\u7ee7\u7eed\u524d\u8fdb\u3002"
+    parts = split_dialogue(text)
+
+    assert parts
+    assert not parts[0].startswith("\u6797\u9ed8")
+    assert all(len(part) <= 18 for part in parts)
+
+
+def test_queue_export_snapshots_enabled_subtitles():
+    _, episode, storyboard = make_episode(with_character=False)
+    shots = sync_storyboard_shots(storyboard)
+    for index, shot in enumerate(shots, start=1):
+        asset = VideoAsset.objects.create(
+            shot=shot,
+            version=1,
+            status=VideoAsset.STATUS_READY,
+            prompt_snapshot="prompt",
+            is_selected=True,
+        )
+        asset.video.save(f"queue-subtitle-{index}.mp4", ContentFile(b"video"))
+
+    track = SubtitleTrack.objects.create(
+        episode=episode,
+        enabled=True,
+        status=SubtitleTrack.STATUS_NEEDS_REVIEW,
+    )
+    track.cues.create(
+        shot=shots[0],
+        position=1,
+        source_text="caption",
+        text="caption",
+        start_ms=200,
+        end_ms=1200,
+    )
+    track.source_hash = subtitle_source_hash(episode)
+    track.save(update_fields=["source_hash"])
+
+    task, created = queue_export(episode)
+    composition = VideoComposition.objects.get(pk=task.target_id)
+
+    assert created is True
+    assert composition.include_subtitles is True
+    assert composition.subtitle_snapshot["cues"][0]["text"] == "caption"
+    assert task.input_snapshot["include_subtitles"] is True
+
+
+def test_ffmpeg_export_burns_ass_when_subtitles_are_enabled(tmp_path, monkeypatch):
+    source = tmp_path / "shot.mp4"
+    source.write_bytes(b"source")
+    asset = SimpleNamespace(
+        video=SimpleNamespace(path=str(source)),
+        shot=SimpleNamespace(duration_seconds=6),
+    )
+    commands = []
+
+    monkeypatch.setattr("studio.services.video.shutil.which", lambda name: name)
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if command[0] == "ffprobe":
+            return SimpleNamespace(stdout="0\n")
+        Path(command[-1]).write_bytes(b"exported-video")
+        return SimpleNamespace(stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("studio.services.video.subprocess.run", fake_run)
+    snapshot = {
+        "style": {},
+        "cues": [{"position": 1, "text": "caption", "start_ms": 0, "end_ms": 1000}],
+    }
+
+    content = _ffmpeg_concat([asset], subtitle_snapshot=snapshot)
+
+    burn_command = next(command for command in commands if "ass=subtitles.ass" in command)
+    assert content == b"exported-video"
+    assert burn_command[burn_command.index("-c:a") + 1] == "copy"
+
+
+def test_subtitle_generate_save_and_download_views(client):
+    project, episode, storyboard = make_episode(with_character=False)
+    shots = sync_storyboard_shots(storyboard)
+    for index, shot in enumerate(shots, start=1):
+        asset = VideoAsset.objects.create(
+            shot=shot,
+            version=1,
+            status=VideoAsset.STATUS_READY,
+            prompt_snapshot="prompt",
+            is_selected=True,
+        )
+        asset.video.save(f"view-subtitle-{index}.mp4", ContentFile(b"video"))
+
+    generate_response = client.post(
+        reverse("studio:generate_subtitles", args=[project.workspace_id, 1])
+    )
+
+    assert generate_response.status_code == 302
+    assert "subtitle=1" in generate_response.url
+    track = SubtitleTrack.objects.get(episode=episode)
+    assert track.status == SubtitleTrack.STATUS_ALIGNING
+    task = GenerationTask.objects.get(task_type=GenerationTask.TYPE_SUBTITLE_ALIGN)
+    process_subtitle_task(task.id)
+    track.refresh_from_db()
+    cues = list(track.cues.order_by("position"))
+    assert cues
+
+    payload = {
+        "enabled": "1",
+        "global_offset_ms": "100",
+        "font_name": "Noto Sans CJK SC",
+        "font_size": "38",
+        "text_color": "#FFFFFF",
+        "outline_color": "#000000",
+        "outline_size": "3",
+        "margin_bottom": "92",
+        "action": "confirm_all",
+        "cue_id": [str(cue.id) for cue in cues],
+    }
+    for cue in cues:
+        payload[f"cue_text_{cue.id}"] = cue.text
+        payload[f"cue_start_{cue.id}"] = f"{cue.start_ms / 1000:.2f}"
+        payload[f"cue_end_{cue.id}"] = f"{cue.end_ms / 1000:.2f}"
+
+    save_response = client.post(
+        reverse("studio:save_subtitles", args=[project.workspace_id, 1]),
+        payload,
+    )
+
+    assert save_response.status_code == 302
+    track.refresh_from_db()
+    assert track.status == SubtitleTrack.STATUS_CONFIRMED
+    assert track.global_offset_ms == 100
+
+    download_response = client.get(
+        reverse("studio:download_subtitles", args=[project.workspace_id, 1])
+    )
+    assert download_response.status_code == 200
+    assert "application/x-subrip" in download_response["Content-Type"]
+    assert "-->" in download_response.content.decode("utf-8")

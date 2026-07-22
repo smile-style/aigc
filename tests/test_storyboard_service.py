@@ -1,9 +1,15 @@
 ﻿import pytest
 
-from studio.constants import MAX_STORYBOARD_SHOTS, MIN_STORYBOARD_SHOTS
+from studio.constants import (
+    EPISODE_DURATION_TARGET_SECONDS,
+    MAX_STORYBOARD_SHOTS,
+    MIN_STORYBOARD_SHOTS,
+)
 from studio.services.storyboard import (
+    MIN_SHOT_DURATION_SECONDS,
     REQUIRED_STORYBOARD_FIELDS,
     generate_storyboard,
+    normalize_duration_seconds,
     validate_storyboard_payload,
 )
 
@@ -23,7 +29,8 @@ class FakeProvider:
 def make_shot(index):
     return {
         "shot_number": index,
-        "duration": f"{index + 2}秒",
+        "duration": "5秒",
+        "duration_seconds": 5,
         "visual_description": f"分镜画面描述 {index}",
         "character_action": f"角色动作 {index}",
         "dialogue_or_narration": f"台词或旁白 {index}",
@@ -34,7 +41,13 @@ def make_shot(index):
 
 
 def make_payload(count=MIN_STORYBOARD_SHOTS):
-    return {"storyboard_prompts": [make_shot(i) for i in range(1, count + 1)]}
+    shots = [make_shot(i) for i in range(1, count + 1)]
+    base_duration, remainder = divmod(EPISODE_DURATION_TARGET_SECONDS, count)
+    for index, shot in enumerate(shots):
+        duration = base_duration + (1 if index < remainder else 0)
+        shot["duration"] = f"{duration}秒"
+        shot["duration_seconds"] = duration
+    return {"storyboard_prompts": shots}
 
 
 def test_generate_storyboard_returns_valid_shots():
@@ -52,6 +65,9 @@ def test_generate_storyboard_returns_valid_shots():
         assert field in prompt
     assert "image_prompt" in prompt
     assert "video_prompt" in prompt
+    assert "60 到 300 秒" in prompt
+    assert "自然总时长 120 秒" in prompt
+    assert "4 到 15" in prompt
     assert provider.temperature == 0.6
 
 
@@ -147,3 +163,32 @@ def test_validate_storyboard_payload_rejects_wrong_shot_number_sequence():
 
     with pytest.raises(ValueError, match="shot_number must equal 1"):
         validate_storyboard_payload(payload)
+
+
+def test_validate_storyboard_payload_rejects_total_duration_outside_range():
+    payload = make_payload()
+    for shot in payload["storyboard_prompts"]:
+        shot["duration"] = f"{MIN_SHOT_DURATION_SECONDS}秒"
+        shot["duration_seconds"] = MIN_SHOT_DURATION_SECONDS
+
+    with pytest.raises(ValueError, match="总时长|duration"):
+        validate_storyboard_payload(payload)
+
+
+def test_validate_storyboard_payload_matches_expected_duration():
+    with pytest.raises(ValueError, match="120"):
+        validate_storyboard_payload(make_payload(), expected_duration_seconds=110)
+
+
+def test_normalize_duration_rejects_clips_shorter_than_seedance_minimum():
+    with pytest.raises(ValueError, match="4 到 15"):
+        normalize_duration_seconds(3, 1)
+
+
+def test_validate_storyboard_payload_accepts_content_driven_duration():
+    prompts = validate_storyboard_payload(
+        make_payload(),
+        expected_duration_seconds=120,
+    )
+
+    assert sum(item["duration_seconds"] for item in prompts) == 120

@@ -1,6 +1,9 @@
+import base64
 import math
+import mimetypes
 from pathlib import PurePosixPath
 
+from django.core.files.storage import default_storage
 
 from studio.publishing.base import SubmissionResult, UploadResult
 from studio.publishing.errors import PublishingOutcomeUnknown, PublishingRetryableError, PublishingValidationError
@@ -10,6 +13,7 @@ from .client import BilibiliClient
 
 class BilibiliUploader:
     PREUPLOAD_URL = "https://member.bilibili.com/preupload"
+    COVER_UPLOAD_URL = "https://member.bilibili.com/x/vu/web/cover/up"
     SUBMIT_URL = "https://member.bilibili.com/x/vu/web/add/v3"
     VIEW_URL = "https://api.bilibili.com/x/web-interface/view"
 
@@ -89,21 +93,22 @@ class BilibiliUploader:
         csrf = credentials.get("bili_jct")
         if not csrf:
             raise PublishingValidationError("登录凭据缺少 bili_jct，请重新登录。", code="missing_csrf")
-        payload = {
-            "copyright": metadata["copyright"],
-            "source": metadata.get("source", ""),
-            "tid": metadata["tid"],
-            "cover": metadata.get("cover", ""),
-            "title": metadata["title"],
-            "desc_format_id": 0,
-            "desc": metadata.get("description", ""),
-            "dynamic": metadata.get("dynamic", ""),
-            "tag": ",".join(metadata.get("tags") or []),
-            "subtitle": {"open": 0, "lan": ""},
-            "videos": [{"filename": upload_result.media_id, "title": metadata["title"], "desc": ""}],
-        }
         client = BilibiliClient(credentials)
         try:
+            cover_url = self._upload_cover(metadata.get("cover", ""), csrf, client)
+            payload = {
+                "copyright": metadata["copyright"],
+                "source": metadata.get("source", ""),
+                "tid": metadata["tid"],
+                "cover": cover_url,
+                "title": metadata["title"],
+                "desc_format_id": 0,
+                "desc": metadata.get("description", ""),
+                "dynamic": metadata.get("dynamic", ""),
+                "tag": ",".join(metadata.get("tags") or []),
+                "subtitle": {"open": 0, "lan": ""},
+                "videos": [{"filename": upload_result.media_id, "title": metadata["title"], "desc": ""}],
+            }
             try:
                 data, raw = client.checked_data("POST", self.SUBMIT_URL, params={"csrf": csrf}, json=payload)
             except PublishingRetryableError as exc:
@@ -118,6 +123,33 @@ class BilibiliUploader:
             raise PublishingOutcomeUnknown("Bilibili 接受了请求，但没有返回稿件 ID。")
         url = f"https://www.bilibili.com/video/{bvid}" if bvid else f"https://www.bilibili.com/video/av{aid}"
         return SubmissionResult(remote_video_id=remote_id, remote_url=url, payload=raw)
+
+    def _upload_cover(self, cover, csrf, client):
+        cover = str(cover or "").strip()
+        if not cover or cover.startswith(("http://", "https://")):
+            return cover
+        try:
+            with default_storage.open(cover, "rb") as source:
+                content = source.read()
+        except (OSError, FileNotFoundError) as exc:
+            raise PublishingValidationError(
+                "单集封面文件不存在，请重新生成封面。",
+                code="missing_cover",
+            ) from exc
+        mime_type = mimetypes.guess_type(cover)[0] or "image/jpeg"
+        encoded = base64.b64encode(content).decode("ascii")
+        data, _ = client.checked_data(
+            "POST",
+            self.COVER_UPLOAD_URL,
+            data={
+                "cover": f"data:{mime_type};base64,{encoded}",
+                "csrf": csrf,
+            },
+        )
+        cover_url = str((data or {}).get("url") or "").strip()
+        if not cover_url:
+            raise PublishingValidationError("Bilibili 未返回封面地址。")
+        return cover_url
 
     def query_submission(self, remote_video_id, credentials):
         if not remote_video_id:

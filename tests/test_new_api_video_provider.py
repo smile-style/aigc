@@ -44,6 +44,24 @@ def test_submit_prompt_only_omits_images():
     assert submission.task_id == "task-1"
 
 
+def test_seedance_clamps_short_duration_to_four_seconds():
+    submitted_seconds = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        submitted_seconds.append(payload["seconds"])
+        return httpx.Response(200, json={"task_id": f"task-{len(submitted_seconds)}"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = NewApiVideoProvider(model_config(), "secret", client=client)
+
+    provider.submit_video("prompt", parameters={"duration": 2})
+    provider.submit_video("prompt", parameters={"duration": 3})
+    provider.submit_video("prompt", parameters={"duration": 4})
+
+    assert submitted_seconds == ["4", "4", "4"]
+
+
 def test_submit_with_reference_images_uses_data_uris(tmp_path):
     image_path = tmp_path / "character.png"
     image_path.write_bytes(b"image")

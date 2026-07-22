@@ -4,6 +4,8 @@ import httpx
 import pytest
 from django.core.files.base import ContentFile
 
+from django.core.files.storage import default_storage
+from django.test import override_settings
 from studio.publishing.errors import PublishingOutcomeUnknown, PublishingValidationError
 from studio.publishing.platforms.bilibili.check import BilibiliChecker
 from studio.publishing.platforms.bilibili.login import BilibiliLogin
@@ -103,3 +105,41 @@ def test_submit_timeout_is_not_treated_as_normal_retry(monkeypatch):
             {"title": "Title", "tid": 21, "copyright": 1, "tags": []},
             {"bili_jct": "csrf"},
         )
+
+
+def test_submit_uploads_local_cover_before_creating_submission(tmp_path, monkeypatch):
+    calls = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def checked_data(self, method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            if url == BilibiliUploader.COVER_UPLOAD_URL:
+                return {"url": "https://i.example.com/cover.jpg"}, {"code": 0}
+            return {"bvid": "BV1COVER"}, {"code": 0, "data": {"bvid": "BV1COVER"}}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("studio.publishing.platforms.bilibili.upload.BilibiliClient", FakeClient)
+    with override_settings(MEDIA_ROOT=tmp_path):
+        cover_name = default_storage.save("covers/episode-1.jpg", ContentFile(b"jpeg-cover"))
+        result = BilibiliUploader().submit(
+            SimpleNamespace(media_id="media-id"),
+            {
+                "title": "Title",
+                "tid": 21,
+                "copyright": 1,
+                "tags": [],
+                "cover": cover_name,
+            },
+            {"bili_jct": "csrf"},
+        )
+
+    assert result.remote_video_id == "BV1COVER"
+    cover_call, submit_call = calls
+    assert cover_call[1] == BilibiliUploader.COVER_UPLOAD_URL
+    assert cover_call[2]["data"]["cover"].startswith("data:image/jpeg;base64,")
+    assert submit_call[2]["json"]["cover"] == "https://i.example.com/cover.jpg"

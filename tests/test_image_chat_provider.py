@@ -66,3 +66,25 @@ def test_chat_completions_request_and_data_uri_response():
     assert request["json"]["messages"][0]["content"].startswith("character prompt")
     assert request["json"]["messages"][0]["content"].endswith("1024x1536")
     assert request["json"]["stream"] is False
+
+
+def test_generate_image_can_override_size_for_cover_assets():
+    encoded = base64.b64encode(b"wide-cover").decode("ascii")
+    client = FakeClient(
+        {"choices": [{"message": {"content": f"data:image/png;base64,{encoded}"}}]}
+    )
+    provider = ImageProvider(
+        ImageConfig(
+            base_url="https://example.test/v1",
+            api_key="key",
+            model="gpt-image-2",
+            endpoint="/chat/completions",
+            size="1024x1536",
+        ),
+        client=client,
+    )
+
+    provider.generate_image("wide cover prompt", size="1536x1024")
+
+    _, request = client.posts[0]
+    assert request["json"]["messages"][0]["content"].endswith("1536x1024")

@@ -44,10 +44,13 @@ def task_list_view(request):
 @require_POST
 def create_task_view(request):
     composition = get_object_or_404(
-        VideoComposition.objects.select_related("episode__script__outline"),
+        VideoComposition.objects.select_related(
+            "episode__script__outline", "episode__cover"
+        ),
         pk=request.POST.get("composition_id"),
     )
     account = get_object_or_404(PublishingAccount, pk=request.POST.get("account_id"))
+    cover = getattr(composition.episode, "cover", None)
     try:
         task, created = create_publishing_task(
             composition,
@@ -59,6 +62,7 @@ def create_task_view(request):
                 "tags": request.POST.get("tags"),
                 "copyright": request.POST.get("copyright"),
                 "source": request.POST.get("source"),
+                "cover": cover.image.name if cover and cover.image else "",
             },
             force_republish=request.POST.get("force_republish") == "1",
         )

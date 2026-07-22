@@ -13,7 +13,7 @@ document.addEventListener("DOMContentLoaded", () => {
           const node = workspace.querySelector(`[data-video-count="${key}"]`);
           if (node) node.textContent = String(value);
         }
-        const snapshot = JSON.stringify({ shots: payload.shots, composition: payload.composition_status });
+        const snapshot = JSON.stringify({ shots: payload.shots, composition: payload.composition_status, subtitle: payload.subtitle });
         if (lastSnapshot && snapshot !== lastSnapshot) window.location.reload();
         lastSnapshot = snapshot;
       } catch (error) {
@@ -65,4 +65,86 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   }
+
+  const subtitleForm = document.querySelector("[data-subtitle-form]");
+  if (subtitleForm instanceof HTMLFormElement) {
+    const previewStage = subtitleForm.querySelector("[data-subtitle-preview-stage]");
+    const previewVideo = subtitleForm.querySelector("[data-subtitle-preview]");
+    const previewText = subtitleForm.querySelector("[data-subtitle-preview-text]");
+    const offsetInput = subtitleForm.elements.namedItem("global_offset_ms");
+
+    const updatePreviewText = (cue) => {
+      if (!(previewText instanceof HTMLElement) || !(cue instanceof HTMLElement)) return;
+      const text = cue.querySelector("[data-subtitle-text]");
+      previewText.textContent = text instanceof HTMLTextAreaElement ? text.value : "";
+    };
+
+    subtitleForm.querySelectorAll("[data-subtitle-preview-url]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const cue = button.closest("[data-subtitle-cue]");
+        updatePreviewText(cue);
+        if (!(previewVideo instanceof HTMLVideoElement) || !(previewStage instanceof HTMLElement)) return;
+        const source = button.dataset.subtitlePreviewUrl;
+        if (!source) return;
+        const seek = Number(button.dataset.subtitlePreviewStart || 0);
+        const playFromCue = () => {
+          previewVideo.currentTime = Math.min(
+            Math.max(0, seek),
+            Number.isFinite(previewVideo.duration) ? previewVideo.duration : seek
+          );
+          previewVideo.play().catch(() => {});
+        };
+        previewStage.classList.add("has-video");
+        if (previewVideo.getAttribute("src") !== source) {
+          previewVideo.src = source;
+          previewVideo.addEventListener("loadedmetadata", playFromCue, { once: true });
+          previewVideo.load();
+        } else {
+          playFromCue();
+        }
+      });
+    });
+
+    subtitleForm.querySelectorAll("[data-subtitle-text]").forEach((textarea) => {
+      const cue = textarea.closest("[data-subtitle-cue]");
+      textarea.addEventListener("focus", () => updatePreviewText(cue));
+      textarea.addEventListener("input", () => updatePreviewText(cue));
+    });
+
+    subtitleForm.querySelectorAll("[data-subtitle-shift]").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (!(offsetInput instanceof HTMLInputElement)) return;
+        const next = Number(offsetInput.value || 0) + Number(button.dataset.subtitleShift || 0);
+        offsetInput.value = String(Math.max(-10000, Math.min(10000, next)));
+      });
+    });
+
+    subtitleForm.querySelectorAll("[data-subtitle-style]").forEach((input) => {
+      input.addEventListener("input", () => {
+        if (!(previewText instanceof HTMLElement) || !(input instanceof HTMLInputElement)) return;
+        const property = input.dataset.subtitleStyle;
+        if (property === "fontSize") previewText.style.fontSize = `${input.value}px`;
+        if (property === "color") previewText.style.color = input.value;
+        if (property === "outlineColor") previewText.style.webkitTextStrokeColor = input.value;
+        if (property === "outlineWidth") previewText.style.webkitTextStrokeWidth = `${input.value}px`;
+        if (property === "bottom") previewText.style.bottom = `${input.value}px`;
+      });
+    });
+  }
+
+  const subtitleEditor = document.getElementById("subtitle-editor");
+  const exportButton = document.querySelector('.export-actions form[action*="/export/"] .primary-button');
+  const subtitleToggle = document.querySelector('#subtitle-editor input[name="enabled"]');
+  if (subtitleEditor instanceof HTMLElement && exportButton instanceof HTMLButtonElement) {
+    const subtitlesEnabled = subtitleToggle instanceof HTMLInputElement && subtitleToggle.checked;
+    const hasComposition = document.querySelector('.export-actions > a[href*="/download/"]') !== null;
+    if (subtitlesEnabled) {
+      exportButton.textContent = hasComposition
+        ? "\u91cd\u65b0\u5bfc\u51fa\u5b57\u5e55\u6210\u7247"
+        : "\u5bfc\u51fa\u5b57\u5e55\u6210\u7247";
+    }
+    const subtitlesBlocked = subtitleEditor.querySelector(".subtitle-aligning-state, .subtitle-editor-alert");
+    if (subtitlesBlocked) exportButton.disabled = true;
+  }
+
 });

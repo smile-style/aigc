@@ -67,18 +67,135 @@
       </form>
       <div class="export-bar">
         <div><strong>成片导出</strong><p>保留原片声音，统一为 720 × 1280、H.264、AAC、25fps 后按当前顺序拼接。</p></div>
+        <p class="subtitle-export-summary" data-subtitle-summary>
+          <span>&#23383;&#24149;</span>
+          {% if not subtitle.track %}<strong>&#26410;&#29983;&#25104;</strong>
+          {% elif subtitle.track.status == 'aligning' %}<strong>&#33258;&#21160;&#23545;&#40784;&#20013;</strong>
+          {% elif subtitle.is_stale %}<strong class="is-warning">&#24050;&#36807;&#26399;</strong>
+          {% elif subtitle.track.enabled %}<strong>&#24050;&#24320;&#21551;</strong>
+          {% else %}<strong>&#24050;&#20851;&#38381;</strong>{% endif %}
+          {% if subtitle.track %}<span>{{ subtitle.cue_count }} &#26465; · {{ subtitle.review_count }} &#26465;&#24453;&#26657;&#23545;</span>{% endif %}
+        </p>
         {% if composition.status == 'exporting' %}
           <button class="primary-button" disabled>正在导出...</button>
         {% else %}
           <div class="export-actions">
             {% if composition.status == 'ready' and composition.video %}<a class="ghost-button" href="{% url 'studio:download_composition' workspace.id episode.episode_number %}?script_id={{ workspace.script_id }}">下载当前成片</a>{% endif %}
             {% if composition.status == 'ready' and composition.video and publishing_accounts %}<button class="secondary-button" type="button" data-modal-target="publish-composition-{{ composition.id }}">发布</button>{% endif %}
+            <button class="secondary-button" type="button" data-modal-target="subtitle-editor">&#23383;&#24149;&#35774;&#32622;</button>
             <form method="post" action="{% url 'studio:export_video' workspace.id episode.episode_number %}" data-submit-guard>
               {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
               <button class="primary-button" type="submit" data-loading-text="提交导出中..." {% if counts.ready != counts.total or not counts.total %}disabled{% endif %}>{% if composition.status == 'ready' %}重新导出{% else %}拼接并导出{% endif %}</button>
             </form>
           </div>
         {% endif %}
+      </div>
+      <div class="detail-modal" id="subtitle-editor" role="dialog" aria-modal="true" aria-labelledby="subtitle-editor-title" {% if subtitle_auto_open %}data-auto-open{% endif %} hidden>
+        <div class="detail-backdrop" data-modal-close></div>
+        <section class="detail-panel subtitle-editor-dialog">
+          <button class="modal-close" type="button" data-modal-close aria-label="&#20851;&#38381;">&times;</button>
+          <header class="subtitle-editor-head">
+            <div>
+              <p class="eyebrow">Captions</p>
+              <h2 id="subtitle-editor-title">&#23383;&#24149;&#35774;&#32622;</h2>
+              {% if subtitle.track %}
+                <p class="subtitle-editor-meta">{{ subtitle.cue_count }} &#26465;&#23383;&#24149; · {{ subtitle.review_count }} &#26465;&#24453;&#26657;&#23545;</p>
+              {% endif %}
+            </div>
+            <div class="subtitle-editor-head-actions">
+              {% if subtitle.track and subtitle.cues %}
+                <a class="ghost-button" href="{% url 'studio:download_subtitles' workspace.id episode.episode_number %}?script_id={{ workspace.script_id }}">&#19979;&#36733; SRT</a>
+              {% endif %}
+              {% if subtitle.track %}
+              <form method="post" action="{% url 'studio:generate_subtitles' workspace.id episode.episode_number %}" data-submit-guard>
+                {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+                <button class="secondary-button" type="submit" data-loading-text="&#23545;&#40784;&#20013;..." {% if subtitle.track.status == 'aligning' or counts.ready != counts.total or not counts.total %}disabled{% endif %}>
+                  {% if subtitle.track %}&#37325;&#26032;&#33258;&#21160;&#23545;&#40784;{% else %}&#29983;&#25104;&#23383;&#24149;{% endif %}
+                </button>
+              </form>
+              {% endif %}
+            </div>
+          </header>
+
+          {% if subtitle.is_stale %}
+            <div class="task-status is-error subtitle-editor-alert" role="alert"><span class="task-indicator" aria-hidden="true"></span><div><strong>&#23383;&#24149;&#38656;&#35201;&#37325;&#26032;&#23545;&#40784;</strong><p>&#38236;&#22836;&#12289;&#39034;&#24207;&#25110;&#21488;&#35789;&#24050;&#32463;&#21464;&#21270;&#12290;</p></div></div>
+          {% endif %}
+          {% if subtitle.track.status == 'failed' %}
+            <div class="task-status is-error subtitle-editor-alert" role="alert"><span class="task-indicator" aria-hidden="true"></span><div><strong>&#23383;&#24149;&#29983;&#25104;&#22833;&#36133;</strong><p>{{ subtitle.track.error_message }}</p></div></div>
+          {% endif %}
+
+          {% if subtitle.track.status == 'aligning' %}
+            <div class="subtitle-aligning-state" role="status"><span class="task-indicator" aria-hidden="true"></span><strong>&#27491;&#22312;&#20998;&#26512;&#38236;&#22836;&#35821;&#38899;&#24182;&#29983;&#25104;&#26102;&#38388;&#36724;</strong></div>
+          {% elif subtitle.track and subtitle.cues %}
+            <form class="subtitle-editor-form" method="post" action="{% url 'studio:save_subtitles' workspace.id episode.episode_number %}" data-subtitle-form data-submit-guard>
+              {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+              <div class="subtitle-editor-controls">
+                <label class="subtitle-toggle">
+                  <input type="checkbox" name="enabled" value="1" {% if subtitle.track.enabled %}checked{% endif %}>
+                  <span>&#24320;&#21551;&#23383;&#24149;</span>
+                </label>
+                <div class="subtitle-offset-control">
+                  <label for="subtitle-global-offset">&#25972;&#20307;&#20559;&#31227;</label>
+                  <button type="button" class="ghost-button" data-subtitle-shift="-500">-0.5s</button>
+                  <button type="button" class="ghost-button" data-subtitle-shift="-100">-0.1s</button>
+                  <input id="subtitle-global-offset" name="global_offset_ms" type="number" step="100" min="-10000" max="10000" value="{{ subtitle.track.global_offset_ms }}">
+                  <button type="button" class="ghost-button" data-subtitle-shift="100">+0.1s</button>
+                  <button type="button" class="ghost-button" data-subtitle-shift="500">+0.5s</button>
+                </div>
+              </div>
+
+              <div class="subtitle-editor-layout">
+                <aside class="subtitle-preview-pane">
+                  <div class="subtitle-preview-stage" data-subtitle-preview-stage>
+                    <video controls preload="metadata" data-subtitle-preview></video>
+                    <p data-subtitle-preview-empty>&#26242;&#26080;&#38236;&#22836;&#39044;&#35272;</p>
+                    <div class="subtitle-preview-text" data-subtitle-preview-text style="font-size: {{ subtitle.style.font_size }}px; color: {{ subtitle.style.text_color }}; -webkit-text-stroke-color: {{ subtitle.style.outline_color }}; -webkit-text-stroke-width: {{ subtitle.style.outline_size }}px; bottom: {{ subtitle.style.margin_bottom }}px;"></div>
+                  </div>
+                  <div class="subtitle-style-grid">
+                    <label>&#23383;&#20307;<input name="font_name" value="{{ subtitle.style.font_name }}" maxlength="120"></label>
+                    <label>&#23383;&#21495;<input name="font_size" type="number" min="24" max="64" value="{{ subtitle.style.font_size }}" data-subtitle-style="fontSize"></label>
+                    <label>&#23383;&#33394;<input name="text_color" type="color" value="{{ subtitle.style.text_color }}" data-subtitle-style="color"></label>
+                    <label>&#25551;&#36793;<input name="outline_color" type="color" value="{{ subtitle.style.outline_color }}" data-subtitle-style="outlineColor"></label>
+                    <label>&#25551;&#36793;&#23485;&#24230;<input name="outline_size" type="number" min="0" max="8" value="{{ subtitle.style.outline_size }}" data-subtitle-style="outlineWidth"></label>
+                    <label>&#24213;&#37096;&#36317;&#31163;<input name="margin_bottom" type="number" min="40" max="260" value="{{ subtitle.style.margin_bottom }}" data-subtitle-style="bottom"></label>
+                  </div>
+                </aside>
+
+                <div class="subtitle-cue-list" aria-label="&#23383;&#24149;&#26465;&#30446;">
+                  {% for cue in subtitle.cues %}
+                    <article class="subtitle-cue-row {% if cue.needs_review %}needs-review{% endif %}" data-subtitle-cue>
+                      <input type="hidden" name="cue_id" value="{{ cue.id }}">
+                      <button class="subtitle-preview-button" type="button" aria-label="&#39044;&#35272;&#31532; {{ cue.position }} &#26465;&#23383;&#24149;" data-subtitle-preview-url="{{ cue.preview_url }}" data-subtitle-preview-start="{{ cue.preview_start_seconds }}">&#9654;</button>
+                      <div class="subtitle-cue-fields">
+                        <div class="subtitle-time-fields">
+                          <label>&#24320;&#22987;<input name="cue_start_{{ cue.id }}" type="number" min="0" step="0.01" value="{{ cue.start_seconds }}"></label>
+                          <label>&#32467;&#26463;<input name="cue_end_{{ cue.id }}" type="number" min="0" step="0.01" value="{{ cue.end_seconds }}"></label>
+                          <span class="subtitle-confidence {% if cue.needs_review %}is-warning{% endif %}">{{ cue.confidence_percent }}%</span>
+                        </div>
+                        <label class="subtitle-text-field"><span>&#23383;&#24149;&#25991;&#23383;</span><textarea name="cue_text_{{ cue.id }}" rows="2" maxlength="200" data-subtitle-text>{{ cue.text }}</textarea></label>
+                        {% if cue.recognized_text %}<details><summary>&#35821;&#38899;&#35782;&#21035;&#32467;&#26524;</summary><p>{{ cue.recognized_text }}</p></details>{% endif %}
+                      </div>
+                      <label class="subtitle-reviewed"><input type="checkbox" name="cue_reviewed_{{ cue.id }}" value="1" {% if not cue.needs_review %}checked{% endif %}><span>&#24050;&#26657;&#23545;</span></label>
+                    </article>
+                  {% endfor %}
+                </div>
+              </div>
+              <footer class="subtitle-editor-actions">
+                <button class="ghost-button" type="button" data-modal-close>&#21462;&#28040;</button>
+                <button class="secondary-button" type="submit" name="action" value="save" data-loading-text="&#20445;&#23384;&#20013;...">&#20445;&#23384;&#35774;&#32622;</button>
+                <button class="primary-button" type="submit" name="action" value="confirm_all" data-loading-text="&#30830;&#35748;&#20013;...">&#20445;&#23384;&#24182;&#20840;&#37096;&#30830;&#35748;</button>
+              </footer>
+            </form>
+          {% else %}
+            <div class="empty-state compact subtitle-empty-state">
+              <h2>&#23578;&#26410;&#29983;&#25104;&#23383;&#24149;</h2>
+              <form method="post" action="{% url 'studio:generate_subtitles' workspace.id episode.episode_number %}" data-submit-guard>
+                {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+                <button class="primary-button" type="submit" data-loading-text="&#29983;&#25104;&#20013;..." {% if counts.ready != counts.total or not counts.total %}disabled{% endif %}>&#29983;&#25104;&#23383;&#24149;</button>
+              </form>
+            </div>
+          {% endif %}
+        </section>
       </div>
       {% if composition.status == 'failed' %}<div class="task-status is-error" role="alert"><strong>导出失败</strong><p>{{ composition.error_message }}</p></div>{% endif %}
     </section>

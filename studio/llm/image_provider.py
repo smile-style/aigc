@@ -69,9 +69,10 @@ class ImageProvider:
     def from_env(cls, environ=None):
         return cls(ImageConfig.from_env(environ))
 
-    def generate_image(self, prompt):
+    def generate_image(self, prompt, size=None):
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("Image prompt must be a non-empty string")
+        requested_size = str(size or self.config.size).strip()
         url = f"{self.config.base_url}{self.config.endpoint}"
         if self.config.endpoint.endswith("/chat/completions"):
             payload = {
@@ -79,7 +80,7 @@ class ImageProvider:
                 "messages": [
                     {
                         "role": "user",
-                        "content": f"{prompt.strip()}\nRequested output size: {self.config.size}",
+                        "content": f"{prompt.strip()}\nRequested output size: {requested_size}",
                     }
                 ],
                 "stream": False,
@@ -89,7 +90,7 @@ class ImageProvider:
                 "model": self.config.model,
                 "prompt": prompt,
                 "n": 1,
-                "size": self.config.size,
+                "size": requested_size,
             }
         try:
             response = self._post_with_retry(

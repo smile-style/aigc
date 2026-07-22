@@ -32,6 +32,7 @@ def test_create_workspace_writes_default_structure():
     assert data["genre"] == GENRES[0]
     assert data["episode_count"] == 60
     assert data["episode_duration_minutes"] == 2
+    assert data["episode_duration_label"] == "内容自适应（约 1–5 分钟）"
     assert data["outlines"] == []
     assert data["selected_outline_id"] is None
     assert data["script_plan"] == []
@@ -113,3 +114,47 @@ def test_create_workspace_rejects_unknown_genre():
 
     with pytest.raises(ValueError, match="Unknown genre"):
         repo.create_workspace("unknown", workspace_id="bad")
+
+def test_script_pacing_and_plan_are_persisted_per_episode():
+    repo = WorkspaceRepository()
+    repo.create_workspace(GENRES[0], workspace_id="pacing-workspace")
+    repo.update_workspace("pacing-workspace", outlines=outline_payload("pacing"))
+    repo.update_workspace("pacing-workspace", selected_outline_id="pacing-1")
+    plan = [
+        {
+            "episode": 1,
+            "title": "危机开场",
+            "summary": "主角必须在限时内取回货款",
+            "key_conflict": "货款和仓库同时出事",
+            "cliffhanger": "灾难提前发生",
+            "episode_goal": "取回货款",
+            "obstacle_1": "钱不到账",
+            "obstacle_2": "仓库被抢",
+            "resolution_or_reversal": "追回货物却暴露位置",
+            "next_crisis": "灾难提前",
+        }
+    ]
+    pacing = {
+        "duration_seconds": 85,
+        "beats": [{"beat_type": "crisis_open"}],
+        "information_beats": [
+            {"at_second": 0, "information": "仓库遇袭", "consequence": "必须立即行动"}
+        ],
+        "profile_version": "short_drama_v1_85s",
+    }
+
+    saved = repo.save_script_for_outline(
+        "pacing-workspace",
+        "pacing-1",
+        plan,
+        "第 1 集完整剧本",
+        episode_1_pacing=pacing,
+    )
+
+    episode = saved["episodes"][0]
+    assert episode["episode_goal"] == "取回货款"
+    assert episode["obstacle_1"] == "钱不到账"
+    assert episode["obstacle_2"] == "仓库被抢"
+    assert episode["next_crisis"] == "灾难提前"
+    assert episode["pacing_payload"] == pacing
+    assert saved["episode_1_pacing"] == pacing

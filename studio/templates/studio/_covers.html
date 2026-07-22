@@ -1,0 +1,86 @@
+<section class="cover-workspace" aria-labelledby="cover-workspace-title">
+  <section class="surface-panel">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Cover Master</p>
+        <h2 id="cover-workspace-title">全剧封面母版</h2>
+      </div>
+      {% if workspace.cover_template %}
+        <span class="status-pill success">母版 v{{ workspace.cover_template.version }}</span>
+      {% endif %}
+    </div>
+
+    <div class="cover-master-layout">
+      <div class="cover-preview">
+        {% if workspace.cover_template %}
+          <img src="{{ workspace.cover_template.background_url }}" alt="{{ workspace.script_title }} 无字封面母版">
+        {% else %}
+          <div class="cover-preview-placeholder">等待生成 16:10 无字封面母版</div>
+        {% endif %}
+      </div>
+
+      <form class="cover-generator-form" method="post" action="{% url 'studio:generate_cover' workspace.id %}" data-submit-guard>
+        {% csrf_token %}
+        <input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+        <label class="field">
+          <span>封面底图 Prompt</span>
+          <textarea name="prompt" rows="7" required>{{ workspace.cover_prompt }}</textarea>
+        </label>
+        <button class="primary-button" type="submit" data-loading-text="提交生成中..." {% if workspace.cover_task.status == 'pending' or workspace.cover_task.status == 'running' %}disabled{% endif %}>
+          {% if workspace.cover_template %}重新生成母版{% else %}生成封面母版{% endif %}
+        </button>
+      </form>
+    </div>
+
+    {% with task=workspace.cover_task %}
+      {% if task.status == "pending" or task.status == "running" %}
+        <div class="task-status is-running" data-task-poller data-task-url="{% url 'studio:task_status' task.id %}" data-task-kind="cover-image" aria-live="polite">
+          <span class="task-indicator" aria-hidden="true"></span>
+          <div><strong data-task-label>正在生成封面母版</strong><p data-task-detail>完成后会自动为全部剧集排版封面。</p></div>
+        </div>
+      {% elif task.status == "failed" %}
+        <div class="task-status is-error" role="alert">
+          <span class="task-indicator" aria-hidden="true"></span>
+          <div><strong>封面母版生成失败</strong><p>{{ task.error_message }}</p></div>
+        </div>
+      {% endif %}
+    {% endwith %}
+  </section>
+
+  <section class="surface-panel">
+    <div class="section-head">
+      <div><p class="eyebrow">Episode Covers</p><h2>逐集封面标题</h2></div>
+      {% if workspace.cover_template %}<span class="status-pill">标题限制 6–10 字</span>{% endif %}
+    </div>
+
+    {% if workspace.cover_template %}
+      <div class="cover-episode-list">
+        {% for episode in workspace.episodes %}
+          <article class="cover-episode-row">
+            <div class="cover-episode-index">{{ episode.episode|stringformat:"02d" }}</div>
+            <div class="cover-episode-thumb">
+              {% if episode.cover_image_url %}
+                <img src="{{ episode.cover_image_url }}" alt="第 {{ episode.episode }} 集封面">
+              {% endif %}
+            </div>
+            <form class="cover-title-form" method="post" action="{% url 'studio:update_episode_cover' workspace.id episode.episode %}" data-submit-guard>
+              {% csrf_token %}
+              <input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+              <label>
+                <span>第 {{ episode.episode }} 集标题</span>
+                <input type="text" name="title" value="{{ episode.cover_title }}" minlength="6" maxlength="10" required>
+                <small class="cover-title-meta">{{ episode.title }}</small>
+              </label>
+              <button class="secondary-button small" type="submit">更新封面</button>
+            </form>
+            {% if episode.has_cover %}
+              <a class="secondary-link" href="{% url 'studio:download_episode_cover' workspace.id episode.episode %}?script_id={{ workspace.script_id }}">下载</a>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-state compact"><h2>先生成封面母版</h2><p>母版生成后，系统会为全部剧集自动生成标题派生图。</p></div>
+    {% endif %}
+  </section>
+</section>

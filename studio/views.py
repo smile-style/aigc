@@ -7,7 +7,12 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
-from .constants import EPISODE_COUNT, EPISODE_DURATION_MINUTES, GENRES
+from .constants import (
+    EPISODE_COUNT,
+    EPISODE_DURATION_LABEL,
+    EPISODE_DURATION_MINUTES,
+    GENRES,
+)
 from .llm.image_provider import ImageProvider
 from .llm.provider import (
     LLMAPIError,
@@ -18,6 +23,7 @@ from .llm.provider import (
 from .models import GenerationTask, ModelAssignment
 from .repositories.workspace import CURRENT_WORKSPACE_ID, WorkspaceRepository
 from .services.characters import apply_character_visual_style, generate_character_profiles
+from .services.covers import decorate_cover_workspace
 from .services.model_config import image_provider_for, llm_provider_for
 from .services.outline import generate_outlines
 from .services.script import generate_episode_script, generate_script
@@ -108,6 +114,7 @@ def script_library_page(request):
             "genre": "",
             "episode_count": EPISODE_COUNT,
             "episode_duration_minutes": EPISODE_DURATION_MINUTES,
+            "episode_duration_label": EPISODE_DURATION_LABEL,
             "usable_outlines": [],
         }
     return _render_script_library(request, data)
@@ -146,6 +153,7 @@ def generate_script_view(request, workspace_id):
                     "genre": "",
                     "episode_count": EPISODE_COUNT,
                     "episode_duration_minutes": EPISODE_DURATION_MINUTES,
+                    "episode_duration_label": EPISODE_DURATION_LABEL,
                     "usable_outlines": [],
                 }
             return _render_script_library(request, data, error=str(exc))
@@ -367,6 +375,7 @@ def task_status_view(request, task_id):
 
     if task["status"] == GenerationTask.STATUS_SUCCEEDED:
         script_id = None
+        route_name = None
         if task["task_type"] in {
             GenerationTask.TYPE_CHARACTER_PROFILE,
             GenerationTask.TYPE_CHARACTER_IMAGE,
@@ -382,8 +391,24 @@ def task_status_view(request, task_id):
                     f'{reverse("studio:script", args=[task["workspace_id"]])}'
                     "?view=characters"
                 )
+        elif task["task_type"] == GenerationTask.TYPE_COVER_IMAGE:
+            project_id = task["input_snapshot"].get("project_id")
+            if project_id:
+                task["result_url"] = request.build_absolute_uri(
+                    f'{reverse("studio:project_workbench", args=[project_id])}'
+                    "?view=covers"
+                )
+            else:
+                task["result_url"] = request.build_absolute_uri(
+                    f'{reverse("studio:script", args=[task["workspace_id"]])}'
+                    "?view=covers"
+                )
         elif task["task_type"] == GenerationTask.TYPE_STORYBOARD:
-            episode_number = int(task["input_snapshot"].get("episode_number") or task["target_id"] or 1)
+            episode_number = int(
+                task["input_snapshot"].get("episode_number")
+                or task["target_id"]
+                or 1
+            )
             script_id = task["input_snapshot"].get("script_id")
             route_name = (
                 "studio:storyboard_script_episode"
@@ -391,12 +416,18 @@ def task_status_view(request, task_id):
                 else "studio:storyboard_episode"
             )
         elif task["task_type"] == GenerationTask.TYPE_EPISODE_SCRIPT:
-            episode_number = int(task["input_snapshot"].get("episode") or task["target_id"] or 1)
+            episode_number = int(
+                task["input_snapshot"].get("episode")
+                or task["target_id"]
+                or 1
+            )
             script_id = task["input_snapshot"].get("script_id")
-            route_name = "studio:script_episode_context" if script_id else "studio:episode_script"
-        else:
-            route_name = None
-        if task["task_type"] not in {GenerationTask.TYPE_CHARACTER_PROFILE, GenerationTask.TYPE_CHARACTER_IMAGE} and route_name:
+            route_name = (
+                "studio:script_episode_context"
+                if script_id
+                else "studio:episode_script"
+            )
+        if route_name:
             args = [task["workspace_id"], episode_number]
             if script_id:
                 args = [task["workspace_id"], script_id, episode_number]
@@ -520,14 +551,26 @@ def _run_episode_script_generation(task_id):
             ),
             None,
         )
-        full_script = generate_episode_script(
+        generated = generate_episode_script(
             llm_provider_for(ModelAssignment.PURPOSE_EPISODE_SCRIPT),
             workspace["selected_outline"],
             episode,
             previous_episode=previous_episode,
             next_episode=next_episode,
         )
-        repository.save_episode_script(workspace_id, episode_number, full_script, script_id=script_id)
+        if isinstance(generated, dict):
+            full_script = generated["episode_script"]
+            pacing_payload = generated.get("pacing")
+        else:
+            full_script = generated
+            pacing_payload = None
+        repository.save_episode_script(
+            workspace_id,
+            episode_number,
+            full_script,
+            script_id=script_id,
+            pacing_payload=pacing_payload,
+        )
         repository.finish_task(task_id, result={"episode_number": episode_number})
     except Exception as exc:
         logger.exception("Episode script generation task %s failed", task_id)
@@ -568,10 +611,14 @@ def _run_storyboard_generation(task_id):
         episode_number = int(task["input_snapshot"].get("episode_number") or task["target_id"] or 1)
         script_id = task["input_snapshot"].get("script_id")
         episode = repository.get_episode(workspace_id, episode_number, script_id=script_id)
+        storyboard_kwargs = {}
+        if episode.get("pacing_payload"):
+            storyboard_kwargs["pacing"] = episode["pacing_payload"]
         prompts = generate_storyboard(
             llm_provider_for(ModelAssignment.PURPOSE_STORYBOARD),
             episode["full_script"],
             episode_number=episode_number,
+            **storyboard_kwargs,
         )
         repository.save_storyboard_for_episode(
             workspace_id,
@@ -620,6 +667,7 @@ def _run_script_generation(workspace_id, outline_id):
             outline_id,
             payload["script_plan"],
             payload["episode_1_script"],
+            episode_1_pacing=payload["episode_1_pacing"],
         )
     except EXPECTED_GENERATION_ERRORS as exc:
         logger.exception("Script generation failed for outline %s", outline_id)
@@ -641,6 +689,7 @@ def _render_outline(request, workspace=None, error=None, genre=None):
             "episode_count": EPISODE_COUNT,
             "episode_duration_minutes": EPISODE_DURATION_MINUTES,
             "workspace": workspace,
+            "episode_duration_label": EPISODE_DURATION_LABEL,
             "selected_genre": selected_genre,
             "error": error,
             "active_nav": "outline",
@@ -667,7 +716,8 @@ def _render_script(
     requested_view = script_view or request.GET.get("view", "episodes")
     if selected_episode is not None:
         requested_view = "episodes"
-    active_view = requested_view if requested_view in {"episodes", "characters"} else "episodes"
+    workspace = decorate_cover_workspace(workspace)
+    active_view = requested_view if requested_view in {"episodes", "characters", "covers"} else "episodes"
     return render(
         request,
         "studio/script.html",

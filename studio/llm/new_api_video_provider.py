@@ -12,6 +12,7 @@ class NewApiVideoProvider:
     CREATE_PATH = "/video/generations"
     TASK_PATH = "/video/generations/{task_id}"
     MAX_REFERENCE_IMAGES = 5
+    SEEDANCE_MIN_DURATION = 4
 
     def __init__(self, model_config, api_key, client=None):
         self.model_config = model_config
@@ -136,7 +137,14 @@ class NewApiVideoProvider:
     def _parameters(self, overrides):
         parameters = dict(self.model_config.default_parameters or {})
         parameters.update(overrides or {})
-        parameters["duration"] = max(2, min(15, int(parameters.get("duration", 5))))
+        minimum_duration = (
+            self.SEEDANCE_MIN_DURATION
+            if self.model_config.model_id.lower().startswith("doubao-seedance")
+            else 2
+        )
+        parameters["duration"] = max(
+            minimum_duration, min(15, int(parameters.get("duration", 5)))
+        )
         return parameters
 
     def _headers(self):
