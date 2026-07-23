@@ -6,10 +6,9 @@ The deployment directory has three independent areas:
 - `prod/`: production environment and production data paths.
 - `pre/`: pre-release environment and isolated pre-release data paths.
 
-Each runtime directory owns its `.env`, `db.sqlite3`, `media/`, and
-`workspace/`. Real environment files and runtime data are ignored by Git.
-The two environments use identical Compose files and the same `AIGC_IMAGE`.
-Their directory names, ports, and relative bind mounts keep runtime state
+Each runtime directory owns its `.env`, while runtime data is stored under
+`/data/aigc_data/prod` and `/data/aigc_data/pre`. The two environments use the
+same `AIGC_IMAGE`; their ports and absolute bind mounts keep runtime state
 isolated.
 
 ## Move existing production data
@@ -19,9 +18,10 @@ root, keep the old files as a backup and copy them into the new production
 directory:
 
 ```bash
-cp -a /data/aigc_data/db.sqlite3 deploy/prod/db.sqlite3
-rsync -a /data/aigc_data/media/ deploy/prod/media/
-rsync -a /data/aigc_data/workspace/ deploy/prod/workspace/
+mkdir -p /data/aigc_data/prod
+cp -a /data/aigc_data/db.sqlite3 /data/aigc_data/prod/db.sqlite3
+rsync -a /data/aigc_data/media/ /data/aigc_data/prod/media/
+rsync -a /data/aigc_data/workspace/ /data/aigc_data/prod/workspace/
 ```
 
 Move the old `deploy/.env` to `deploy/prod/.env`. Review `AIGC_IMAGE`,
@@ -34,14 +34,17 @@ Create the runtime files before starting Compose:
 
 ```bash
 cp deploy/prod/.env.example deploy/prod/.env
-touch deploy/prod/db.sqlite3
+mkdir -p /data/aigc_data/prod/media /data/aigc_data/prod/workspace
+touch /data/aigc_data/prod/db.sqlite3
 
 cp deploy/pre/.env.example deploy/pre/.env
-touch deploy/pre/db.sqlite3
+mkdir -p /data/aigc_data/pre/media /data/aigc_data/pre/workspace
+touch /data/aigc_data/pre/db.sqlite3
 ```
 
-Keep existing production data under `deploy/prod/`. Do not copy production
-`db.sqlite3` or media directly into `deploy/pre/` while production is running.
+Keep existing production data under `/data/aigc_data/prod`. Do not copy
+production `db.sqlite3` or media directly into `/data/aigc_data/pre` while
+production is running.
 
 ## Start production
 

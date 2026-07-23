@@ -25,17 +25,17 @@ x-app-service: &app-service
   stop_grace_period: 30s
   volumes:
     - type: bind
-      source: ./db.sqlite3
+      source: /data/aigc_data/prod/db.sqlite3
       target: /app/db.sqlite3
       bind:
         create_host_path: false
     - type: bind
-      source: ./workspace
+      source: /data/aigc_data/prod/workspace
       target: /app/workspace
       bind:
         create_host_path: false
     - type: bind
-      source: ./media
+      source: /data/aigc_data/prod/media
       target: /app/media
       bind:
         create_host_path: false

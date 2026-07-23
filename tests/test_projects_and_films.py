@@ -152,9 +152,10 @@ def test_runtime_compose_uses_its_own_data_directory(environment):
         f"deploy/{environment}/docker-compose.yaml"
     ).read_text(encoding="utf-8")
 
-    assert "source: ./db.sqlite3" in compose
-    assert "source: ./workspace" in compose
-    assert "source: ./media" in compose
+    data_root = f"/data/aigc_data/{environment}"
+    assert f"source: {data_root}/db.sqlite3" in compose
+    assert f"source: {data_root}/workspace" in compose
+    assert f"source: {data_root}/media" in compose
     assert "DB_ENGINE: sqlite" in compose
     assert "  build:" not in compose
 
@@ -182,14 +183,15 @@ def test_build_compose_owns_application_image_build():
     assert "dockerfile: deploy/build/Dockerfile.base" in compose
 
 
-def test_runtime_composes_are_identical_and_run_the_same_workers():
-    prod = Path("deploy/prod/docker-compose.yaml").read_text(encoding="utf-8")
-    pre = Path("deploy/pre/docker-compose.yaml").read_text(encoding="utf-8")
+@pytest.mark.parametrize("environment", ["prod", "pre"])
+def test_runtime_composes_run_the_same_workers(environment):
+    compose = Path(
+        f"deploy/{environment}/docker-compose.yaml"
+    ).read_text(encoding="utf-8")
 
-    assert prod == pre
-    assert "generation-worker:" in prod
-    assert "video-worker:" in prod
-    assert "publish-worker:" in prod
+    assert "generation-worker:" in compose
+    assert "video-worker:" in compose
+    assert "publish-worker:" in compose
 
 
 def test_runtime_environments_reference_the_same_image():
