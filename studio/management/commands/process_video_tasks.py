@@ -5,7 +5,7 @@ import time
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from studio.models import GenerationTask, SubtitleTrack, VideoAsset, VideoComposition
+from studio.models import GenerationTask, ShotSubtitleSetting, SubtitleTrack, VideoAsset, VideoComposition
 from studio.services.subtitles import process_subtitle_task
 from studio.services.video import process_export_task, process_video_asset
 
@@ -108,6 +108,13 @@ class Command(BaseCommand):
         )
         SubtitleTrack.objects.filter(pk=task.target_id).update(
             status=SubtitleTrack.STATUS_FAILED,
+            error_message=str(error),
+            updated_at=now,
+        )
+        ShotSubtitleSetting.objects.filter(
+            shot_id__in=(task.input_snapshot or {}).get("shot_ids", [])
+        ).update(
+            status=ShotSubtitleSetting.STATUS_FAILED,
             error_message=str(error),
             updated_at=now,
         )

@@ -1,0 +1,38 @@
+<div class="detail-modal" id="subtitle-style-editor" role="dialog" aria-modal="true" aria-labelledby="subtitle-style-editor-title" {% if subtitle_style_auto_open %}data-auto-open{% endif %} hidden>
+  <div class="detail-backdrop" data-modal-close></div>
+  <section class="detail-panel subtitle-style-dialog">
+    <button class="modal-close" type="button" data-modal-close aria-label="关闭">&times;</button>
+    <header class="subtitle-editor-head">
+      <div>
+        <p class="eyebrow">Episode {{ episode.episode_number }} / Captions</p>
+        <h2 id="subtitle-style-editor-title">字幕样式</h2>
+        <p class="subtitle-editor-meta">应用范围：本集全部分镜</p>
+      </div>
+    </header>
+
+    <form class="subtitle-style-form" method="post" action="{% url 'studio:save_subtitle_style' workspace.id episode.episode_number %}" data-subtitle-form data-submit-guard>
+      {% csrf_token %}
+      <input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+      <input type="hidden" name="return_tab" value="{{ active_tab }}">
+      <div class="subtitle-style-editor-layout">
+        <div class="subtitle-preview-stage subtitle-style-preview" data-subtitle-preview-stage>
+          <div class="subtitle-style-preview-backdrop" aria-hidden="true"></div>
+          <div class="subtitle-preview-text" data-subtitle-preview-text style="font-size: {{ subtitle.style.font_size }}px; color: {{ subtitle.style.text_color }}; -webkit-text-stroke-color: {{ subtitle.style.outline_color }}; -webkit-text-stroke-width: {{ subtitle.style.outline_size }}px; bottom: {{ subtitle.style.margin_bottom }}px;">字幕样式预览</div>
+        </div>
+        <fieldset class="subtitle-style-grid subtitle-style-fields">
+          <legend class="sr-only">整集字幕样式</legend>
+          <label>字体<input name="font_name" value="{{ subtitle.style.font_name }}" maxlength="120"></label>
+          <label>字号<input name="font_size" type="number" min="24" max="64" value="{{ subtitle.style.font_size }}" data-subtitle-style="fontSize"></label>
+          <label>字色<input name="text_color" type="color" value="{{ subtitle.style.text_color }}" data-subtitle-style="color"></label>
+          <label>描边<input name="outline_color" type="color" value="{{ subtitle.style.outline_color }}" data-subtitle-style="outlineColor"></label>
+          <label>描边宽度<input name="outline_size" type="number" min="0" max="8" value="{{ subtitle.style.outline_size }}" data-subtitle-style="outlineWidth"></label>
+          <label>底部距离<input name="margin_bottom" type="number" min="40" max="260" value="{{ subtitle.style.margin_bottom }}" data-subtitle-style="bottom"></label>
+        </fieldset>
+      </div>
+      <footer class="subtitle-editor-actions">
+        <button class="ghost-button" type="button" data-modal-close>取消</button>
+        <button class="primary-button" type="submit" data-loading-text="保存中...">保存样式</button>
+      </footer>
+    </form>
+  </section>
+</div>

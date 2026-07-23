@@ -159,9 +159,24 @@ urlpatterns = [
         name="generate_subtitles",
     ),
     path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/shot/<uuid:shot_id>/subtitles/generate/",
+        video_views.generate_shot_subtitles_view,
+        name="generate_shot_subtitles",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/shot/<uuid:shot_id>/subtitles/save/",
+        video_views.save_shot_subtitles_view,
+        name="save_shot_subtitles",
+    ),
+    path(
         "video/<str:workspace_id>/episode/<int:episode_number>/subtitles/save/",
         video_views.save_subtitles_view,
         name="save_subtitles",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/subtitles/style/",
+        video_views.save_subtitle_style_view,
+        name="save_subtitle_style",
     ),
     path(
         "video/<str:workspace_id>/episode/<int:episode_number>/subtitles/download/",

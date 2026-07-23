@@ -60,11 +60,14 @@
               <span class="step-badge">{{ shot.shot_number }}</span>
               <div><strong>镜头 {{ shot.shot_number }}</strong><small>{{ shot.duration_seconds }} 秒 · {{ shot.character_names|join:"、"|default:"未绑定角色" }}</small></div>
               {% if shot.selected_video %}<video src="{{ shot.selected_video.video.url }}" muted preload="metadata" aria-label="镜头 {{ shot.shot_number }} 预览"></video><span class="status-pill is-ready">已就绪</span>{% else %}<span class="status-pill">缺少视频</span>{% endif %}
+            <button class="shot-subtitle-chip is-{{ shot.subtitle_status }}" type="button" data-modal-target="shot-subtitle-{{ shot.id }}" aria-label="&#38236;&#22836; {{ shot.shot_number }} &#23383;&#24149;&#65306;{{ shot.subtitle_status_label }}"><span aria-hidden="true">CC</span><strong>{{ shot.subtitle_count }}</strong><small>{{ shot.subtitle_status_label }}</small></button>
             </li>
           {% endfor %}
         </ol>
+
         <div class="assembly-actions"><button class="ghost-button" type="submit" data-loading-text="保存中...">保存顺序</button></div>
       </form>
+      {% for shot in shots %}{% include "studio/_shot_subtitle_dialog.html" %}{% endfor %}
       <div class="export-bar">
         <div><strong>成片导出</strong><p>保留原片声音，统一为 720 × 1280、H.264、AAC、25fps 后按当前顺序拼接。</p></div>
         <p class="subtitle-export-summary" data-subtitle-summary>
@@ -74,7 +77,7 @@
           {% elif subtitle.is_stale %}<strong class="is-warning">&#24050;&#36807;&#26399;</strong>
           {% elif subtitle.track.enabled %}<strong>&#24050;&#24320;&#21551;</strong>
           {% else %}<strong>&#24050;&#20851;&#38381;</strong>{% endif %}
-          {% if subtitle.track %}<span>{{ subtitle.cue_count }} &#26465; · {{ subtitle.review_count }} &#26465;&#24453;&#26657;&#23545;</span>{% endif %}
+          {% if subtitle.track %}<span>{{ subtitle.visible_count }} &#26465;&#26174;&#31034;{% if subtitle.hidden_count %} · {{ subtitle.hidden_count }} &#26465;&#24050;&#38544;&#34255;{% endif %} · {{ subtitle.review_count }} &#26465;&#24453;&#26657;&#23545;</span>{% endif %}
         </p>
         {% if composition.status == 'exporting' %}
           <button class="primary-button" disabled>正在导出...</button>
@@ -82,7 +85,8 @@
           <div class="export-actions">
             {% if composition.status == 'ready' and composition.video %}<a class="ghost-button" href="{% url 'studio:download_composition' workspace.id episode.episode_number %}?script_id={{ workspace.script_id }}">下载当前成片</a>{% endif %}
             {% if composition.status == 'ready' and composition.video and publishing_accounts %}<button class="secondary-button" type="button" data-modal-target="publish-composition-{{ composition.id }}">发布</button>{% endif %}
-            <button class="secondary-button" type="button" data-modal-target="subtitle-editor">&#23383;&#24149;&#35774;&#32622;</button>
+            <button class="secondary-button" type="button" data-modal-target="subtitle-style-editor">&#23383;&#24149;&#26679;&#24335;</button>
+            <button class="secondary-button" type="button" data-modal-target="subtitle-editor">&#23383;&#24149;&#20869;&#23481;</button>
             <form method="post" action="{% url 'studio:export_video' workspace.id episode.episode_number %}" data-submit-guard>
               {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
               <button class="primary-button" type="submit" data-loading-text="提交导出中..." {% if counts.ready != counts.total or not counts.total %}disabled{% endif %}>{% if composition.status == 'ready' %}重新导出{% else %}拼接并导出{% endif %}</button>
@@ -97,9 +101,9 @@
           <header class="subtitle-editor-head">
             <div>
               <p class="eyebrow">Captions</p>
-              <h2 id="subtitle-editor-title">&#23383;&#24149;&#35774;&#32622;</h2>
+              <h2 id="subtitle-editor-title">&#23383;&#24149;&#20869;&#23481;</h2>
               {% if subtitle.track %}
-                <p class="subtitle-editor-meta">{{ subtitle.cue_count }} &#26465;&#23383;&#24149; · {{ subtitle.review_count }} &#26465;&#24453;&#26657;&#23545;</p>
+                <p class="subtitle-editor-meta">{{ subtitle.visible_count }} &#26465;&#26174;&#31034;{% if subtitle.hidden_count %} · {{ subtitle.hidden_count }} &#26465;&#24050;&#38544;&#34255;{% endif %} · {{ subtitle.review_count }} &#26465;&#24453;&#26657;&#23545;</p>
               {% endif %}
             </div>
             <div class="subtitle-editor-head-actions">
@@ -151,25 +155,19 @@
                     <p data-subtitle-preview-empty>&#26242;&#26080;&#38236;&#22836;&#39044;&#35272;</p>
                     <div class="subtitle-preview-text" data-subtitle-preview-text style="font-size: {{ subtitle.style.font_size }}px; color: {{ subtitle.style.text_color }}; -webkit-text-stroke-color: {{ subtitle.style.outline_color }}; -webkit-text-stroke-width: {{ subtitle.style.outline_size }}px; bottom: {{ subtitle.style.margin_bottom }}px;"></div>
                   </div>
-                  <div class="subtitle-style-grid">
-                    <label>&#23383;&#20307;<input name="font_name" value="{{ subtitle.style.font_name }}" maxlength="120"></label>
-                    <label>&#23383;&#21495;<input name="font_size" type="number" min="24" max="64" value="{{ subtitle.style.font_size }}" data-subtitle-style="fontSize"></label>
-                    <label>&#23383;&#33394;<input name="text_color" type="color" value="{{ subtitle.style.text_color }}" data-subtitle-style="color"></label>
-                    <label>&#25551;&#36793;<input name="outline_color" type="color" value="{{ subtitle.style.outline_color }}" data-subtitle-style="outlineColor"></label>
-                    <label>&#25551;&#36793;&#23485;&#24230;<input name="outline_size" type="number" min="0" max="8" value="{{ subtitle.style.outline_size }}" data-subtitle-style="outlineWidth"></label>
-                    <label>&#24213;&#37096;&#36317;&#31163;<input name="margin_bottom" type="number" min="40" max="260" value="{{ subtitle.style.margin_bottom }}" data-subtitle-style="bottom"></label>
-                  </div>
+
                 </aside>
 
                 <div class="subtitle-cue-list" aria-label="&#23383;&#24149;&#26465;&#30446;">
                   {% for cue in subtitle.cues %}
-                    <article class="subtitle-cue-row {% if cue.needs_review %}needs-review{% endif %}" data-subtitle-cue>
+                    <article class="subtitle-cue-row {% if cue.needs_review %}needs-review{% endif %}{% if cue.is_hidden %} is-hidden{% endif %}" data-subtitle-cue>
                       <input type="hidden" name="cue_id" value="{{ cue.id }}">
                       <button class="subtitle-preview-button" type="button" aria-label="&#39044;&#35272;&#31532; {{ cue.position }} &#26465;&#23383;&#24149;" data-subtitle-preview-url="{{ cue.preview_url }}" data-subtitle-preview-start="{{ cue.preview_start_seconds }}">&#9654;</button>
                       <div class="subtitle-cue-fields">
                         <div class="subtitle-time-fields">
                           <label>&#24320;&#22987;<input name="cue_start_{{ cue.id }}" type="number" min="0" step="0.01" value="{{ cue.start_seconds }}"></label>
                           <label>&#32467;&#26463;<input name="cue_end_{{ cue.id }}" type="number" min="0" step="0.01" value="{{ cue.end_seconds }}"></label>
+                          <span class="subtitle-hidden-state" data-subtitle-hidden-state {% if not cue.is_hidden %}hidden{% endif %}>&#24050;&#38544;&#34255;</span>
                           <span class="subtitle-confidence {% if cue.needs_review %}is-warning{% endif %}">{{ cue.confidence_percent }}%</span>
                         </div>
                         <label class="subtitle-text-field"><span>&#23383;&#24149;&#25991;&#23383;</span><textarea name="cue_text_{{ cue.id }}" rows="2" maxlength="200" data-subtitle-text>{{ cue.text }}</textarea></label>
@@ -202,7 +200,13 @@
     {% if composition.status == 'ready' and composition.video and publishing_accounts %}{% include "studio/publishing/_dialog.html" %}{% endif %}
   {% else %}
     <section class="surface-panel video-shot-panel">
-      <div class="section-head"><div><p class="eyebrow">Shot Queue</p><h2>分镜视频队列</h2></div><span class="status-pill">720P · 有参考图则传图，无图则纯 Prompt</span></div>
+      <div class="section-head">
+        <div><p class="eyebrow">Shot Queue</p><h2>分镜视频队列</h2></div>
+        <div class="video-section-actions">
+          <span class="status-pill">720P · 有参考图则传图，无图则纯 Prompt</span>
+          <button class="secondary-button" type="button" data-modal-target="subtitle-style-editor">&#23383;&#24149;&#26679;&#24335;</button>
+        </div>
+      </div>
       <div class="video-shot-list">
         {% for shot in shots %}
           <article class="video-shot-row" data-video-shot="{{ shot.shot_id }}">
@@ -240,10 +244,12 @@
             </div>
             {% if shot.latest_video.error_message %}<p class="inline-error" data-shot-error>{{ shot.latest_video.error_message }}</p>{% endif %}
             <footer>
+              <button class="shot-subtitle-chip is-{{ shot.subtitle_status }}" type="button" data-modal-target="shot-subtitle-{{ shot.id }}" aria-label="&#38236;&#22836; {{ shot.shot_number }} &#23383;&#24149;&#65306;{{ shot.subtitle_status_label }}"><span aria-hidden="true">CC</span><strong>{{ shot.subtitle_count }}</strong><small>{{ shot.subtitle_status_label }}</small></button>
               {% if shot.selected_video %}<a class="ghost-button" href="{% url 'studio:download_shot_video' workspace.id episode.episode_number shot.selected_video.id %}">下载</a>{% endif %}
               <form method="post" action="{% url 'studio:generate_shot_video' workspace.id episode.episode_number shot.shot_id %}" data-submit-guard>{% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">{% if shot.latest_video %}<input type="hidden" name="force" value="1">{% endif %}<button class="primary-button" type="submit" data-loading-text="加入队列中..." {% if shot.latest_video.status == 'queued' or shot.latest_video.status == 'submitting' or shot.latest_video.status == 'running' or shot.latest_video.status == 'downloading' %}disabled{% endif %}>{% if shot.latest_video %}重新生成{% else %}生成本镜头{% endif %}</button></form>
             </footer>
           </article>
+          {% include "studio/_shot_subtitle_dialog.html" %}
           <div class="detail-modal" id="bind-characters-{{ shot.id }}" role="dialog" aria-modal="true" aria-labelledby="bind-title-{{ shot.id }}" hidden>
             <div class="detail-backdrop" data-modal-close></div><section class="detail-panel compact-dialog"><button class="modal-close" type="button" data-modal-close aria-label="关闭">×</button><h2 id="bind-title-{{ shot.id }}">镜头 {{ shot.shot_number }} 的角色参考</h2>
           <div class="detail-modal" id="edit-prompt-{{ shot.id }}" role="dialog" aria-modal="true" aria-labelledby="prompt-title-{{ shot.id }}" hidden>
@@ -284,5 +290,6 @@
       </div>
     </section>
   {% endif %}
+  {% include "studio/_subtitle_style_dialog.html" %}
 </section>
 {% endblock %}

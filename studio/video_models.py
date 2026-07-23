@@ -307,6 +307,37 @@ class SubtitleTrack(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class ShotSubtitleSetting(models.Model):
+    STATUS_DRAFT = "draft"
+    STATUS_ALIGNING = "aligning"
+    STATUS_NEEDS_REVIEW = "needs_review"
+    STATUS_CONFIRMED = "confirmed"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_ALIGNING, "Aligning"),
+        (STATUS_NEEDS_REVIEW, "Needs review"),
+        (STATUS_CONFIRMED, "Confirmed"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    shot = models.OneToOneField(
+        StoryboardShot,
+        on_delete=models.CASCADE,
+        related_name="subtitle_setting",
+    )
+    enabled = models.BooleanField(default=True)
+    status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_DRAFT, db_index=True)
+    source_hash = models.CharField(max_length=64, blank=True, db_index=True)
+    offset_ms = models.IntegerField(default=0)
+    revision = models.PositiveIntegerField(default=1)
+    error_message = models.TextField(blank=True)
+    aligned_at = models.DateTimeField(null=True, blank=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
 class SubtitleCue(models.Model):
     track = models.ForeignKey(SubtitleTrack, on_delete=models.CASCADE, related_name="cues")
     shot = models.ForeignKey(
@@ -322,6 +353,8 @@ class SubtitleCue(models.Model):
     text = models.TextField()
     start_ms = models.PositiveIntegerField()
     end_ms = models.PositiveIntegerField()
+    local_start_ms = models.PositiveIntegerField(null=True, blank=True)
+    local_end_ms = models.PositiveIntegerField(null=True, blank=True)
     confidence = models.FloatField(default=0.0)
     needs_review = models.BooleanField(default=True, db_index=True)
     is_manually_edited = models.BooleanField(default=False)

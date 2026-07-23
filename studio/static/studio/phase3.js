@@ -66,17 +66,30 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  const subtitleForm = document.querySelector("[data-subtitle-form]");
-  if (subtitleForm instanceof HTMLFormElement) {
+  document.querySelectorAll("[data-subtitle-form]").forEach((subtitleForm) => {
+    if (!(subtitleForm instanceof HTMLFormElement)) return;
     const previewStage = subtitleForm.querySelector("[data-subtitle-preview-stage]");
     const previewVideo = subtitleForm.querySelector("[data-subtitle-preview]");
     const previewText = subtitleForm.querySelector("[data-subtitle-preview-text]");
-    const offsetInput = subtitleForm.elements.namedItem("global_offset_ms");
+    const offsetInput = subtitleForm.elements.namedItem("global_offset_ms")
+      || subtitleForm.elements.namedItem("offset_ms");
 
     const updatePreviewText = (cue) => {
       if (!(previewText instanceof HTMLElement) || !(cue instanceof HTMLElement)) return;
       const text = cue.querySelector("[data-subtitle-text]");
       previewText.textContent = text instanceof HTMLTextAreaElement ? text.value : "";
+    };
+
+    const updateCueVisibility = (cue) => {
+      if (!(cue instanceof HTMLElement)) return;
+      const text = cue.querySelector("[data-subtitle-text]");
+      if (!(text instanceof HTMLTextAreaElement)) return;
+      const hidden = text.value.trim() === "";
+      cue.classList.toggle("is-hidden", hidden);
+      const state = cue.querySelector("[data-subtitle-hidden-state]");
+      if (state instanceof HTMLElement) state.hidden = !hidden;
+      const reviewed = cue.querySelector('input[name^="cue_reviewed_"]');
+      if (hidden && reviewed instanceof HTMLInputElement) reviewed.checked = true;
     };
 
     subtitleForm.querySelectorAll("[data-subtitle-preview-url]").forEach((button) => {
@@ -108,7 +121,11 @@ document.addEventListener("DOMContentLoaded", () => {
     subtitleForm.querySelectorAll("[data-subtitle-text]").forEach((textarea) => {
       const cue = textarea.closest("[data-subtitle-cue]");
       textarea.addEventListener("focus", () => updatePreviewText(cue));
-      textarea.addEventListener("input", () => updatePreviewText(cue));
+      textarea.addEventListener("input", () => {
+        updatePreviewText(cue);
+        updateCueVisibility(cue);
+      });
+      updateCueVisibility(cue);
     });
 
     subtitleForm.querySelectorAll("[data-subtitle-shift]").forEach((button) => {
@@ -130,7 +147,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (property === "bottom") previewText.style.bottom = `${input.value}px`;
       });
     });
-  }
+
+  });
 
   const subtitleEditor = document.getElementById("subtitle-editor");
   const exportButton = document.querySelector('.export-actions form[action*="/export/"] .primary-button');

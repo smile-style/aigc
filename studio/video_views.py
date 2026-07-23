@@ -12,6 +12,7 @@ from studio.models import (
     GenerationTask,
     PublishingAccount,
     PublishingTask,
+    ShotSubtitleSetting,
     StoryboardShot,
     SubtitleTrack,
     VideoAsset,
@@ -26,6 +27,8 @@ from studio.services.model_slots import (
 from studio.services.subtitles import (
     queue_subtitle_alignment,
     render_srt,
+    save_shot_subtitle,
+    save_subtitle_style,
     save_subtitle_track,
     subtitle_page_data,
     subtitle_snapshot,
@@ -221,6 +224,9 @@ def _render_video_episode(request, workspace_id, episode_number, script_id=None)
         .prefetch_related("assets")
         .order_by("position", "id")
     )
+    shot_subtitle_auto_open = request.GET.get("shot_subtitle", "")
+    for shot in data["shots"]:
+        shot.subtitle_auto_open = str(shot.shot_id) == shot_subtitle_auto_open
     return render(
         request,
         "studio/video.html",
@@ -239,6 +245,7 @@ def _render_video_episode(request, workspace_id, episode_number, script_id=None)
             "characters": characters,
             "active_tab": request.GET.get("tab", "shots"),
             "subtitle_auto_open": request.GET.get("subtitle") == "1",
+            "subtitle_style_auto_open": request.GET.get("subtitle_style") == "1",
             "active_nav": "video",
         },
     )
@@ -345,6 +352,81 @@ def generate_subtitles_view(request, workspace_id, episode_number):
 
 
 @require_POST
+def generate_shot_subtitles_view(request, workspace_id, episode_number, shot_id):
+    script_id = _request_script_id(request)
+    shot = _shot(workspace_id, episode_number, shot_id, script_id=script_id)
+    episode = shot.storyboard.episode
+    tab = "assembly" if request.POST.get("return_tab") == "assembly" else "shots"
+    try:
+        queue_subtitle_alignment(episode, shot=shot)
+    except ValueError as exc:
+        return _video_error(
+            request,
+            workspace_id,
+            episode_number,
+            str(exc),
+            tab=tab,
+            script_id=script_id,
+            shot_subtitle_auto_open=str(shot.shot_id),
+        )
+    return _video_redirect(
+        workspace_id,
+        episode_number,
+        tab=tab,
+        script_id=script_id,
+        shot_subtitle=shot.shot_id,
+    )
+
+
+@require_POST
+def save_shot_subtitles_view(request, workspace_id, episode_number, shot_id):
+    script_id = _request_script_id(request)
+    shot = _shot(workspace_id, episode_number, shot_id, script_id=script_id)
+    episode = shot.storyboard.episode
+    tab = "assembly" if request.POST.get("return_tab") == "assembly" else "shots"
+    track = SubtitleTrack.objects.filter(episode=episode).first()
+    if track is None:
+        raise Http404("Subtitle track not found")
+    setting, _ = ShotSubtitleSetting.objects.get_or_create(shot=shot)
+    try:
+        cues = []
+        for cue_id in request.POST.getlist("cue_id"):
+            cues.append(
+                {
+                    "id": cue_id,
+                    "text": request.POST.get(f"cue_text_{cue_id}", ""),
+                    "start_ms": _seconds_to_ms(request.POST.get(f"cue_start_{cue_id}")),
+                    "end_ms": _seconds_to_ms(request.POST.get(f"cue_end_{cue_id}")),
+                    "reviewed": request.POST.get(f"cue_reviewed_{cue_id}") == "1",
+                }
+            )
+        save_shot_subtitle(
+            track,
+            setting,
+            enabled=request.POST.get("enabled") == "1",
+            offset_ms=int(request.POST.get("offset_ms") or 0),
+            cues=cues,
+            confirm_all=request.POST.get("action") == "confirm_all",
+        )
+    except (TypeError, ValueError, InvalidOperation) as exc:
+        return _video_error(
+            request,
+            workspace_id,
+            episode_number,
+            str(exc),
+            tab=tab,
+            script_id=script_id,
+            shot_subtitle_auto_open=str(shot.shot_id),
+        )
+    return _video_redirect(
+        workspace_id,
+        episode_number,
+        tab=tab,
+        script_id=script_id,
+        shot_subtitle=shot.shot_id,
+    )
+
+@require_POST
 def save_subtitles_view(request, workspace_id, episode_number):
     script_id = _request_script_id(request)
     episode = _episode(workspace_id, episode_number, script_id=script_id)
@@ -367,14 +449,6 @@ def save_subtitles_view(request, workspace_id, episode_number):
             track,
             enabled=request.POST.get("enabled") == "1",
             global_offset_ms=int(request.POST.get("global_offset_ms") or 0),
-            style={
-                "font_name": request.POST.get("font_name"),
-                "font_size": request.POST.get("font_size") or 38,
-                "text_color": request.POST.get("text_color"),
-                "outline_color": request.POST.get("outline_color"),
-                "outline_size": request.POST.get("outline_size") or 3,
-                "margin_bottom": request.POST.get("margin_bottom") or 92,
-            },
             cues=cues,
             confirm_all=request.POST.get("action") == "confirm_all",
         )
@@ -389,6 +463,42 @@ def save_subtitles_view(request, workspace_id, episode_number):
             subtitle_auto_open=True,
         )
     return _video_redirect(workspace_id, episode_number, tab="assembly", script_id=script_id, subtitle=True)
+
+
+@require_POST
+def save_subtitle_style_view(request, workspace_id, episode_number):
+    script_id = _request_script_id(request)
+    episode = _episode(workspace_id, episode_number, script_id=script_id)
+    tab = "assembly" if request.POST.get("return_tab") == "assembly" else "shots"
+    track, _ = SubtitleTrack.objects.get_or_create(episode=episode)
+    try:
+        save_subtitle_style(
+            track,
+            {
+                "font_name": request.POST.get("font_name"),
+                "font_size": request.POST.get("font_size") or 38,
+                "text_color": request.POST.get("text_color"),
+                "outline_color": request.POST.get("outline_color"),
+                "outline_size": request.POST.get("outline_size") or 3,
+                "margin_bottom": request.POST.get("margin_bottom") or 92,
+            },
+        )
+    except (TypeError, ValueError) as exc:
+        return _video_error(
+            request,
+            workspace_id,
+            episode_number,
+            str(exc),
+            tab=tab,
+            script_id=script_id,
+            subtitle_style_auto_open=True,
+        )
+    return _video_redirect(
+        workspace_id,
+        episode_number,
+        tab=tab,
+        script_id=script_id,
+    )
 
 
 @require_POST
@@ -519,23 +629,45 @@ def _shot(workspace_id, episode_number, shot_id, script_id=None):
         raise Http404("分镜不存在。") from exc
 
 
-def _video_redirect(workspace_id, episode_number, tab="shots", script_id=None, subtitle=False):
+def _video_redirect(
+    workspace_id,
+    episode_number,
+    tab="shots",
+    script_id=None,
+    subtitle=False,
+    shot_subtitle=None,
+):
     if script_id:
         url = reverse("studio:video_script_episode", args=[workspace_id, script_id, episode_number])
     else:
         url = reverse("studio:video_episode", args=[workspace_id, episode_number])
-    subtitle_query = "&subtitle=1" if subtitle else ""
-    return redirect(f"{url}?tab={tab}{subtitle_query}")
+    query = [f"tab={tab}"]
+    if subtitle:
+        query.append("subtitle=1")
+    if shot_subtitle:
+        query.append(f"shot_subtitle={shot_subtitle}")
+    return redirect(f"{url}?{'&'.join(query)}")
 
 
 def _video_error(
-    request, workspace_id, episode_number, error, tab="shots", script_id=None, subtitle_auto_open=False
+    request,
+    workspace_id,
+    episode_number,
+    error,
+    tab="shots",
+    script_id=None,
+    subtitle_auto_open=False,
+    subtitle_style_auto_open=False,
+    shot_subtitle_auto_open="",
 ):
     script_id = script_id or _request_script_id(request)
     repository = WorkspaceRepository()
     workspace = repository.get_episode_workspace(workspace_id, episode_number, script_id=script_id)
     episode = _episode(workspace_id, episode_number, script_id=script_id)
     data = video_page_data(episode, sync=False)
+    subtitle_data = subtitle_page_data(episode, data["shots"])
+    for shot in data["shots"]:
+        shot.subtitle_auto_open = str(shot.shot_id) == str(shot_subtitle_auto_open)
     return render(
         request,
         "studio/video.html",
@@ -545,10 +677,11 @@ def _video_error(
             "shots": data["shots"],
             "counts": data["counts"],
             "composition": data["composition"],
-            "subtitle": subtitle_page_data(episode, data["shots"]),
+            "subtitle": subtitle_data,
             "characters": Character.objects.filter(script=episode.script).prefetch_related("assets"),
             "active_tab": tab,
             "subtitle_auto_open": subtitle_auto_open,
+            "subtitle_style_auto_open": subtitle_style_auto_open,
             "active_nav": "video",
             "error": error,
         },

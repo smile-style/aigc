@@ -1,0 +1,100 @@
+<div class="detail-modal" id="shot-subtitle-{{ shot.id }}" role="dialog" aria-modal="true" aria-labelledby="shot-subtitle-title-{{ shot.id }}" {% if shot.subtitle_auto_open %}data-auto-open{% endif %} hidden>
+  <div class="detail-backdrop" data-modal-close></div>
+  <section class="detail-panel shot-subtitle-dialog">
+    <button class="modal-close" type="button" data-modal-close aria-label="&#20851;&#38381;">&times;</button>
+    <header class="shot-subtitle-head">
+      <div>
+        <p class="eyebrow">Shot {{ shot.shot_number }} / Captions</p>
+        <h2 id="shot-subtitle-title-{{ shot.id }}">&#20998;&#38236;&#23383;&#24149;</h2>
+        <p>{{ shot.duration_seconds }} &#31186; · {{ shot.subtitle_visible_count }} &#26465;&#26174;&#31034;{% if shot.subtitle_hidden_count %} · {{ shot.subtitle_hidden_count }} &#26465;&#24050;&#38544;&#34255;{% endif %}</p>
+      </div>
+      <span class="shot-subtitle-state is-{{ shot.subtitle_status }}">{{ shot.subtitle_status_label }}</span>
+      <form method="post" action="{% url 'studio:generate_shot_subtitles' workspace.id episode.episode_number shot.shot_id %}" data-submit-guard>
+        {% csrf_token %}
+        <input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+        <input type="hidden" name="return_tab" value="{{ active_tab }}">
+        <button class="secondary-button" type="submit" data-loading-text="&#23545;&#40784;&#20013;..." {% if not shot.selected_video or shot.subtitle_status == 'aligning' %}disabled{% endif %}>
+          {% if shot.subtitle_count %}&#37325;&#26032;&#23545;&#40784;{% else %}&#29983;&#25104;&#23383;&#24149;{% endif %}
+        </button>
+      </form>
+    </header>
+
+    {% if shot.subtitle_is_stale %}
+      <div class="task-status is-error shot-subtitle-alert" role="alert">
+        <span class="task-indicator" aria-hidden="true"></span>
+        <div><strong>&#35813;&#20998;&#38236;&#23383;&#24149;&#24050;&#36807;&#26399;</strong><p>&#35270;&#39057;&#29256;&#26412;&#12289;&#26102;&#38271;&#25110;&#21488;&#35789;&#24050;&#25913;&#21464;&#12290;</p></div>
+      </div>
+    {% elif shot.subtitle_setting_for_page.status == 'failed' %}
+      <div class="task-status is-error shot-subtitle-alert" role="alert">
+        <span class="task-indicator" aria-hidden="true"></span>
+        <div><strong>&#23383;&#24149;&#29983;&#25104;&#22833;&#36133;</strong><p>{{ shot.subtitle_setting_for_page.error_message }}</p></div>
+      </div>
+    {% endif %}
+
+    {% if shot.subtitle_status == 'aligning' %}
+      <div class="subtitle-aligning-state" role="status">
+        <span class="task-indicator" aria-hidden="true"></span>
+        <strong>&#27491;&#22312;&#20998;&#26512;&#35813;&#20998;&#38236;&#30340;&#35821;&#38899;&#21644;&#21488;&#35789;</strong>
+      </div>
+    {% elif shot.subtitle_cues_for_page %}
+      <form class="subtitle-editor-form shot-subtitle-form" method="post" action="{% url 'studio:save_shot_subtitles' workspace.id episode.episode_number shot.shot_id %}" data-subtitle-form data-submit-guard>
+        {% csrf_token %}
+        <input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+        <input type="hidden" name="return_tab" value="{{ active_tab }}">
+        <div class="shot-subtitle-toolbar">
+          <label class="subtitle-toggle">
+            <input type="checkbox" name="enabled" value="1" {% if not shot.subtitle_setting_for_page or shot.subtitle_setting_for_page.enabled %}checked{% endif %}>
+            <span>&#22312;&#25104;&#29255;&#20013;&#21551;&#29992;</span>
+          </label>
+
+          <label class="shot-subtitle-offset">
+            <span>&#23616;&#37096;&#20559;&#31227;</span>
+            <input name="offset_ms" type="number" step="100" min="-10000" max="10000" value="{{ shot.subtitle_offset_ms }}">
+            <small>ms</small>
+          </label>
+        </div>
+
+        <div class="subtitle-editor-layout shot-subtitle-layout">
+          <aside class="subtitle-preview-pane">
+            <div class="subtitle-preview-stage" data-subtitle-preview-stage>
+              <video controls preload="metadata" data-subtitle-preview></video>
+              <p data-subtitle-preview-empty>&#36873;&#25321;&#19968;&#26465;&#23383;&#24149;&#39044;&#35272;</p>
+              <div class="subtitle-preview-text" data-subtitle-preview-text style="font-size: {{ shot.subtitle_style.font_size }}px; color: {{ shot.subtitle_style.text_color }}; -webkit-text-stroke-color: {{ shot.subtitle_style.outline_color }}; -webkit-text-stroke-width: {{ shot.subtitle_style.outline_size }}px; bottom: {{ shot.subtitle_style.margin_bottom }}px;"></div>
+            </div>
+
+          </aside>
+
+          <div class="subtitle-cue-list" aria-label="&#35813;&#20998;&#38236;&#30340;&#23383;&#24149;&#26465;&#30446;">
+            {% for cue in shot.subtitle_cues_for_page %}
+              <article class="subtitle-cue-row {% if cue.needs_review %}needs-review{% endif %}{% if cue.is_hidden %} is-hidden{% endif %}" data-subtitle-cue>
+                <input type="hidden" name="cue_id" value="{{ cue.id }}">
+                <button class="subtitle-preview-button" type="button" aria-label="&#39044;&#35272;&#31532; {{ cue.position }} &#26465;&#23383;&#24149;" data-subtitle-preview-url="{{ cue.preview_url }}" data-subtitle-preview-start="{{ cue.preview_start_seconds }}">&#9654;</button>
+                <div class="subtitle-cue-fields">
+                  <div class="subtitle-time-fields">
+                    <label>&#24320;&#22987;<input name="cue_start_{{ cue.id }}" type="number" min="0" step="0.01" value="{{ cue.start_seconds }}"></label>
+                    <label>&#32467;&#26463;<input name="cue_end_{{ cue.id }}" type="number" min="0" step="0.01" value="{{ cue.end_seconds }}"></label>
+                    <span class="subtitle-hidden-state" data-subtitle-hidden-state {% if not cue.is_hidden %}hidden{% endif %}>&#24050;&#38544;&#34255;</span>
+                    <span class="subtitle-confidence {% if cue.needs_review %}is-warning{% endif %}">{{ cue.confidence_percent }}%</span>
+                  </div>
+                  <label class="subtitle-text-field"><span>&#23383;&#24149;&#25991;&#23383;</span><textarea name="cue_text_{{ cue.id }}" rows="2" maxlength="200" data-subtitle-text>{{ cue.text }}</textarea></label>
+                  {% if cue.recognized_text %}<details><summary>&#35821;&#38899;&#35782;&#21035;&#32467;&#26524;</summary><p>{{ cue.recognized_text }}</p></details>{% endif %}
+                </div>
+                <label class="subtitle-reviewed"><input type="checkbox" name="cue_reviewed_{{ cue.id }}" value="1" {% if not cue.needs_review %}checked{% endif %}><span>&#24050;&#26657;&#23545;</span></label>
+              </article>
+            {% endfor %}
+          </div>
+        </div>
+        <footer class="subtitle-editor-actions">
+          <button class="ghost-button" type="button" data-modal-close>&#21462;&#28040;</button>
+          <button class="secondary-button" type="submit" name="action" value="save" data-loading-text="&#20445;&#23384;&#20013;...">&#20445;&#23384;</button>
+          <button class="primary-button" type="submit" name="action" value="confirm_all" data-loading-text="&#30830;&#35748;&#20013;...">&#20445;&#23384;&#24182;&#30830;&#35748;&#26412;&#38236;</button>
+        </footer>
+      </form>
+    {% else %}
+      <div class="empty-state compact shot-subtitle-empty">
+        <h2>&#26412;&#38236;&#23578;&#26080;&#23383;&#24149;</h2>
+        <p>{% if shot.selected_video %}&#21487;&#26681;&#25454;&#21488;&#35789;&#21644;&#35821;&#38899;&#33258;&#21160;&#29983;&#25104;&#12290;{% else %}&#35831;&#20808;&#29983;&#25104;&#24182;&#36873;&#23450;&#26412;&#38236;&#35270;&#39057;&#12290;{% endif %}</p>
+      </div>
+    {% endif %}
+  </section>
+</div>

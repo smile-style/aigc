@@ -315,7 +315,10 @@ def queue_export(episode):
             raise ValueError("\u5b57\u5e55\u5df2\u5f00\u542f\uff0c\u4f46\u8fd8\u6ca1\u6709\u53ef\u5bfc\u51fa\u7684\u5b57\u5e55\u5185\u5bb9\u3002")
         if is_subtitle_stale(track):
             raise ValueError("\u955c\u5934\u3001\u987a\u5e8f\u6216\u53f0\u8bcd\u5df2\u53d8\u66f4\uff0c\u8bf7\u5148\u91cd\u65b0\u5bf9\u9f50\u5b57\u5e55\u3002")
-        subtitle_data = subtitle_snapshot(track)
+        subtitle_data = subtitle_snapshot(track, assets=selected)
+        if not subtitle_data.get("cues"):
+            include_subtitles = False
+            subtitle_data = {}
     version = (episode.video_compositions.aggregate(value=Max("version"))["value"] or 0) + 1
     composition = VideoComposition.objects.create(
         episode=episode,
