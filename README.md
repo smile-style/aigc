@@ -49,10 +49,10 @@ Docker 部署文件位于 `deploy/`，镜像构建、生产环境和预发布环
 ```bash
 cp deploy/pre/.env.example deploy/pre/.env
 touch deploy/pre/db.sqlite3
-docker compose --env-file deploy/pre/.env \
-  -f deploy/pre/docker-compose.yaml config
-docker compose --env-file deploy/pre/.env \
-  -f deploy/pre/docker-compose.yaml up -d
+cd deploy/pre
+docker compose config
+docker compose pull
+docker compose up -d
 ```
 
 部署后访问：

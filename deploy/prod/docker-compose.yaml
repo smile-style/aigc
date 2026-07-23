@@ -1,13 +1,14 @@
-name: aigc-prod
-
 x-app-environment: &app-environment
   DJANGO_DEBUG: "false"
-  DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in deploy/prod/.env}"
+  DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}"
   DJANGO_STATIC_ROOT: /app/staticfiles
   DJANGO_MEDIA_ROOT: /app/media
   WORKSPACE_DIR: /app/workspace
   LLM_LOG_PATH: /app/workspace/llm.log
   DB_ENGINE: sqlite
+  GENERATION_WORKER_INTERVAL_SECONDS: "${GENERATION_WORKER_INTERVAL_SECONDS:-2}"
+  GENERATION_MAX_CONCURRENCY: "1"
+  GENERATION_LEASE_SECONDS: "${GENERATION_LEASE_SECONDS:-900}"
   VIDEO_WORKER_INTERVAL_SECONDS: "${VIDEO_WORKER_INTERVAL_SECONDS:-5}"
   PUBLISH_WORKER_INTERVAL_SECONDS: "${PUBLISH_WORKER_INTERVAL_SECONDS:-3}"
   PUBLISH_MAX_CONCURRENCY: "${PUBLISH_MAX_CONCURRENCY:-1}"
@@ -16,7 +17,7 @@ x-app-environment: &app-environment
   PUBLISHING_CREDENTIAL_ENCRYPTION_KEY: "${PUBLISHING_CREDENTIAL_ENCRYPTION_KEY:-}"
 
 x-app-service: &app-service
-  image: "${AIGC_IMAGE:-aigc-studio:master}"
+  image: "${AIGC_IMAGE:?Set AIGC_IMAGE in .env}"
   env_file:
     - .env
   environment: *app-environment
@@ -69,13 +70,21 @@ services:
         --workers "$${GUNICORN_WORKERS}"
         --timeout "$${GUNICORN_TIMEOUT}"
     ports:
-      - "${AIGC_HTTP_PORT:-8080}:8000"
+      - "${AIGC_HTTP_PORT:?Set AIGC_HTTP_PORT in .env}:8000"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  generation-worker:
+    <<: *app-service
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "manage.py", "process_generation_tasks"]
 
   video-worker:
     <<: *app-service

@@ -169,7 +169,7 @@ def test_runtime_compose_uses_its_own_data_directory(environment):
 def test_runtime_compose_uses_prebuilt_application_image(compose_path):
     compose = Path(compose_path).read_text(encoding="utf-8")
 
-    assert 'image: "${AIGC_IMAGE:-aigc-studio:' in compose
+    assert 'image: "${AIGC_IMAGE:?Set AIGC_IMAGE in .env}"' in compose
     assert "  build:" not in compose
 
 
@@ -182,14 +182,30 @@ def test_build_compose_owns_application_image_build():
     assert "dockerfile: deploy/build/Dockerfile.base" in compose
 
 
-def test_only_pre_release_runs_generation_worker():
+def test_runtime_composes_are_identical_and_run_the_same_workers():
     prod = Path("deploy/prod/docker-compose.yaml").read_text(encoding="utf-8")
     pre = Path("deploy/pre/docker-compose.yaml").read_text(encoding="utf-8")
 
-    assert "name: aigc-prod" in prod
-    assert "generation-worker:" not in prod
-    assert "name: aigc-pre" in pre
-    assert "generation-worker:" in pre
+    assert prod == pre
+    assert "generation-worker:" in prod
+    assert "video-worker:" in prod
+    assert "publish-worker:" in prod
+
+
+def test_runtime_environments_reference_the_same_image():
+    def values(path):
+        return dict(
+            line.split("=", 1)
+            for line in Path(path).read_text(encoding="utf-8").splitlines()
+            if line and not line.startswith("#")
+        )
+
+    prod = values("deploy/prod/.env.example")
+    pre = values("deploy/pre/.env.example")
+
+    assert prod["AIGC_IMAGE"] == pre["AIGC_IMAGE"]
+    assert prod["AIGC_HTTP_PORT"] == "8080"
+    assert pre["AIGC_HTTP_PORT"] == "8081"
 
 
 def test_unscripted_project_can_open_without_using_global_selection(client):

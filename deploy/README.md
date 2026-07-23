@@ -3,14 +3,14 @@
 The deployment directory has three independent areas:
 
 - `build/`: Docker image build files and build instructions.
-- `prod/`: master production Compose configuration and production data paths.
-- `pre/`: codex pre-release Compose configuration and isolated pre-release data paths.
+- `prod/`: production environment and production data paths.
+- `pre/`: pre-release environment and isolated pre-release data paths.
 
 Each runtime directory owns its `.env`, `db.sqlite3`, `media/`, and
 `workspace/`. Real environment files and runtime data are ignored by Git.
-
-## First-time setup
-
+The two environments use identical Compose files and the same `AIGC_IMAGE`.
+Their directory names, ports, and relative bind mounts keep runtime state
+isolated.
 
 ## Move existing production data
 
@@ -28,6 +28,8 @@ Move the old `deploy/.env` to `deploy/prod/.env`. Review `AIGC_IMAGE`,
 `AIGC_HTTP_PORT`, allowed hosts, and trusted origins before starting. Do not
 copy a live SQLite database; stop all old web and worker containers first.
 
+## First-time setup
+
 Create the runtime files before starting Compose:
 
 ```bash
@@ -44,10 +46,10 @@ Keep existing production data under `deploy/prod/`. Do not copy production
 ## Start production
 
 ```bash
-docker compose --env-file deploy/prod/.env \
-  -f deploy/prod/docker-compose.yaml config
-docker compose --env-file deploy/prod/.env \
-  -f deploy/prod/docker-compose.yaml up -d
+cd deploy/prod
+docker compose config
+docker compose pull
+docker compose up -d
 ```
 
 Production defaults to port `8080`.
@@ -55,14 +57,14 @@ Production defaults to port `8080`.
 ## Start pre-release
 
 ```bash
-docker compose --env-file deploy/pre/.env \
-  -f deploy/pre/docker-compose.yaml config
-docker compose --env-file deploy/pre/.env \
-  -f deploy/pre/docker-compose.yaml up -d
+cd deploy/pre
+docker compose config
+docker compose pull
+docker compose up -d
 ```
 
-Pre-release defaults to port `8081`. The fixed Compose project names
-`aigc-prod` and `aigc-pre` prevent cross-environment container operations.
+Pre-release defaults to port `8081`. Compose derives different project names
+from the `prod` and `pre` directory names.
 
 Run `down` with the matching Compose file. Never delete or overwrite
 `db.sqlite3`, `media/`, or `workspace/` without a verified backup.

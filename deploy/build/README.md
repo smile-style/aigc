@@ -18,3 +18,7 @@ docker compose --env-file deploy/build/.env \
 
 Rebuild the base image only when Python or operating-system packages change.
 For application code or Python dependency changes, rebuild only `aigc-studio-image`.
+
+Set the exact same `AIGC_IMAGE` value in `deploy/prod/.env` and
+`deploy/pre/.env`. Build and push the application image once; both environments
+then pull that image.

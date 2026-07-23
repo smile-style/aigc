@@ -1,8 +1,6 @@
-name: aigc-pre
-
 x-app-environment: &app-environment
   DJANGO_DEBUG: "false"
-  DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in deploy/pre/.env}"
+  DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}"
   DJANGO_STATIC_ROOT: /app/staticfiles
   DJANGO_MEDIA_ROOT: /app/media
   WORKSPACE_DIR: /app/workspace
@@ -19,7 +17,7 @@ x-app-environment: &app-environment
   PUBLISHING_CREDENTIAL_ENCRYPTION_KEY: "${PUBLISHING_CREDENTIAL_ENCRYPTION_KEY:-}"
 
 x-app-service: &app-service
-  image: "${AIGC_IMAGE:-aigc-studio:codex-production-workflow-optimization}"
+  image: "${AIGC_IMAGE:?Set AIGC_IMAGE in .env}"
   env_file:
     - .env
   environment: *app-environment
@@ -72,7 +70,7 @@ services:
         --workers "$${GUNICORN_WORKERS}"
         --timeout "$${GUNICORN_TIMEOUT}"
     ports:
-      - "${AIGC_HTTP_PORT:-8081}:8000"
+      - "${AIGC_HTTP_PORT:?Set AIGC_HTTP_PORT in .env}:8000"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/"]
       interval: 30s
