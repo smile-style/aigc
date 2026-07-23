@@ -146,31 +146,50 @@ def test_finished_film_download_targets_exact_version(client, tmp_path):
     assert "FINAL-v001.mp4" in response["Content-Disposition"]
 
 
-def test_sqlite_compose_uses_server_data_directory():
-    compose = Path("deploy/docker-compose.yaml").read_text(encoding="utf-8")
+@pytest.mark.parametrize("environment", ["prod", "pre"])
+def test_runtime_compose_uses_its_own_data_directory(environment):
+    compose = Path(
+        f"deploy/{environment}/docker-compose.yaml"
+    ).read_text(encoding="utf-8")
 
-    assert "source: /data/aigc_data/db.sqlite3" in compose
-    assert "source: /data/aigc_data/workspace" in compose
-    assert "source: /data/aigc_data/media" in compose
+    assert "source: ./db.sqlite3" in compose
+    assert "source: ./workspace" in compose
+    assert "source: ./media" in compose
+    assert "DB_ENGINE: sqlite" in compose
+    assert "  build:" not in compose
 
 
 @pytest.mark.parametrize(
     "compose_path",
-    ["deploy/docker-compose.yml", "deploy/docker-compose.yaml"],
+    [
+        "deploy/prod/docker-compose.yaml",
+        "deploy/pre/docker-compose.yaml",
+    ],
 )
 def test_runtime_compose_uses_prebuilt_application_image(compose_path):
     compose = Path(compose_path).read_text(encoding="utf-8")
 
-    assert 'image: "${AIGC_IMAGE:-aigc-studio:latest}"' in compose
+    assert 'image: "${AIGC_IMAGE:-aigc-studio:' in compose
     assert "  build:" not in compose
 
 
 def test_build_compose_owns_application_image_build():
-    compose = Path("deploy/docker-compose.build.yml").read_text(encoding="utf-8")
+    compose = Path("deploy/build/docker-compose.yaml").read_text(encoding="utf-8")
 
     assert 'image: "${AIGC_IMAGE:-aigc-studio:latest}"' in compose
     assert "    build:" in compose
-    assert "dockerfile: deploy/Dockerfile" in compose
+    assert "dockerfile: deploy/build/Dockerfile" in compose
+    assert "dockerfile: deploy/build/Dockerfile.base" in compose
+
+
+def test_only_pre_release_runs_generation_worker():
+    prod = Path("deploy/prod/docker-compose.yaml").read_text(encoding="utf-8")
+    pre = Path("deploy/pre/docker-compose.yaml").read_text(encoding="utf-8")
+
+    assert "name: aigc-prod" in prod
+    assert "generation-worker:" not in prod
+    assert "name: aigc-pre" in pre
+    assert "generation-worker:" in pre
 
 
 def test_unscripted_project_can_open_without_using_global_selection(client):

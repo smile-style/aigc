@@ -8,7 +8,7 @@ __pycache__/
 .pytest_cache/
 .test-runtime/
 db.sqlite3
-media/
+/media/
 workspace/*.json
 logs/*.log
 .tmp/

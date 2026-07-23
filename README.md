@@ -44,18 +44,21 @@ python manage.py runserver
 
 ## Docker 部署
 
-Docker 部署文件位于 `deploy/`，包含 MySQL、Web 服务、环境变量模板和部署说明。
+Docker 部署文件位于 `deploy/`，镜像构建、生产环境和预发布环境分别放在 `build/`、`prod/` 和 `pre/`。
 
 ```bash
-cp deploy/.env.example deploy/.env
-docker compose --env-file deploy/.env -f deploy/docker-compose.build.yml build --pull
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
+cp deploy/pre/.env.example deploy/pre/.env
+touch deploy/pre/db.sqlite3
+docker compose --env-file deploy/pre/.env \
+  -f deploy/pre/docker-compose.yaml config
+docker compose --env-file deploy/pre/.env \
+  -f deploy/pre/docker-compose.yaml up -d
 ```
 
 部署后访问：
 
 ```text
-http://<server-ip-or-domain>:8080/
+http://<server-ip-or-domain>:8081/
 ```
 
 ## 测试
@@ -67,6 +70,6 @@ python manage.py check
 
 ## 数据存储
 
-- Docker 部署：业务数据保存在 MySQL 的 `mysql_data` volume 中。
+- Docker 部署：`prod/` 和 `pre/` 分别保存自己的 `db.sqlite3`、`media/` 与 `workspace/` 数据。
 - 本地开发：未设置 `DB_ENGINE=mysql` 时使用 SQLite `db.sqlite3`。
-- LLM 请求日志写入 `logs/llm.log` 或部署环境中的 `/app/logs/llm.log`。
+- LLM 请求日志写入本地 `logs/llm.log`，Docker 环境写入对应运行目录的 `workspace/llm.log`。

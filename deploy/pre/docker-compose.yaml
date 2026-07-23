@@ -1,37 +1,46 @@
+name: aigc-pre
+
 x-app-environment: &app-environment
   DJANGO_DEBUG: "false"
-  DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in deploy/.env}"
+  DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in deploy/pre/.env}"
   DJANGO_STATIC_ROOT: /app/staticfiles
   DJANGO_MEDIA_ROOT: /app/media
   WORKSPACE_DIR: /app/workspace
-  LLM_LOG_PATH: /app/logs/llm.log
-  DB_ENGINE: mysql
-  DB_HOST: mysql
-  DB_PORT: "3306"
-  DB_NAME: "${MYSQL_DATABASE:-AIGC_STUDIO}"
-  DB_USER: "${MYSQL_USER:-aigc_studio}"
-  DB_PASSWORD: "${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in deploy/.env}"
+  LLM_LOG_PATH: /app/workspace/llm.log
+  DB_ENGINE: sqlite
   GENERATION_WORKER_INTERVAL_SECONDS: "${GENERATION_WORKER_INTERVAL_SECONDS:-2}"
-  GENERATION_MAX_CONCURRENCY: "${GENERATION_MAX_CONCURRENCY:-2}"
+  GENERATION_MAX_CONCURRENCY: "1"
   GENERATION_LEASE_SECONDS: "${GENERATION_LEASE_SECONDS:-900}"
   VIDEO_WORKER_INTERVAL_SECONDS: "${VIDEO_WORKER_INTERVAL_SECONDS:-5}"
   PUBLISH_WORKER_INTERVAL_SECONDS: "${PUBLISH_WORKER_INTERVAL_SECONDS:-3}"
-  PUBLISH_MAX_CONCURRENCY: "${PUBLISH_MAX_CONCURRENCY:-2}"
+  PUBLISH_MAX_CONCURRENCY: "${PUBLISH_MAX_CONCURRENCY:-1}"
   PUBLISH_LEASE_SECONDS: "${PUBLISH_LEASE_SECONDS:-180}"
   PUBLISH_TASK_TIMEOUT_SECONDS: "${PUBLISH_TASK_TIMEOUT_SECONDS:-7200}"
   PUBLISHING_CREDENTIAL_ENCRYPTION_KEY: "${PUBLISHING_CREDENTIAL_ENCRYPTION_KEY:-}"
 
 x-app-service: &app-service
-  image: "${AIGC_IMAGE:-aigc-studio:latest}"
+  image: "${AIGC_IMAGE:-aigc-studio:codex-production-workflow-optimization}"
   env_file:
     - .env
   environment: *app-environment
   init: true
   stop_grace_period: 30s
   volumes:
-    - aigc_workspace:/app/workspace
-    - aigc_logs:/app/logs
-    - aigc_media:/app/media
+    - type: bind
+      source: ./db.sqlite3
+      target: /app/db.sqlite3
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ./workspace
+      target: /app/workspace
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ./media
+      target: /app/media
+      bind:
+        create_host_path: false
   logging:
     driver: json-file
     options:
@@ -39,43 +48,9 @@ x-app-service: &app-service
       max-file: "5"
 
 services:
-  mysql:
-    image: registry.cn-hangzhou.aliyuncs.com/docker-registry-cache/mysql:8.0
-    restart: unless-stopped
-    environment:
-      MYSQL_DATABASE: "${MYSQL_DATABASE:-AIGC_STUDIO}"
-      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in deploy/.env}"
-      MYSQL_USER: "${MYSQL_USER:-aigc_studio}"
-      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in deploy/.env}"
-      TZ: Asia/Shanghai
-    volumes:
-      - mysql_data:/var/lib/mysql
-      - ./config/mysql.cnf:/etc/mysql/conf.d/mysql.cnf:ro
-      - ./init:/docker-entrypoint-initdb.d:ro
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - >-
-          mysql --protocol=TCP -h 127.0.0.1
-          -u"$${MYSQL_USER}" -p"$${MYSQL_PASSWORD}"
-          -e "SELECT 1" "$${MYSQL_DATABASE}" >/dev/null 2>&1
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-    stop_grace_period: 30s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "5"
-
   migrate:
     <<: *app-service
     restart: "no"
-    depends_on:
-      mysql:
-        condition: service_healthy
     command: ["python", "manage.py", "migrate", "--noinput"]
 
   aigc-studio:
@@ -86,7 +61,7 @@ services:
         condition: service_completed_successfully
     environment:
       <<: *app-environment
-      GUNICORN_WORKERS: "${GUNICORN_WORKERS:-2}"
+      GUNICORN_WORKERS: "${SQLITE_GUNICORN_WORKERS:-1}"
       GUNICORN_TIMEOUT: "${GUNICORN_TIMEOUT:-360}"
     command:
       - sh
@@ -97,7 +72,7 @@ services:
         --workers "$${GUNICORN_WORKERS}"
         --timeout "$${GUNICORN_TIMEOUT}"
     ports:
-      - "${AIGC_HTTP_PORT:-8080}:8000"
+      - "${AIGC_HTTP_PORT:-8081}:8000"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/"]
       interval: 30s
@@ -128,10 +103,3 @@ services:
       migrate:
         condition: service_completed_successfully
     command: ["python", "manage.py", "process_publish_tasks"]
-
-volumes:
-  mysql_data:
-    name: deploy_mysql_data
-  aigc_workspace:
-  aigc_logs:
-  aigc_media:

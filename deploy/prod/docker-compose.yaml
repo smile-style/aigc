@@ -1,10 +1,12 @@
+name: aigc-prod
+
 x-app-environment: &app-environment
   DJANGO_DEBUG: "false"
-  DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in deploy/.env}"
+  DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in deploy/prod/.env}"
   DJANGO_STATIC_ROOT: /app/staticfiles
   DJANGO_MEDIA_ROOT: /app/media
   WORKSPACE_DIR: /app/workspace
-  LLM_LOG_PATH: /app/logs/llm.log
+  LLM_LOG_PATH: /app/workspace/llm.log
   DB_ENGINE: sqlite
   VIDEO_WORKER_INTERVAL_SECONDS: "${VIDEO_WORKER_INTERVAL_SECONDS:-5}"
   PUBLISH_WORKER_INTERVAL_SECONDS: "${PUBLISH_WORKER_INTERVAL_SECONDS:-3}"
@@ -14,7 +16,7 @@ x-app-environment: &app-environment
   PUBLISHING_CREDENTIAL_ENCRYPTION_KEY: "${PUBLISHING_CREDENTIAL_ENCRYPTION_KEY:-}"
 
 x-app-service: &app-service
-  image: "${AIGC_IMAGE:-aigc-studio:latest}"
+  image: "${AIGC_IMAGE:-aigc-studio:master}"
   env_file:
     - .env
   environment: *app-environment
@@ -22,22 +24,17 @@ x-app-service: &app-service
   stop_grace_period: 30s
   volumes:
     - type: bind
-      source: /data/aigc_data/db.sqlite3
+      source: ./db.sqlite3
       target: /app/db.sqlite3
       bind:
         create_host_path: false
     - type: bind
-      source: /data/aigc_data/workspace
+      source: ./workspace
       target: /app/workspace
       bind:
         create_host_path: false
     - type: bind
-      source: ../logs
-      target: /app/logs
-      bind:
-        create_host_path: false
-    - type: bind
-      source: /data/aigc_data/media
+      source: ./media
       target: /app/media
       bind:
         create_host_path: false
