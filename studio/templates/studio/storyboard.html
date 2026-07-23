@@ -38,13 +38,13 @@
         {% if episode.has_script %}
           <form method="post" action="{% url 'studio:generate_storyboard_script' workspace.id workspace.script_id episode.episode %}" data-submit-guard data-storyboard-form>
             {% csrf_token %}
-            <button class="primary-button" type="submit" data-loading-text="提交中..." {% if task.status == "pending" or task.status == "running" %}disabled{% endif %}>{% if episode.has_storyboard %}重新生成本集分镜{% else %}生成本集分镜{% endif %}</button>
+            <button class="primary-button" type="submit" data-loading-text="提交中..." {% if task.status == "pending" or task.status == "running" or task.status == "retry_wait" %}disabled{% endif %}>{% if episode.has_storyboard %}重新生成本集分镜{% else %}生成本集分镜{% endif %}</button>
           </form>
         {% endif %}
       </div>
     </section>
 
-    {% if task.status == "pending" or task.status == "running" %}
+    {% if task.status == "pending" or task.status == "running" or task.status == "retry_wait" %}
       <div class="task-status is-running" data-task-poller data-task-url="{% url 'studio:task_status' task.id %}" data-task-kind="storyboard" aria-live="polite" aria-atomic="true">
         <span class="task-indicator" aria-hidden="true"></span>
         <div>

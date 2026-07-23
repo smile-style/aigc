@@ -26,14 +26,14 @@
           <span>封面底图 Prompt</span>
           <textarea name="prompt" rows="7" required>{{ workspace.cover_prompt }}</textarea>
         </label>
-        <button class="primary-button" type="submit" data-loading-text="提交生成中..." {% if workspace.cover_task.status == 'pending' or workspace.cover_task.status == 'running' %}disabled{% endif %}>
+        <button class="primary-button" type="submit" data-loading-text="提交生成中..." {% if workspace.cover_task.status == 'pending' or workspace.cover_task.status == 'running' or workspace.cover_task.status == 'retry_wait' %}disabled{% endif %}>
           {% if workspace.cover_template %}重新生成母版{% else %}生成封面母版{% endif %}
         </button>
       </form>
     </div>
 
     {% with task=workspace.cover_task %}
-      {% if task.status == "pending" or task.status == "running" %}
+      {% if task.status == "pending" or task.status == "running" or task.status == "retry_wait" %}
         <div class="task-status is-running" data-task-poller data-task-url="{% url 'studio:task_status' task.id %}" data-task-kind="cover-image" aria-live="polite">
           <span class="task-indicator" aria-hidden="true"></span>
           <div><strong data-task-label>正在生成封面母版</strong><p data-task-detail>完成后会自动为全部剧集排版封面。</p></div>

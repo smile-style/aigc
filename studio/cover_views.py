@@ -1,5 +1,4 @@
 import logging
-import threading
 
 from django.db import close_old_connections
 from django.http import FileResponse, Http404, HttpResponseBadRequest
@@ -73,15 +72,6 @@ def download_episode_cover_view(request, workspace_id, episode_number):
     )
 
 
-def _start_background_cover_generation(task_id):
-    worker = threading.Thread(
-        target=_run_cover_generation,
-        args=(task_id,),
-        daemon=True,
-    )
-    worker.start()
-    return worker
-
 
 def _run_cover_generation(task_id):
     close_old_connections()
@@ -111,6 +101,10 @@ def _run_cover_generation(task_id):
             logger.exception("Could not mark cover generation task %s failed", task_id)
     finally:
         close_old_connections()
+
+
+def _start_background_cover_generation(task_id):
+    return task_id
 
 
 def _cover_redirect_url(project, project_id):

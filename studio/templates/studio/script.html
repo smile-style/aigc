@@ -33,6 +33,17 @@
     {% endif %}
   </section>
 
+  {% with task=workspace.script_task %}
+    {% if task.status == "pending" or task.status == "running" or task.status == "retry_wait" %}
+      <div class="task-status is-running" data-task-poller data-task-url="{% url 'studio:task_status' task.id %}" data-task-kind="series-script" aria-live="polite">
+        <span class="task-indicator" aria-hidden="true"></span>
+        <div><strong data-task-label>&#27491;&#22312;&#29983;&#25104; 60 &#38598;&#35268;&#21010;</strong><p data-task-detail>&#21487;&#20197;&#20851;&#38381;&#39029;&#38754;&#65292;&#23436;&#25104;&#21518;&#20250;&#33258;&#21160;&#24674;&#22797;&#12290;</p></div>
+      </div>
+    {% elif task.status == "failed" %}
+      <div class="task-status is-error" role="alert"><span class="task-indicator" aria-hidden="true"></span><div><strong>&#21095;&#38598;&#35268;&#21010;&#29983;&#25104;&#22833;&#36133;</strong><p>{{ task.error_message }}</p></div></div>
+    {% endif %}
+  {% endwith %}
+
   {% if selected_outline %}
     <section class="surface-panel">
       <div class="selected-story">
@@ -82,7 +93,7 @@
     </div>
 
     {% with task=workspace.character_profile_task %}
-      {% if task.status == "pending" or task.status == "running" %}
+      {% if task.status == "pending" or task.status == "running" or task.status == "retry_wait" %}
         <div class="task-status is-running" data-task-poller data-task-url="{% url 'studio:task_status' task.id %}" data-task-kind="character-profile" aria-live="polite">
           <span class="task-indicator" aria-hidden="true"></span><div><strong data-task-label>正在生成角色设定</strong><p data-task-detail>完成后会自动加载角色 Prompt。</p></div>
         </div>
@@ -126,7 +137,7 @@
                 </div>
               </form>
               {% with image_task=character.image_task %}
-                {% if image_task.status == "pending" or image_task.status == "running" %}
+                {% if image_task.status == "pending" or image_task.status == "running" or image_task.status == "retry_wait" %}
                   <div class="task-status is-running" data-task-poller data-task-url="{% url 'studio:task_status' image_task.id %}" data-task-kind="character-image" aria-live="polite">
                     <span class="task-indicator" aria-hidden="true"></span><div><strong data-task-label>正在生成 {{ character.name }} 原图</strong><p data-task-detail>图片生成完成后会自动刷新。</p></div>
                   </div>

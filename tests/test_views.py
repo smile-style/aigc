@@ -1,6 +1,7 @@
 ﻿import pytest
 from django.http import HttpResponse
 from django.urls import reverse
+from django.utils import timezone
 
 from studio.llm.image_provider import ImageResult
 from studio.constants import GENRES
@@ -419,6 +420,57 @@ def test_storyboard_page_polls_active_task(client):
     assert response.status_code == 200
     assert "data-task-poller" in content
     assert reverse("studio:task_status", args=[task["id"]]) in content
+
+
+def test_script_page_exposes_series_script_task_for_polling(client):
+    workspace = write_workspace(
+        outlines=outline_payload(),
+        selected_outline_id="outline-1",
+    )
+    outline = WorkspaceRepository().start_script_generation(
+        workspace["id"],
+        "outline-1",
+    )
+
+    response = client.get(reverse("studio:script", args=[workspace["id"]]))
+
+    content = response.content.decode("utf-8")
+    assert response.status_code == 200
+    assert 'data-task-kind="series-script"' in content
+    assert reverse(
+        "studio:task_status",
+        args=[outline["generation_task_id"]],
+    ) in content
+
+
+def test_failed_generation_task_can_be_retried_over_http(client):
+    workspace = write_workspace(
+        outlines=outline_payload(),
+        selected_outline_id="outline-1",
+    )
+    outline = WorkspaceRepository().start_script_generation(
+        workspace["id"],
+        "outline-1",
+    )
+    task = GenerationTask.objects.get(pk=outline["generation_task_id"])
+    task.status = GenerationTask.STATUS_FAILED
+    task.attempt_count = 3
+    task.max_attempts = 3
+    task.error_message = "provider failed"
+    task.finished_at = timezone.now()
+    task.save()
+
+    response = client.post(
+        reverse("studio:retry_generation_task", args=[task.id]),
+        HTTP_ACCEPT="application/json",
+    )
+
+    task.refresh_from_db()
+    assert response.status_code == 200
+    assert response.json()["status"] == GenerationTask.STATUS_PENDING
+    assert task.status == GenerationTask.STATUS_PENDING
+    assert task.max_attempts == 6
+    assert task.error_message == ""
 
 
 def test_mark_outline_usable_keeps_outline_after_refresh(client, monkeypatch):

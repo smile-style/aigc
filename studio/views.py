@@ -1,5 +1,4 @@
 import logging
-import threading
 
 from django.db import close_old_connections
 from django.http import FileResponse, Http404, JsonResponse
@@ -376,7 +375,12 @@ def task_status_view(request, task_id):
     if task["status"] == GenerationTask.STATUS_SUCCEEDED:
         script_id = None
         route_name = None
-        if task["task_type"] in {
+        if task["task_type"] == GenerationTask.TYPE_SCRIPT:
+            project_id = task["input_snapshot"].get("project_id")
+            task["result_url"] = request.build_absolute_uri(
+                reverse("studio:project_workbench", args=[project_id])
+            )
+        elif task["task_type"] in {
             GenerationTask.TYPE_CHARACTER_PROFILE,
             GenerationTask.TYPE_CHARACTER_IMAGE,
         }:
@@ -436,14 +440,23 @@ def task_status_view(request, task_id):
             )
     return JsonResponse(task)
 
-def _start_background_character_profile_generation(task_id):
-    worker = threading.Thread(
-        target=_run_character_profile_generation,
-        args=(task_id,),
-        daemon=True,
-    )
-    worker.start()
-    return worker
+
+@require_POST
+def retry_generation_task_view(request, task_id):
+    from .generation_queue import retry_task
+
+    try:
+        task = GenerationTask.objects.select_related("project").get(pk=task_id)
+    except GenerationTask.DoesNotExist as exc:
+        raise Http404("\u751f\u6210\u4efb\u52a1\u4e0d\u5b58\u5728\u3002") from exc
+    try:
+        retry_task(task)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    if request.headers.get("Accept") == "application/json":
+        return JsonResponse(WorkspaceRepository().get_task(task.id))
+    return redirect(request.POST.get("next") or request.META.get("HTTP_REFERER") or reverse("studio:outline"))
+
 
 
 def _run_character_profile_generation(task_id):
@@ -470,15 +483,6 @@ def _run_character_profile_generation(task_id):
     finally:
         close_old_connections()
 
-
-def _start_background_character_image_generation(task_id):
-    worker = threading.Thread(
-        target=_run_character_image_generation,
-        args=(task_id,),
-        daemon=True,
-    )
-    worker.start()
-    return worker
 
 
 def _run_character_image_generation(task_id):
@@ -510,15 +514,6 @@ def _run_character_image_generation(task_id):
         close_old_connections()
 
 
-
-def _start_background_episode_script_generation(task_id):
-    worker = threading.Thread(
-        target=_run_episode_script_generation,
-        args=(task_id,),
-        daemon=True,
-    )
-    worker.start()
-    return worker
 
 
 def _run_episode_script_generation(task_id):
@@ -592,15 +587,6 @@ def _run_episode_script_generation(task_id):
         close_old_connections()
 
 
-def _start_background_storyboard_generation(task_id):
-    worker = threading.Thread(
-        target=_run_storyboard_generation,
-        args=(task_id,),
-        daemon=True,
-    )
-    worker.start()
-    return worker
-
 
 def _run_storyboard_generation(task_id):
     close_old_connections()
@@ -643,15 +629,6 @@ def _run_storyboard_generation(task_id):
         close_old_connections()
 
 
-def _start_background_script_generation(workspace_id, outline_id):
-    worker = threading.Thread(
-        target=_run_script_generation,
-        args=(workspace_id, outline_id),
-        daemon=True,
-    )
-    worker.start()
-    return worker
-
 
 def _run_script_generation(workspace_id, outline_id):
     close_old_connections()
@@ -677,6 +654,28 @@ def _run_script_generation(workspace_id, outline_id):
             logger.exception("Could not mark failed script generation for outline %s", outline_id)
     finally:
         close_old_connections()
+
+
+# Compatibility hooks retained for tests and callers; the persistent worker
+# now owns execution after the request has committed the task.
+def _start_background_character_profile_generation(task_id):
+    return task_id
+
+
+def _start_background_character_image_generation(task_id):
+    return task_id
+
+
+def _start_background_episode_script_generation(task_id):
+    return task_id
+
+
+def _start_background_storyboard_generation(task_id):
+    return task_id
+
+
+def _start_background_script_generation(workspace_id, outline_id):
+    return workspace_id, outline_id
 
 
 def _render_outline(request, workspace=None, error=None, genre=None):

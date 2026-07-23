@@ -75,6 +75,11 @@ urlpatterns = [
         name="download_episode_cover",
     ),
     path("tasks/<int:task_id>/", views.task_status_view, name="task_status"),
+    path(
+        "tasks/<int:task_id>/retry/",
+        views.retry_generation_task_view,
+        name="retry_generation_task",
+    ),
     path("storyboard/<str:workspace_id>/", views.storyboard_page, name="storyboard"),
     path(
         "storyboard/<str:workspace_id>/generate/",

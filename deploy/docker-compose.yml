@@ -11,6 +11,9 @@ x-app-environment: &app-environment
   DB_NAME: "${MYSQL_DATABASE:-AIGC_STUDIO}"
   DB_USER: "${MYSQL_USER:-aigc_studio}"
   DB_PASSWORD: "${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in deploy/.env}"
+  GENERATION_WORKER_INTERVAL_SECONDS: "${GENERATION_WORKER_INTERVAL_SECONDS:-2}"
+  GENERATION_MAX_CONCURRENCY: "${GENERATION_MAX_CONCURRENCY:-2}"
+  GENERATION_LEASE_SECONDS: "${GENERATION_LEASE_SECONDS:-900}"
   VIDEO_WORKER_INTERVAL_SECONDS: "${VIDEO_WORKER_INTERVAL_SECONDS:-5}"
   PUBLISH_WORKER_INTERVAL_SECONDS: "${PUBLISH_WORKER_INTERVAL_SECONDS:-3}"
   PUBLISH_MAX_CONCURRENCY: "${PUBLISH_MAX_CONCURRENCY:-2}"
@@ -101,6 +104,14 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  generation-worker:
+    <<: *app-service
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "manage.py", "process_generation_tasks"]
 
   video-worker:
     <<: *app-service

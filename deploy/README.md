@@ -1,6 +1,67 @@
 # Docker 部署
 
-默认使用 `deploy/docker-compose.yml` 部署 MySQL 版本，共包含五个服务：`mysql`、一次性数据库迁移任务 `migrate`、Web 服务 `aigc-studio`、视频任务服务 `video-worker` 和发布任务服务 `publish-worker`。应用镜像内已安装并校验 `ffmpeg` 与 `ffprobe`。
+## Generation worker and branch deployment
+
+The runtime now has six services: `mysql`, one-shot `migrate`, `aigc-studio`,
+`generation-worker`, `video-worker`, and `publish-worker`. Web requests only
+enqueue script, storyboard, character, and cover generation tasks. The
+`generation-worker` must stay running to execute them.
+
+For local development, run the web server and generation worker in separate
+terminals:
+
+```powershell
+.\.venv\Scripts\python.exe manage.py runserver
+.\.venv\Scripts\python.exe manage.py process_generation_tasks
+```
+
+To deploy this feature branch without replacing production, check out the branch
+on the deployment host and use the staging override:
+
+```bash
+git fetch origin
+git switch codex/production-workflow-optimization
+git pull --ff-only origin codex/production-workflow-optimization
+cp deploy/.env.example deploy/.env.staging
+```
+
+Set staging-specific values in `deploy/.env.staging`, including
+`DJANGO_SECRET_KEY`, database passwords, allowed hosts, and trusted origins.
+Then validate and start both Compose files together:
+
+```bash
+docker compose --env-file deploy/.env.staging \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.staging.yml config
+
+docker compose --env-file deploy/.env.staging \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.staging.yml pull
+
+docker compose --env-file deploy/.env.staging \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.staging.yml up -d
+```
+
+The staging site defaults to `http://<server>:8081/`. Its Compose project name
+is `aigc-staging`, and its MySQL, workspace, log, and media volumes use
+`aigc_staging_*` names. They are isolated from the production volumes. Always
+include both Compose files and the staging env file for staging operations,
+including `ps`, `logs`, `up`, and `down`.
+
+Check worker health after deployment:
+
+```bash
+docker compose --env-file deploy/.env.staging \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.staging.yml ps
+
+docker compose --env-file deploy/.env.staging \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.staging.yml logs --tail=200 generation-worker
+```
+
+默认使用 `deploy/docker-compose.yml` 部署 MySQL 版本，共包含六个服务：`mysql`、一次性数据库迁移任务 `migrate`、Web 服务 `aigc-studio`、生成任务服务 `generation-worker`、视频任务服务 `video-worker` 和发布任务服务 `publish-worker`。应用镜像内已安装并校验 `ffmpeg` 与 `ffprobe`。
 
 以下命令都在项目根目录执行。
 

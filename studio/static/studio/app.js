@@ -77,6 +77,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const label = taskPoller.querySelector("[data-task-label]");
     const detail = taskPoller.querySelector("[data-task-detail]");
     const names = {
+      "series-script": "\u0036\u0030 \u96c6\u89c4\u5212",
       "episode-script": "本集剧本",
       storyboard: "本集分镜",
       "character-profile": "角色设定",

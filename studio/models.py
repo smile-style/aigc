@@ -272,12 +272,14 @@ class GenerationTask(models.Model):
 
     STATUS_PENDING = "pending"
     STATUS_RUNNING = "running"
+    STATUS_RETRY_WAIT = "retry_wait"
     STATUS_SUCCEEDED = "succeeded"
     STATUS_FAILED = "failed"
     STATUS_CANCELLED = "cancelled"
     STATUS_CHOICES = [
         (STATUS_PENDING, "Pending"),
         (STATUS_RUNNING, "Running"),
+        (STATUS_RETRY_WAIT, "Retry wait"),
         (STATUS_SUCCEEDED, "Succeeded"),
         (STATUS_FAILED, "Failed"),
         (STATUS_CANCELLED, "Cancelled"),
@@ -290,15 +292,59 @@ class GenerationTask(models.Model):
     input_snapshot = models.JSONField(default=dict, blank=True)
     result_snapshot = models.JSONField(default=dict, blank=True)
     error_message = models.TextField(blank=True, default="")
+    error_code = models.CharField(max_length=64, blank=True, default="")
+    error_details = models.JSONField(default=dict, blank=True)
+    progress_current = models.PositiveIntegerField(default=0)
+    progress_total = models.PositiveIntegerField(default=0)
+    progress_percent = models.PositiveSmallIntegerField(default=0)
+    attempt_count = models.PositiveIntegerField(default=0)
+    max_attempts = models.PositiveIntegerField(default=3)
+    next_retry_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    idempotency_key = models.CharField(max_length=160, blank=True, default="", db_index=True)
+    priority = models.SmallIntegerField(default=0, db_index=True)
+    lease_owner = models.CharField(max_length=160, blank=True, default="")
+    lease_expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["status", "next_retry_at", "priority", "created_at"],
+                name="generation_task_queue_idx",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.task_type}:{self.status} for {self.project}"
+
+
+class GenerationAttempt(models.Model):
+    task = models.ForeignKey(
+        GenerationTask,
+        on_delete=models.CASCADE,
+        related_name="attempts",
+    )
+    attempt_number = models.PositiveIntegerField()
+    worker_id = models.CharField(max_length=160, blank=True, default="")
+    started_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    succeeded = models.BooleanField(default=False)
+    retryable = models.BooleanField(default=False)
+    error_code = models.CharField(max_length=64, blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["attempt_number", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["task", "attempt_number"],
+                name="unique_generation_attempt_number",
+            ),
+        ]
 
 
 # Imported after the core models to avoid circular references.

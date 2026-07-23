@@ -223,7 +223,11 @@ def create_cover_generation_task(workspace_id, script_id, prompt):
         running = project.generation_tasks.filter(
             task_type=GenerationTask.TYPE_COVER_IMAGE,
             target_id=target_id,
-            status__in=[GenerationTask.STATUS_PENDING, GenerationTask.STATUS_RUNNING],
+            status__in=[
+                GenerationTask.STATUS_PENDING,
+                GenerationTask.STATUS_RUNNING,
+                GenerationTask.STATUS_RETRY_WAIT,
+            ],
         ).order_by("-created_at", "-id").first()
         if running:
             return running, False

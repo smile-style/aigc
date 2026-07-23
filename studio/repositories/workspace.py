@@ -234,6 +234,21 @@ class WorkspaceRepository:
                     raise ValueError("请先选择一个大纲，再生成剧本。")
                 outline = Outline.objects.select_for_update().get(pk=outline.pk)
 
+            active = project.generation_tasks.filter(
+                task_type=GenerationTask.TYPE_SCRIPT,
+                target_id=outline.outline_id,
+                status__in=[
+                    GenerationTask.STATUS_PENDING,
+                    GenerationTask.STATUS_RUNNING,
+                    GenerationTask.STATUS_RETRY_WAIT,
+                ],
+            ).order_by("-created_at", "-id").first()
+            if active:
+                data = self._outline_to_dict(outline)
+                data["generation_task_id"] = active.id
+                data["created"] = False
+                return data
+
             outline.script_status = Outline.SCRIPT_GENERATING
             outline.script_error = ""
             outline.script_started_at = timezone.now()
@@ -247,7 +262,20 @@ class WorkspaceRepository:
                 ]
             )
 
-            return self._outline_to_dict(outline)
+            task = GenerationTask.objects.create(
+                project=project,
+                task_type=GenerationTask.TYPE_SCRIPT,
+                target_id=outline.outline_id,
+                input_snapshot={
+                    "outline_id": outline.outline_id,
+                    "project_id": outline.id,
+                },
+                idempotency_key=f"script:{project.id}:{outline.id}",
+            )
+            data = self._outline_to_dict(outline)
+            data["generation_task_id"] = task.id
+            data["created"] = True
+            return data
 
     def save_script_for_outline(
         self,
@@ -375,7 +403,11 @@ class WorkspaceRepository:
             running_task = project.generation_tasks.filter(
                 task_type=GenerationTask.TYPE_EPISODE_SCRIPT,
                 target_id=target_id,
-                status__in=[GenerationTask.STATUS_PENDING, GenerationTask.STATUS_RUNNING],
+                status__in=[
+                    GenerationTask.STATUS_PENDING,
+                    GenerationTask.STATUS_RUNNING,
+                    GenerationTask.STATUS_RETRY_WAIT,
+                ],
             ).order_by("-created_at", "-id").first()
             if running_task:
                 task_data = self._task_to_dict(running_task)
@@ -475,7 +507,11 @@ class WorkspaceRepository:
             running_task = project.generation_tasks.filter(
                 task_type=GenerationTask.TYPE_STORYBOARD,
                 target_id=target_id,
-                status__in=[GenerationTask.STATUS_PENDING, GenerationTask.STATUS_RUNNING],
+                status__in=[
+                    GenerationTask.STATUS_PENDING,
+                    GenerationTask.STATUS_RUNNING,
+                    GenerationTask.STATUS_RETRY_WAIT,
+                ],
             ).order_by("-created_at", "-id").first()
             if running_task:
                 task_data = self._task_to_dict(running_task)
@@ -565,7 +601,11 @@ class WorkspaceRepository:
             running = project.generation_tasks.filter(
                 task_type=GenerationTask.TYPE_CHARACTER_PROFILE,
                 target_id=target_id,
-                status__in=[GenerationTask.STATUS_PENDING, GenerationTask.STATUS_RUNNING],
+                status__in=[
+                    GenerationTask.STATUS_PENDING,
+                    GenerationTask.STATUS_RUNNING,
+                    GenerationTask.STATUS_RETRY_WAIT,
+                ],
             ).first()
             if running:
                 data = self._task_to_dict(running)
@@ -626,7 +666,11 @@ class WorkspaceRepository:
             running = project.generation_tasks.filter(
                 task_type=GenerationTask.TYPE_CHARACTER_IMAGE,
                 target_id=str(character.id),
-                status__in=[GenerationTask.STATUS_PENDING, GenerationTask.STATUS_RUNNING],
+                status__in=[
+                    GenerationTask.STATUS_PENDING,
+                    GenerationTask.STATUS_RUNNING,
+                    GenerationTask.STATUS_RETRY_WAIT,
+                ],
             ).first()
             if running:
                 data = self._task_to_dict(running)
@@ -815,6 +859,11 @@ class WorkspaceRepository:
             ),
             "script_id": script.id if script else None,
             "script_title": script.outline.title if script else "",
+            "script_task": self._latest_task_dict(
+                project,
+                GenerationTask.TYPE_SCRIPT,
+                target_id=selected_outline.outline_id,
+            ) if selected_outline else None,
             "script_choices": [
                 {
                     "id": item.id,
@@ -1056,6 +1105,17 @@ class WorkspaceRepository:
             "input_snapshot": task.input_snapshot,
             "result_snapshot": task.result_snapshot,
             "error_message": task.error_message,
+            "error_code": task.error_code,
+            "error_details": task.error_details,
+            "progress_current": task.progress_current,
+            "progress_total": task.progress_total,
+            "progress_percent": task.progress_percent,
+            "attempt_count": task.attempt_count,
+            "max_attempts": task.max_attempts,
+            "next_retry_at": (
+                self._format_datetime(task.next_retry_at) if task.next_retry_at else ""
+            ),
+            "can_retry": task.status in {task.STATUS_FAILED, task.STATUS_CANCELLED},
             "created_at": self._format_datetime(task.created_at),
             "started_at": self._format_datetime(task.started_at) if task.started_at else "",
             "finished_at": self._format_datetime(task.finished_at) if task.finished_at else "",
