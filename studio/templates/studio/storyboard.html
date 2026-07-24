@@ -36,7 +36,7 @@
       <div class="hero-actions">
         <a class="ghost-button" href="{% url 'studio:script_episode_context' workspace.id workspace.script_id episode.episode %}">查看本集剧本</a>
         {% if episode.has_script %}
-          <form method="post" action="{% url 'studio:generate_storyboard_script' workspace.id workspace.script_id episode.episode %}" data-submit-guard data-storyboard-form>
+          <form method="post" action="{% url 'studio:generate_storyboard_script' workspace.id workspace.script_id episode.episode %}" data-submit-guard data-generation-form data-storyboard-form>
             {% csrf_token %}
             <button class="primary-button" type="submit" data-loading-text="提交中..." {% if task.status == "pending" or task.status == "running" or task.status == "retry_wait" %}disabled{% endif %}>{% if episode.has_storyboard %}重新生成本集分镜{% else %}生成本集分镜{% endif %}</button>
           </form>

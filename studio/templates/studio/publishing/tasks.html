@@ -3,6 +3,11 @@
 {% block title %}发布任务 | 漫剧工坊{% endblock %}
 {% block page_heading %}发布任务{% endblock %}
 
+{% block extra_scripts %}
+  {% load static %}
+  <script src="{% static 'studio/publishing.js' %}?v=20260724-publishing" defer></script>
+{% endblock %}
+
 {% block content %}
 <section class="publishing-workspace" data-publishing-status-url="{% url 'studio:publishing_task_status' %}">
   <header class="publishing-page-head">

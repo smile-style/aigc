@@ -3,6 +3,11 @@
 {% block title %}第 {{ episode.episode_number }} 集视频成片 | 漫剧工坊{% endblock %}
 {% block page_heading %}视频成片{% endblock %}
 
+{% block extra_scripts %}
+  {% load static %}
+  <script src="{% static 'studio/phase3.js' %}?v=20260724-video" defer></script>
+{% endblock %}
+
 {% block content %}
 <section class="stack video-workspace" data-script-id="{{ workspace.script_id }}" data-video-status-url="{% url 'studio:video_status' workspace.id episode.episode_number %}?script_id={{ workspace.script_id }}">
   <form class="context-switcher surface-panel" method="get" action="{% url 'studio:workbench_context' workspace.id %}">

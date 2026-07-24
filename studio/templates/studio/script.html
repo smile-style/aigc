@@ -44,6 +44,20 @@
     {% endif %}
   {% endwith %}
 
+  {% with task=workspace.episode_script_task episode=workspace.selected_episode %}
+    {% if task.status == "pending" or task.status == "running" or task.status == "retry_wait" %}
+      <div class="task-status is-running" data-task-poller data-task-url="{% url 'studio:task_status' task.id %}" data-task-kind="episode-script" aria-live="polite">
+        <span class="task-indicator" aria-hidden="true"></span>
+        <div><strong data-task-label>正在生成第 {{ episode.episode }} 集剧本</strong><p data-task-detail>正在创建生成任务。</p></div>
+      </div>
+    {% elif task.status == "failed" %}
+      <div class="task-status is-error" role="alert">
+        <span class="task-indicator" aria-hidden="true"></span>
+        <div><strong>第 {{ episode.episode }} 集剧本生成失败</strong><p>{{ task.error_message|default:"生成过程中发生未知错误，请重试。" }}</p></div>
+      </div>
+    {% endif %}
+  {% endwith %}
+
   {% if selected_outline %}
     <section class="surface-panel">
       <div class="selected-story">
@@ -173,13 +187,23 @@
             <div class="episode-row-actions">
               {% if episode.has_script %}
                 <button class="ghost-button" type="button" data-modal-target="episode-script-{{ episode.episode }}">查看剧本</button>
-                <a class="secondary-link" href="{% url 'studio:storyboard_script_episode' workspace.id workspace.script_id episode.episode %}">{% if episode.has_storyboard %}查看分镜{% else %}生成分镜{% endif %}</a>
+                {% if episode.has_storyboard %}
+                  <a class="secondary-link" href="{% url 'studio:storyboard_script_episode' workspace.id workspace.script_id episode.episode %}">查看分镜</a>
+                {% else %}
+                  <form method="post" action="{% url 'studio:generate_storyboard_script' workspace.id workspace.script_id episode.episode %}" data-submit-guard data-generation-form>
+                    {% csrf_token %}
+                    <button class="secondary-button small" type="submit" data-loading-text="正在创建任务...">生成分镜</button>
+                  </form>
+                {% endif %}
               {% elif episode.script_status == "generating" %}
                 <button class="secondary-button" type="button" disabled>生成中</button>
               {% else %}
-                <form method="post" action="{% url 'studio:generate_episode_script' workspace.id episode.episode %}" data-submit-guard>{% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}"><button class="primary-button small" type="submit" data-loading-text="提交中...">生成剧本</button></form>
+                <form method="post" action="{% url 'studio:generate_episode_script' workspace.id episode.episode %}" data-submit-guard data-generation-form>{% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}"><button class="primary-button small" type="submit" data-loading-text="正在创建任务...">{% if episode.script_status == "failed" %}重新生成剧本{% else %}生成剧本{% endif %}</button></form>
               {% endif %}
             </div>
+            {% if episode.script_status == "failed" %}
+              <div class="episode-error" role="alert"><strong>剧本生成失败：</strong>{{ episode.script_error|default:"生成过程中发生未知错误，请重试。" }}</div>
+            {% endif %}
           </article>
 
           {% if episode.has_script %}

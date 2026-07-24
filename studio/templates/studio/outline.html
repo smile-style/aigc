@@ -11,7 +11,7 @@
       <h2>生成候选大纲，筛出可进入剧本加工的故事</h2>
       <p class="hero-copy">固定 60 集，单集按剧情内容自然估时。每次刷新生成 6 个候选，你可以查看详情并把成熟的大纲加入剧本库。</p>
     </div>
-    <form class="control-row" method="post" action="{% url 'studio:generate_outlines' %}" data-submit-guard>
+    <form class="control-row" method="post" action="{% url 'studio:generate_outlines' %}" data-submit-guard data-generation-form>
       {% csrf_token %}
       <label class="field" for="genre">
         <span>题材类型</span>

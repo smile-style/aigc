@@ -1096,6 +1096,26 @@ class WorkspaceRepository:
     def _task_to_dict(self, task):
         if task is None:
             return None
+        stage_map = {
+            task.STATUS_PENDING: ("created", "生成任务已创建", "任务已进入队列，正在等待执行。"),
+            task.STATUS_RUNNING: ("model", "等待大模型返回", "请求已发送，正在等待大模型生成结果。"),
+            task.STATUS_RETRY_WAIT: ("model", "等待重试", "模型服务暂时不可用，系统会自动重试。"),
+            task.STATUS_SUCCEEDED: ("result", "结果处理完成", "模型结果已返回并保存。"),
+            task.STATUS_FAILED: (
+                "failed",
+                "生成任务失败",
+                task.error_message or "生成过程中发生未知错误，请重试。",
+            ),
+            task.STATUS_CANCELLED: (
+                "failed",
+                "生成任务已取消",
+                task.error_message or "任务已取消。",
+            ),
+        }
+        stage, stage_label, stage_detail = stage_map.get(
+            task.status,
+            ("created", "正在处理任务", "正在获取最新任务状态。"),
+        )
         return {
             "id": task.id,
             "task_type": task.task_type,
@@ -1116,6 +1136,9 @@ class WorkspaceRepository:
                 self._format_datetime(task.next_retry_at) if task.next_retry_at else ""
             ),
             "can_retry": task.status in {task.STATUS_FAILED, task.STATUS_CANCELLED},
+            "stage": stage,
+            "stage_label": stage_label,
+            "stage_detail": stage_detail,
             "created_at": self._format_datetime(task.created_at),
             "started_at": self._format_datetime(task.started_at) if task.started_at else "",
             "finished_at": self._format_datetime(task.finished_at) if task.finished_at else "",

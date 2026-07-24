@@ -3,6 +3,11 @@
 {% block title %}系统管理 | 漫剧工坊{% endblock %}
 {% block page_heading %}系统管理{% endblock %}
 
+{% block extra_scripts %}
+  {% load static %}
+  <script src="{% static 'studio/publishing.js' %}?v=20260724-publishing" defer></script>
+{% endblock %}
+
 {% block content %}
 <section class="simple-settings">
   {% if success %}
