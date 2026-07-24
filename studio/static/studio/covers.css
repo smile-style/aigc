@@ -52,6 +52,18 @@
   border-top: 1px solid var(--line);
 }
 
+.cover-section-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cover-download-all {
+  min-height: 38px;
+  padding-inline: 12px;
+  font-size: 13px;
+}
+
 .cover-episode-row {
   display: grid;
   grid-template-columns: 42px 180px minmax(0, 1fr) auto;
@@ -122,6 +134,15 @@
 }
 
 @media (max-width: 560px) {
+  .cover-workspace .section-head {
+    align-items: flex-start;
+  }
+
+  .cover-section-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
   .cover-episode-row {
     grid-template-columns: 32px minmax(0, 1fr);
   }

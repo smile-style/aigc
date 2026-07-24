@@ -73,17 +73,18 @@ def create_script_with_episodes():
     ("value", "expected"),
     [
         ("仓库一夜被抢空", "仓库一夜被抢空"),
+        ("粮山入库", "粮山入库"),
         ("钱没到账，灾难先来！", "钱没到账灾难先来"),
         (" 亲妈当众撕毁婚约 ", "亲妈当众撕毁婚约"),
     ],
 )
-def test_normalize_cover_title_accepts_six_to_ten_effective_characters(value, expected):
+def test_normalize_cover_title_accepts_one_to_ten_effective_characters(value, expected):
     assert normalize_cover_title(value) == expected
 
 
-@pytest.mark.parametrize("value", ["太短了", "这是一条明显超过十个字符的封面标题"])
+@pytest.mark.parametrize("value", ["", "！？", "这是一条明显超过十个字符的封面标题"])
 def test_normalize_cover_title_rejects_invalid_length(value):
-    with pytest.raises(ValueError, match="6 到 10"):
+    with pytest.raises(ValueError, match="最多 10"):
         normalize_cover_title(value)
 
 

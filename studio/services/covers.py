@@ -15,15 +15,14 @@ from studio.models import CoverTemplate, Episode, EpisodeCover, GenerationTask, 
 COVER_WIDTH = 1600
 COVER_HEIGHT = 1000
 COVER_GENERATION_SIZE = "1536x1024"
-MIN_COVER_TITLE_CHARACTERS = 6
+DEFAULT_COVER_TITLE_MIN_CHARACTERS = 6
 MAX_COVER_TITLE_CHARACTERS = 10
 
 
 def normalize_cover_title(value):
     compact = "".join(character for character in str(value or "").strip() if character.isalnum())
-    length = len(compact)
-    if not MIN_COVER_TITLE_CHARACTERS <= length <= MAX_COVER_TITLE_CHARACTERS:
-        raise ValueError("封面标题必须为 6 到 10 个有效字符。")
+    if not compact or len(compact) > MAX_COVER_TITLE_CHARACTERS:
+        raise ValueError("封面标题不能为空，且最多 10 个有效字符。")
     return compact
 
 
@@ -31,7 +30,7 @@ def default_episode_cover_title(episode):
     episode_title = "".join(
         character for character in str(episode.title or "") if character.isalnum()
     )
-    if len(episode_title) >= MIN_COVER_TITLE_CHARACTERS:
+    if len(episode_title) >= DEFAULT_COVER_TITLE_MIN_CHARACTERS:
         return episode_title[:MAX_COVER_TITLE_CHARACTERS]
 
     candidates = [
@@ -50,16 +49,16 @@ def default_episode_cover_title(episode):
         if not compact or compact in seen_candidates:
             continue
         seen_candidates.add(compact)
-        if not units and len(compact) >= MIN_COVER_TITLE_CHARACTERS:
+        if not units and len(compact) >= DEFAULT_COVER_TITLE_MIN_CHARACTERS:
             return compact[:MAX_COVER_TITLE_CHARACTERS]
         for character in compact:
-            if len(units) >= MIN_COVER_TITLE_CHARACTERS:
+            if len(units) >= DEFAULT_COVER_TITLE_MIN_CHARACTERS:
                 break
             if character not in units:
                 units += character
     fallback = "危机突然提前降临"
     for character in fallback:
-        if len(units) >= MIN_COVER_TITLE_CHARACTERS:
+        if len(units) >= DEFAULT_COVER_TITLE_MIN_CHARACTERS:
             break
         units += character
     return units[:MAX_COVER_TITLE_CHARACTERS]

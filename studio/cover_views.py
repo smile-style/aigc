@@ -1,4 +1,6 @@
 import logging
+from io import BytesIO
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from django.db import close_old_connections
 from django.http import FileResponse, Http404, HttpResponseBadRequest
@@ -71,6 +73,44 @@ def download_episode_cover_view(request, workspace_id, episode_number):
         filename=f"EP{episode_number:03d}-cover.jpg",
     )
 
+
+@require_GET
+def download_all_episode_covers_view(request, workspace_id):
+    script_id = int(request.GET.get("script_id") or 0) or None
+    script = Script.objects.filter(
+        pk=script_id,
+        project__workspace_id=workspace_id,
+    ).first()
+    if script is None:
+        raise Http404("剧本不存在。")
+
+    covers = list(
+        EpisodeCover.objects.filter(episode__script=script)
+        .exclude(image="")
+        .select_related("episode")
+        .order_by("episode__episode_number")
+    )
+    if not covers:
+        raise Http404("当前剧本还没有可下载的封面。")
+
+    archive = BytesIO()
+    with ZipFile(archive, "w", compression=ZIP_DEFLATED) as bundle:
+        for cover in covers:
+            cover.image.open("rb")
+            try:
+                bundle.writestr(
+                    f"EP{cover.episode.episode_number:03d}-cover.jpg",
+                    cover.image.read(),
+                )
+            finally:
+                cover.image.close()
+    archive.seek(0)
+    return FileResponse(
+        archive,
+        as_attachment=True,
+        filename=f"script-{script.id:06d}-episode-covers.zip",
+        content_type="application/zip",
+    )
 
 
 def _run_cover_generation(task_id):

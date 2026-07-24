@@ -1,7 +1,20 @@
+from io import BytesIO
+from zipfile import ZipFile
+
 import pytest
+from django.core.files.base import ContentFile
+from django.test import override_settings
 from django.urls import reverse
 
-from studio.models import Episode, GenerationTask, Outline, Project, Script
+from studio.models import (
+    CoverTemplate,
+    Episode,
+    EpisodeCover,
+    GenerationTask,
+    Outline,
+    Project,
+    Script,
+)
 
 
 pytestmark = pytest.mark.django_db
@@ -57,13 +70,71 @@ def test_generate_cover_starts_one_background_task(client, monkeypatch):
     assert len(started) == 1
 
 
-def test_update_cover_title_rejects_title_outside_limit(client):
+def test_update_cover_title_rejects_empty_title(client):
     project, script, episode = create_cover_workspace()
 
     response = client.post(
         reverse("studio:update_episode_cover", args=[project.workspace_id, episode.episode_number]),
-        {"script_id": script.id, "title": "太短"},
+        {"script_id": script.id, "title": ""},
     )
 
     assert response.status_code == 400
-    assert "6 到 10" in response.content.decode("utf-8")
+    assert "最多 10" in response.content.decode("utf-8")
+
+
+def test_download_all_episode_covers_returns_ordered_zip(client, tmp_path):
+    project, script, first_episode = create_cover_workspace()
+    second_episode = Episode.objects.create(
+        script=script,
+        episode_number=2,
+        title="第二集",
+        summary="第二集摘要",
+        key_conflict="第二集冲突",
+        cliffhanger="第二集悬念",
+    )
+    with override_settings(MEDIA_ROOT=tmp_path):
+        template = CoverTemplate.objects.create(
+            script=script,
+            prompt_snapshot="cover prompt",
+            model="cover-model",
+        )
+        for episode, content in (
+            (second_episode, b"cover-two"),
+            (first_episode, b"cover-one"),
+        ):
+            cover = EpisodeCover.objects.create(
+                template=template,
+                episode=episode,
+                title=episode.title,
+            )
+            cover.image.save(
+                f"episode-{episode.episode_number}.jpg",
+                ContentFile(content),
+            )
+
+        response = client.get(
+            reverse("studio:download_all_episode_covers", args=[project.workspace_id]),
+            {"script_id": script.id},
+        )
+        archive = ZipFile(BytesIO(b"".join(response.streaming_content)))
+
+    assert response.status_code == 200
+    assert response["Content-Type"] == "application/zip"
+    assert (
+        f"script-{script.id:06d}-episode-covers.zip"
+        in response["Content-Disposition"]
+    )
+    assert archive.namelist() == ["EP001-cover.jpg", "EP002-cover.jpg"]
+    assert archive.read("EP001-cover.jpg") == b"cover-one"
+    assert archive.read("EP002-cover.jpg") == b"cover-two"
+
+
+def test_download_all_episode_covers_returns_404_without_covers(client):
+    project, script, _ = create_cover_workspace()
+
+    response = client.get(
+        reverse("studio:download_all_episode_covers", args=[project.workspace_id]),
+        {"script_id": script.id},
+    )
+
+    assert response.status_code == 404

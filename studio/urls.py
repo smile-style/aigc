@@ -74,6 +74,11 @@ urlpatterns = [
         cover_views.download_episode_cover_view,
         name="download_episode_cover",
     ),
+    path(
+        "script/<str:workspace_id>/covers/download/",
+        cover_views.download_all_episode_covers_view,
+        name="download_all_episode_covers",
+    ),
     path("tasks/<int:task_id>/", views.task_status_view, name="task_status"),
     path(
         "tasks/<int:task_id>/retry/",

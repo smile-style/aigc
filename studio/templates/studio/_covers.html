@@ -50,7 +50,15 @@
   <section class="surface-panel">
     <div class="section-head">
       <div><p class="eyebrow">Episode Covers</p><h2>逐集封面标题</h2></div>
-      {% if workspace.cover_template %}<span class="status-pill">标题限制 6–10 字</span>{% endif %}
+      {% if workspace.cover_template %}
+        <div class="cover-section-actions">
+          <span class="status-pill">标题最多 10 字</span>
+          <a class="secondary-link cover-download-all" href="{% url 'studio:download_all_episode_covers' workspace.id %}?script_id={{ workspace.script_id }}">
+            <span aria-hidden="true">&#8595;</span>
+            下载全部
+          </a>
+        </div>
+      {% endif %}
     </div>
 
     {% if workspace.cover_template %}
@@ -68,7 +76,7 @@
               <input type="hidden" name="script_id" value="{{ workspace.script_id }}">
               <label>
                 <span>第 {{ episode.episode }} 集标题</span>
-                <input type="text" name="title" value="{{ episode.cover_title }}" minlength="6" maxlength="10" required>
+                <input type="text" name="title" value="{{ episode.cover_title }}" maxlength="10" required>
                 <small class="cover-title-meta">{{ episode.title }}</small>
               </label>
               <button class="secondary-button small" type="submit">更新封面</button>
