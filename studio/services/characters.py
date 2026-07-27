@@ -139,7 +139,11 @@ def normalize_character_name(value):
     return " ".join(str(value or "").strip().split())
 
 
-def storyboard_character_candidates(script):
+def storyboard_character_candidates(
+    script,
+    episode_number=None,
+    include_existing=False,
+):
     from studio.models import StoryboardShot
 
     existing = {
@@ -150,6 +154,10 @@ def storyboard_character_candidates(script):
     shots = StoryboardShot.objects.filter(storyboard__script=script).select_related(
         "storyboard__episode"
     )
+    if include_existing:
+        existing.clear()
+    if episode_number is not None:
+        shots = shots.filter(storyboard__episode__episode_number=int(episode_number))
     for shot in shots:
         for raw_name in shot.character_names or []:
             name = normalize_character_name(raw_name)

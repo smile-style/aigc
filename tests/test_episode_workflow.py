@@ -114,7 +114,7 @@ def test_workflow_starts_script_task_and_reuses_active_run():
     assert run.status == EpisodeWorkflowRun.STATUS_RUNNING
 
 
-def test_character_stage_targets_current_episode_and_reports_new_and_reused_assets():
+def test_one_click_character_stage_generates_only_characters_in_at_least_six_shots():
     _, script, episode = make_episode(full_script="Episode script")
     existing = Character.objects.create(
         script=script,
@@ -134,29 +134,47 @@ def test_character_stage_targets_current_episode_and_reports_new_and_reused_asse
 
     run, _ = create_episode_workflow(episode)
 
-    assert run.stage == EpisodeWorkflowRun.STAGE_CHARACTERS
-    assert run.child_task.input_snapshot["episode_number"] == episode.episode_number
-    assert run.child_task.target_id.endswith(f":episode:{episode.episode_number}")
+    assert run.stage == EpisodeWorkflowRun.STAGE_STORYBOARD
+    assert run.child_task.task_type == GenerationTask.TYPE_STORYBOARD
 
-    new_character = Character.objects.create(
+    prompts = []
+    for shot_number in range(1, 7):
+        names = ["Existing lead", "New doctor"]
+        if shot_number <= 5:
+            names.append("Five-shot extra")
+        prompts.append(
+            {
+                "shot_number": shot_number,
+                "duration": "4s",
+                "visual_description": f"Hospital shot {shot_number}",
+                "character_action": "Talk",
+                "dialogue_or_narration": "Dialogue",
+                "camera_language": "Medium shot",
+                "image_prompt": "hospital",
+                "video_prompt": "People talk in a hospital",
+                "character_names": names,
+            }
+        )
+    StoryboardPrompt.objects.create(
+        project=episode.script.project,
         script=script,
-        name="New doctor",
-        role="Doctor",
-        appearance="White coat",
-        personality="Direct",
-        costume="White coat",
-        image_prompt="New doctor reference",
+        episode=episode,
+        prompts_payload=prompts,
     )
     GenerationTask.objects.filter(pk=run.child_task_id).update(
         status=GenerationTask.STATUS_SUCCEEDED,
-        result_snapshot={
-            "character_count": 2,
-            "character_names": [existing.name, new_character.name],
-        },
     )
 
     run = advance_episode_workflow(run.id)
 
+    new_character = Character.objects.get(script=script, name="New doctor")
+    assert run.stage == EpisodeWorkflowRun.STAGE_CHARACTERS
+    assert not Character.objects.filter(script=script, name="Five-shot extra").exists()
+    assert run.details["character_shot_threshold"] == 6
+    assert run.details["character_shot_counts"] == {
+        "Existing lead": 6,
+        "New doctor": 6,
+    }
     assert run.details["character_new_total"] == 1
     assert run.details["character_reused"] == 1
     assert run.details["character_total"] == 1
@@ -168,7 +186,7 @@ def test_character_stage_targets_current_episode_and_reports_new_and_reused_asse
     CharacterAsset.objects.create(
         character=new_character,
         model="image-model",
-        prompt_snapshot="New doctor reference",
+        prompt_snapshot=new_character.image_prompt,
         image="characters/new-doctor.png",
     )
     GenerationTask.objects.filter(pk=image_task.id).update(
@@ -176,6 +194,7 @@ def test_character_stage_targets_current_episode_and_reports_new_and_reused_asse
     )
     run = advance_episode_workflow(run.id)
 
+    assert run.stage == EpisodeWorkflowRun.STAGE_VIDEOS
     assert run.details["character_new_total"] == 1
     assert run.details["character_reused"] == 1
 
@@ -233,7 +252,7 @@ def test_successful_stage_transition_resets_automatic_retry_count():
 
     run = advance_episode_workflow(run.id)
 
-    assert run.stage == EpisodeWorkflowRun.STAGE_CHARACTERS
+    assert run.stage == EpisodeWorkflowRun.STAGE_STORYBOARD
     assert run.details.get("auto_retry_count") is None
     assert run.details.get("auto_retry_message") is None
 

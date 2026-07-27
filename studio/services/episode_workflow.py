@@ -14,6 +14,10 @@ from studio.models import (
     VideoComposition,
 )
 from studio.repositories.workspace import WorkspaceRepository
+from studio.services.characters import (
+    create_storyboard_characters,
+    storyboard_character_candidates,
+)
 from studio.services.subtitles import is_subtitle_stale, queue_subtitle_alignment
 from studio.services.video import queue_episode_videos, queue_export, sync_episode_shots
 
@@ -21,6 +25,7 @@ from studio.services.video import queue_episode_videos, queue_export, sync_episo
 logger = logging.getLogger(__name__)
 
 MAX_AUTO_RETRIES = 3
+MIN_AUTOMATIC_CHARACTER_SHOTS = 6
 AUTO_RETRY_COUNT_KEY = "auto_retry_count"
 AUTO_RETRY_MESSAGE_KEY = "auto_retry_message"
 AUTO_RETRY_EXHAUSTED_KEY = "auto_retry_exhausted"
@@ -40,8 +45,8 @@ FAILED_TASK_STATUSES = {
 }
 STAGE_PROGRESS = {
     EpisodeWorkflowRun.STAGE_SCRIPT: 5,
-    EpisodeWorkflowRun.STAGE_CHARACTERS: 15,
-    EpisodeWorkflowRun.STAGE_STORYBOARD: 30,
+    EpisodeWorkflowRun.STAGE_STORYBOARD: 15,
+    EpisodeWorkflowRun.STAGE_CHARACTERS: 30,
     EpisodeWorkflowRun.STAGE_VIDEOS: 42,
     EpisodeWorkflowRun.STAGE_CLEAN_EXPORT: 74,
     EpisodeWorkflowRun.STAGE_SUBTITLES: 84,
@@ -219,7 +224,7 @@ def workflow_payload(run):
 def _handle_script(run):
     episode = run.episode
     if episode.full_script.strip():
-        return _move_to(run, EpisodeWorkflowRun.STAGE_CHARACTERS)
+        return _move_to(run, EpisodeWorkflowRun.STAGE_STORYBOARD)
     task_data = WorkspaceRepository().create_episode_script_task(
         episode.script.project.workspace_id,
         episode.episode_number,
@@ -233,16 +238,39 @@ def _handle_script(run):
 def _handle_characters(run):
     episode = run.episode
     details = dict(run.details or {})
-    if not details.get("character_profile_complete"):
-        task_data = WorkspaceRepository().create_character_profile_task(
-            episode.script.project.workspace_id,
-            episode.script.character_visual_style,
-            script_id=episode.script_id,
-            episode_number=episode.episode_number,
+    storyboard = StoryboardPrompt.objects.filter(episode=episode).first()
+    if not storyboard or not storyboard.prompts_payload:
+        return _move_to(run, EpisodeWorkflowRun.STAGE_STORYBOARD)
+    sync_episode_shots(episode)
+    candidates = storyboard_character_candidates(
+        episode.script,
+        episode_number=episode.episode_number,
+        include_existing=True,
+    )
+    selected = [
+        item
+        for item in candidates
+        if item["shot_count"] >= MIN_AUTOMATIC_CHARACTER_SHOTS
+    ]
+    details["character_profile_complete"] = True
+    details["character_names"] = [item["name"] for item in selected]
+    details["character_shot_counts"] = {
+        item["name"]: item["shot_count"] for item in selected
+    }
+    details["character_shot_threshold"] = MIN_AUTOMATIC_CHARACTER_SHOTS
+    if "character_image_task_ids" not in details:
+        existing_names = set(
+            Character.objects.filter(script=episode.script, is_deleted=False).values_list(
+                "name", flat=True
+            )
         )
-        run.child_task_id = task_data["id"]
-        run.progress_percent = 18
-        return False
+        missing_names = [
+            item["name"]
+            for item in selected
+            if item["name"] not in existing_names
+        ]
+        if missing_names:
+            create_storyboard_characters(episode.script, missing_names)
 
     characters_query = Character.objects.filter(script=episode.script, is_deleted=False)
     if "character_names" in details:
@@ -275,24 +303,24 @@ def _handle_characters(run):
     details["character_ready"] = ready
     run.details = details
     total = len(task_ids)
-    run.progress_percent = 22 + int((ready / total) * 7) if total else 29
+    run.progress_percent = 32 + int((ready / total) * 8) if total else 40
     if ready < total:
         return False
-    return _move_to(run, EpisodeWorkflowRun.STAGE_STORYBOARD)
+    return _move_to(run, EpisodeWorkflowRun.STAGE_VIDEOS)
 
 
 def _handle_storyboard(run):
     episode = run.episode
     storyboard = StoryboardPrompt.objects.filter(episode=episode).first()
     if storyboard and storyboard.prompts_payload:
-        return _move_to(run, EpisodeWorkflowRun.STAGE_VIDEOS)
+        return _move_to(run, EpisodeWorkflowRun.STAGE_CHARACTERS)
     task_data = WorkspaceRepository().create_storyboard_task(
         episode.script.project.workspace_id,
         episode.episode_number,
         script_id=episode.script_id,
     )
     run.child_task_id = task_data["id"]
-    run.progress_percent = 34
+    run.progress_percent = 18
     return False
 
 
