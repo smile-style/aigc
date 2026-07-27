@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from django.core.management.base import BaseCommand
 from django.db import close_old_connections, connection
 
+from studio.services.episode_workflow import advance_active_workflows
 from studio.generation_queue import (
     claim_next_task,
     process_claimed_task,
@@ -38,6 +39,7 @@ class Command(BaseCommand):
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
             futures = set()
             while True:
+                advance_active_workflows()
                 recover_expired_leases()
                 futures = {future for future in futures if not future.done()}
                 claimed_count = 0
@@ -57,6 +59,7 @@ class Command(BaseCommand):
 
     def _handle_serial(self, owner, options):
         while True:
+            advance_active_workflows()
             recover_expired_leases()
             task = claim_next_task(owner)
             claimed_count = 0

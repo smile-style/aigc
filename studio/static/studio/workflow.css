@@ -62,3 +62,112 @@
   .task-steps { grid-template-columns: 1fr; }
   .generation-toast { right: 16px; bottom: 16px; }
 }
+
+.episode-row > .episode-workflow-panel {
+  grid-column: 2 / -1;
+}
+
+.episode-workflow-panel {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid rgba(103, 232, 249, 0.26);
+  border-radius: 8px;
+  background: rgba(8, 15, 26, 0.72);
+}
+
+.episode-workflow-panel.is-failed {
+  border-color: rgba(251, 191, 36, 0.5);
+}
+
+.episode-workflow-panel.is-succeeded {
+  border-color: rgba(134, 239, 172, 0.42);
+}
+
+.episode-workflow-head,
+.episode-workflow-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.episode-workflow-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.episode-workflow-head strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.episode-workflow-kicker {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.episode-workflow-head output {
+  min-width: 42px;
+  color: var(--cyan);
+  font-weight: 800;
+  text-align: right;
+}
+
+.episode-workflow-panel progress {
+  width: 100%;
+  height: 6px;
+  margin: 12px 0;
+  border: 0;
+  border-radius: 3px;
+  overflow: hidden;
+  accent-color: var(--cyan);
+}
+
+.episode-workflow-steps {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(72px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.episode-workflow-steps li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+}
+
+.episode-workflow-steps li > span {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  border-radius: 50%;
+}
+
+.episode-workflow-steps li.is-running { color: var(--text); }
+.episode-workflow-steps li.is-running > span { border-color: var(--cyan); background: var(--cyan); }
+.episode-workflow-steps li.is-succeeded > span { border-color: var(--mint); background: var(--mint); }
+.episode-workflow-steps li.is-failed > span { border-color: #fbbf24; background: #fbbf24; }
+.episode-workflow-steps small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.episode-workflow-detail { margin: 10px 0 0; color: var(--muted); font-size: 13px; }
+.episode-workflow-actions { margin-top: 10px; justify-content: flex-end; }
+.episode-workflow-actions form { margin: 0; }
+
+@media (max-width: 760px) {
+  .episode-workflow-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .episode-row > .episode-workflow-panel { grid-column: 1 / -1; }
+  .episode-workflow-head { align-items: flex-start; }
+}
+.episode-automation-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.episode-automation-actions form { margin: 0; }

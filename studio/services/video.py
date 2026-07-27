@@ -297,23 +297,33 @@ def process_video_asset(asset_id):
         return asset
 
 
-def queue_export(episode):
-    active = episode.script.project.generation_tasks.filter(
+def queue_export(episode, include_subtitles=None):
+    track = SubtitleTrack.objects.filter(episode=episode).first()
+    if include_subtitles is None:
+        include_subtitles = bool(track and track.enabled)
+    include_subtitles = bool(include_subtitles)
+    variant = (
+        VideoComposition.VARIANT_CAPTIONED
+        if include_subtitles
+        else VideoComposition.VARIANT_CLEAN
+    )
+    active_tasks = episode.script.project.generation_tasks.filter(
         task_type=GenerationTask.TYPE_VIDEO_EXPORT,
         status__in=[GenerationTask.STATUS_PENDING, GenerationTask.STATUS_RUNNING],
-    ).filter(
-        Q(input_snapshot__episode_id=episode.id)
-        | Q(target_id=str(episode.id))
-    ).first()
-    if active:
-        return active, False
+    ).order_by("-created_at", "-id")
+    for active in active_tasks:
+        snapshot = active.input_snapshot or {}
+        if snapshot.get("episode_id") == episode.id and bool(
+            snapshot.get("include_subtitles")
+        ) == include_subtitles:
+            return active, False
     selected = [shot.video_assets.filter(is_selected=True, status=VideoAsset.STATUS_READY).first() for shot in sync_episode_shots(episode)]
     if not selected or any(asset is None for asset in selected):
         raise ValueError("所有分镜都生成并选定视频后才能导出。")
-    track = SubtitleTrack.objects.filter(episode=episode).first()
-    include_subtitles = bool(track and track.enabled)
     subtitle_data = {}
     if include_subtitles:
+        if track is None:
+            raise ValueError("请先生成字幕，再导出有字幕版本。")
         if track.status == SubtitleTrack.STATUS_ALIGNING:
             raise ValueError("\u5b57\u5e55\u6b63\u5728\u81ea\u52a8\u5bf9\u9f50\uff0c\u8bf7\u7a0d\u540e\u518d\u5bfc\u51fa\u3002")
         if not track.cues.exists():
@@ -328,6 +338,7 @@ def queue_export(episode):
     composition = VideoComposition.objects.create(
         episode=episode,
         version=version,
+        variant=variant,
         status=VideoComposition.STATUS_EXPORTING,
         include_subtitles=include_subtitles,
         subtitle_snapshot=subtitle_data,
@@ -408,7 +419,13 @@ def video_page_data(episode, sync=False):
             and shot.video_prompt_override_source_hash != _prompt_hash(shot.storyboard_prompt_for_page)
         )
     missing_shot_numbers = [shot.shot_number for shot in shots if not shot.selected_video]
-    composition = VideoComposition.objects.filter(episode=episode).first()
+    clean_composition = VideoComposition.objects.filter(
+        episode=episode, variant=VideoComposition.VARIANT_CLEAN
+    ).first()
+    captioned_composition = VideoComposition.objects.filter(
+        episode=episode, variant=VideoComposition.VARIANT_CAPTIONED
+    ).first()
+    composition = captioned_composition or clean_composition
     asset_updates_available = sum(
         1
         for shot in shots
@@ -419,6 +436,8 @@ def video_page_data(episode, sync=False):
     return {
         "shots": shots,
         "composition": composition,
+        "clean_composition": clean_composition,
+        "captioned_composition": captioned_composition,
         "asset_updates_available": asset_updates_available,
         "counts": {
             "total": len(shots),

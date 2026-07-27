@@ -234,6 +234,13 @@ class VideoAsset(models.Model):
 
 
 class VideoComposition(models.Model):
+    VARIANT_CLEAN = "clean"
+    VARIANT_CAPTIONED = "captioned"
+    VARIANT_CHOICES = [
+        (VARIANT_CLEAN, "Without subtitles"),
+        (VARIANT_CAPTIONED, "With subtitles"),
+    ]
+
     STATUS_DRAFT = "draft"
     STATUS_EXPORTING = "exporting"
     STATUS_READY = "ready"
@@ -251,6 +258,12 @@ class VideoComposition(models.Model):
         related_name="video_compositions",
     )
     version = models.PositiveIntegerField(default=1)
+    variant = models.CharField(
+        max_length=16,
+        choices=VARIANT_CHOICES,
+        default=VARIANT_CLEAN,
+        db_index=True,
+    )
     status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_DRAFT)
     video = models.FileField(upload_to=composition_video_upload_to, blank=True)
     include_subtitles = models.BooleanField(default=False)

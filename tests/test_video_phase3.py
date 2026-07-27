@@ -425,10 +425,10 @@ def test_ready_composition_can_be_downloaded_and_reexported(client):
     )
 
     content = response.content.decode("utf-8")
-    assert "下载当前成片" in content
-    assert "重新导出" in content
-    assert "include_subtitles" not in content
-
+    assert "variant=clean" in content
+    assert "&#19979;&#36733;&#26080;&#23383;&#24149;&#29256;&#26412;" in content
+    assert "&#19979;&#36733;&#26377;&#23383;&#24149;&#29256;&#26412;" in content
+    assert "disabled" in content
 
 def test_assembly_page_identifies_shots_blocking_export(client):
     from studio.services.video import video_page_data

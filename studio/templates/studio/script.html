@@ -189,6 +189,20 @@
               {% if episode.has_storyboard %}<span class="status-pill success">{{ episode.storyboard_count }} 个分镜</span>{% endif %}
             </div>
             <div class="episode-row-actions">
+              {% if episode.workflow.status == 'queued' or episode.workflow.status == 'running' %}
+                <button class="primary-button small" type="button" disabled>&#29983;&#25104;&#20013; {{ episode.workflow.progress_percent }}%</button>
+              {% elif episode.workflow.status == 'failed' %}
+                <form method="post" action="{% url 'studio:retry_episode_workflow' episode.workflow.id %}" data-submit-guard>
+                  {% csrf_token %}<button class="secondary-button small" type="submit">&#32487;&#32493;&#29983;&#25104;&#25104;&#29255;</button>
+                </form>
+              {% elif episode.workflow.status == 'succeeded' %}
+                <a class="primary-button small" href="{% url 'studio:video_script_episode' workspace.id workspace.script_id episode.episode %}?tab=assembly">&#26597;&#30475;&#25104;&#29255;</a>
+              {% else %}
+                <form method="post" action="{% url 'studio:start_episode_workflow' workspace.id episode.episode %}" data-submit-guard>
+                  {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+                  <button class="primary-button small" type="submit" data-loading-text="&#27491;&#22312;&#21551;&#21160;...">&#19968;&#38190;&#29983;&#25104;&#25104;&#29255;</button>
+                </form>
+              {% endif %}
               {% if episode.has_script %}
                 <button class="ghost-button" type="button" data-modal-target="episode-script-{{ episode.episode }}">查看剧本</button>
                 {% if episode.has_storyboard %}
@@ -205,6 +219,9 @@
                 <form method="post" action="{% url 'studio:generate_episode_script' workspace.id episode.episode %}" data-submit-guard data-generation-form>{% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}"><button class="primary-button small" type="submit" data-loading-text="正在创建任务...">{% if episode.script_status == "failed" %}重新生成剧本{% else %}生成剧本{% endif %}</button></form>
               {% endif %}
             </div>
+            {% if episode.workflow %}
+              {% include "studio/_episode_workflow.html" with workflow=episode.workflow %}
+            {% endif %}
             {% if episode.script_status == "failed" %}
               <div class="episode-error" role="alert"><strong>剧本生成失败：</strong>{{ episode.script_error|default:"生成过程中发生未知错误，请重试。" }}</div>
             {% endif %}
@@ -227,6 +244,20 @@
                   <p class="hero-copy">节奏校验：{{ episode.pacing_payload.duration_seconds }} 秒 · {{ episode.pacing_payload.information_beats|length }} 个信息点</p>
                 {% endif %}
                 <pre class="script-block modal-script">{{ episode.full_script }}</pre>
+                <div class="episode-automation-actions">
+                  {% if episode.workflow.status == 'queued' or episode.workflow.status == 'running' %}
+                    <button class="primary-button" type="button" disabled>&#27491;&#22312;&#29983;&#25104;&#25104;&#29255; {{ episode.workflow.progress_percent }}%</button>
+                  {% elif episode.workflow.status == 'failed' %}
+                    <form method="post" action="{% url 'studio:retry_episode_workflow' episode.workflow.id %}" data-submit-guard>{% csrf_token %}<button class="primary-button" type="submit">&#20174;&#22833;&#36133;&#27493;&#39588;&#32487;&#32493;</button></form>
+                  {% elif episode.workflow.status == 'succeeded' %}
+                    <a class="primary-button" href="{% url 'studio:video_script_episode' workspace.id workspace.script_id episode.episode %}?tab=assembly">&#26597;&#30475;&#25104;&#29255;</a>
+                  {% else %}
+                    <form method="post" action="{% url 'studio:start_episode_workflow' workspace.id episode.episode %}" data-submit-guard>
+                      {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+                      <button class="primary-button" type="submit" data-loading-text="&#27491;&#22312;&#21551;&#21160;...">&#19968;&#38190;&#29983;&#25104;&#25104;&#29255;</button>
+                    </form>
+                  {% endif %}
+                </div>
                 <div class="modal-actions"><form method="post" action="{% url 'studio:generate_episode_script' workspace.id episode.episode %}" data-submit-guard>{% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}"><button class="secondary-button" type="submit">重新生成</button></form><a class="primary-button" href="{% url 'studio:storyboard_script_episode' workspace.id workspace.script_id episode.episode %}">进入分镜</a></div>
               </section>
             </div>

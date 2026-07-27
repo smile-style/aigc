@@ -1,0 +1,38 @@
+<section class="episode-workflow-panel is-{{ workflow.status }}"
+         data-episode-workflow
+         data-workflow-url="{% url 'studio:episode_workflow_status' workflow.id %}"
+         data-workflow-status="{{ workflow.status }}"
+         aria-live="polite"
+         aria-label="&#26412;&#38598;&#33258;&#21160;&#29983;&#20135;&#36827;&#24230;">
+  <div class="episode-workflow-head">
+    <div>
+      <span class="episode-workflow-kicker">&#19968;&#38190;&#29983;&#25104;&#25104;&#29255;</span>
+      <strong data-workflow-label>{{ workflow.stage_label }}</strong>
+    </div>
+    <output data-workflow-percent>{{ workflow.progress_percent }}%</output>
+  </div>
+  <progress max="100" value="{{ workflow.progress_percent }}" data-workflow-progress>{{ workflow.progress_percent }}%</progress>
+  <ol class="episode-workflow-steps">
+    {% for step in workflow.steps %}
+      <li class="is-{{ step.status }}" data-workflow-step="{{ step.key }}">
+        <span aria-hidden="true"></span><small>{{ step.label }}</small>
+      </li>
+    {% endfor %}
+  </ol>
+  <p class="episode-workflow-detail" data-workflow-detail>
+    {% if workflow.stage == 'videos' and workflow.details.video_total %}
+      &#24050;&#23436;&#25104; {{ workflow.details.video_ready }} / {{ workflow.details.video_total }} &#20010;&#38236;&#22836;
+    {% elif workflow.status == 'failed' %}
+      {{ workflow.error_message }}
+    {% else %}
+      &#21487;&#20197;&#31163;&#24320;&#39029;&#38754;&#65292;&#21518;&#21488;&#20250;&#32487;&#32493;&#25191;&#34892;&#12290;
+    {% endif %}
+  </p>
+  <div class="episode-workflow-actions">
+    {% if workflow.status == 'failed' %}
+      <form method="post" action="{% url 'studio:retry_episode_workflow' workflow.id %}" data-submit-guard>{% csrf_token %}<button class="secondary-button small" type="submit">&#20174;&#22833;&#36133;&#27493;&#39588;&#32487;&#32493;</button></form>
+    {% elif workflow.status == 'succeeded' %}
+      <a class="primary-button small" href="{% url 'studio:video_script_episode' workflow.workspace_id workflow.script_id workflow.episode_number %}?tab=assembly">&#26597;&#30475;&#25104;&#29255;</a>
+    {% endif %}
+  </div>
+</section>

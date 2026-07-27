@@ -1,6 +1,6 @@
 from django.urls import include, path
 
-from . import cover_views, video_views, views
+from . import cover_views, video_views, views, workflow_views
 
 
 app_name = "studio"
@@ -80,6 +80,21 @@ urlpatterns = [
         name="download_all_episode_covers",
     ),
     path("tasks/<int:task_id>/", views.task_status_view, name="task_status"),
+    path(
+        "workflow/<str:workspace_id>/episode/<int:episode_number>/start/",
+        workflow_views.start_episode_workflow_view,
+        name="start_episode_workflow",
+    ),
+    path(
+        "workflow/runs/<int:run_id>/",
+        workflow_views.episode_workflow_status_view,
+        name="episode_workflow_status",
+    ),
+    path(
+        "workflow/runs/<int:run_id>/retry/",
+        workflow_views.retry_episode_workflow_view,
+        name="retry_episode_workflow",
+    ),
     path(
         "tasks/<int:task_id>/retry/",
         views.retry_generation_task_view,

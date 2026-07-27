@@ -9,6 +9,7 @@ from django.views.decorators.http import require_GET, require_POST
 from studio.models import (
     Character,
     Episode,
+    EpisodeWorkflowRun,
     GenerationTask,
     PublishingAccount,
     PublishingTask,
@@ -20,6 +21,7 @@ from studio.models import (
 )
 from studio.repositories.workspace import CURRENT_WORKSPACE_ID, WorkspaceRepository
 from studio.services.characters import create_storyboard_characters, storyboard_character_candidates
+from studio.services.episode_workflow import workflow_payload
 from studio.services.model_slots import (
     get_simple_model_slots,
     save_simple_model_slot,
@@ -348,6 +350,9 @@ def _render_video_episode(request, workspace_id, episode_number, script_id=None)
             "shots": data["shots"],
             "counts": data["counts"],
             "composition": data["composition"],
+            "clean_composition": data["clean_composition"],
+            "captioned_composition": data["captioned_composition"],
+            "episode_workflow": _latest_workflow_payload(episode),
             "subtitle": subtitle_page_data(episode, data["shots"]),
             "publishing_accounts": PublishingAccount.objects.filter(
                 status=PublishingAccount.STATUS_CONNECTED
@@ -621,7 +626,11 @@ def export_video_view(request, workspace_id, episode_number):
     script_id = _request_script_id(request)
     episode = _episode(workspace_id, episode_number, script_id=script_id)
     try:
-        queue_export(episode)
+        variant = request.POST.get("variant")
+        include_subtitles = None
+        if variant in {VideoComposition.VARIANT_CLEAN, VideoComposition.VARIANT_CAPTIONED}:
+            include_subtitles = variant == VideoComposition.VARIANT_CAPTIONED
+        queue_export(episode, include_subtitles=include_subtitles)
     except ValueError as exc:
         return _video_error(request, workspace_id, episode_number, str(exc), tab="assembly", script_id=script_id)
     return _video_redirect(workspace_id, episode_number, tab="assembly", script_id=script_id)
@@ -670,11 +679,15 @@ def download_shot_video_view(request, workspace_id, episode_number, video_id):
 
 @require_GET
 def download_composition_view(request, workspace_id, episode_number):
+    variant = request.GET.get("variant", VideoComposition.VARIANT_CLEAN)
+    if variant not in {VideoComposition.VARIANT_CLEAN, VideoComposition.VARIANT_CAPTIONED}:
+        raise Http404("Unknown composition variant")
     script_id = _request_script_id(request)
     queryset = VideoComposition.objects.select_related("episode__script__project", "episode__script__outline").filter(
         episode__script__project__workspace_id=workspace_id,
         episode__episode_number=episode_number,
         status=VideoComposition.STATUS_READY,
+        variant=variant,
     )
     if script_id:
         queryset = queryset.filter(episode__script_id=script_id)
@@ -685,7 +698,11 @@ def download_composition_view(request, workspace_id, episode_number):
     return FileResponse(
         composition.video,
         as_attachment=True,
-        filename=f"{script_storage_key(composition.episode.script)}-EP{episode_number:03d}-FINAL-v{composition.version:03d}.mp4",
+        filename=(
+            f"{script_storage_key(composition.episode.script)}-EP{episode_number:03d}-"
+            f"{'CAPTIONED' if variant == VideoComposition.VARIANT_CAPTIONED else 'CLEAN'}"
+            f"-v{composition.version:03d}.mp4"
+        ),
     )
 
 
@@ -710,6 +727,11 @@ def _seconds_to_ms(value):
     if seconds < 0:
         raise ValueError("Subtitle time cannot be negative")
     return int(seconds * 1000)
+
+
+def _latest_workflow_payload(episode):
+    run = EpisodeWorkflowRun.objects.filter(episode=episode).first()
+    return workflow_payload(run) if run else None
 
 
 def _request_script_id(request):
@@ -792,6 +814,9 @@ def _video_error(
             "shots": data["shots"],
             "counts": data["counts"],
             "composition": data["composition"],
+            "clean_composition": data["clean_composition"],
+            "captioned_composition": data["captioned_composition"],
+            "episode_workflow": _latest_workflow_payload(episode),
             "subtitle": subtitle_data,
             "characters": Character.objects.filter(
                 script=episode.script,

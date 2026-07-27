@@ -349,5 +349,70 @@ class GenerationAttempt(models.Model):
         ]
 
 
+class EpisodeWorkflowRun(models.Model):
+    STATUS_QUEUED = "queued"
+    STATUS_RUNNING = "running"
+    STATUS_SUCCEEDED = "succeeded"
+    STATUS_FAILED = "failed"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_CHOICES = [
+        (STATUS_QUEUED, "Queued"),
+        (STATUS_RUNNING, "Running"),
+        (STATUS_SUCCEEDED, "Succeeded"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_CANCELLED, "Cancelled"),
+    ]
+
+    STAGE_SCRIPT = "script"
+    STAGE_CHARACTERS = "characters"
+    STAGE_STORYBOARD = "storyboard"
+    STAGE_VIDEOS = "videos"
+    STAGE_CLEAN_EXPORT = "clean_export"
+    STAGE_SUBTITLES = "subtitles"
+    STAGE_CAPTIONED_EXPORT = "captioned_export"
+    STAGE_COMPLETE = "complete"
+    STAGE_CHOICES = [
+        (STAGE_SCRIPT, "Episode script"),
+        (STAGE_CHARACTERS, "Characters"),
+        (STAGE_STORYBOARD, "Storyboard"),
+        (STAGE_VIDEOS, "Shot videos"),
+        (STAGE_CLEAN_EXPORT, "Clean export"),
+        (STAGE_SUBTITLES, "Subtitles"),
+        (STAGE_CAPTIONED_EXPORT, "Captioned export"),
+        (STAGE_COMPLETE, "Complete"),
+    ]
+
+    episode = models.ForeignKey(
+        Episode,
+        on_delete=models.CASCADE,
+        related_name="workflow_runs",
+    )
+    status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_QUEUED, db_index=True)
+    stage = models.CharField(max_length=32, choices=STAGE_CHOICES, default=STAGE_SCRIPT, db_index=True)
+    progress_percent = models.PositiveSmallIntegerField(default=0)
+    child_task = models.ForeignKey(
+        GenerationTask,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="workflow_steps",
+    )
+    details = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True, default="")
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["status", "stage", "created_at"],
+                name="episode_workflow_queue_idx",
+            ),
+        ]
+
+
 # Imported after the core models to avoid circular references.
 from .video_models import *  # noqa: E402,F401,F403

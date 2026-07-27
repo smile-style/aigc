@@ -19,7 +19,8 @@ from .llm.provider import (
     LLMJSONParseError,
     LLMProvider,
 )
-from .models import GenerationTask, ModelAssignment
+from .models import EpisodeWorkflowRun, GenerationTask, ModelAssignment
+from .services.episode_workflow import workflow_payload
 from .repositories.workspace import CURRENT_WORKSPACE_ID, WorkspaceRepository
 from .models import Character
 from .services.characters import apply_character_visual_style, generate_character_profiles
@@ -717,6 +718,7 @@ def _render_script(
     if selected_episode is not None:
         requested_view = "episodes"
     workspace = decorate_cover_workspace(workspace)
+    _decorate_episode_workflows(workspace, selected_episode)
     active_view = requested_view if requested_view in {"episodes", "characters", "covers"} else "episodes"
     return render(
         request,
@@ -730,6 +732,25 @@ def _render_script(
             "active_nav": "script",
         },
     )
+
+def _decorate_episode_workflows(workspace, selected_episode=None):
+    script_id = (workspace or {}).get("script_id")
+    if not script_id:
+        return
+    latest_by_episode = {}
+    runs = (
+        EpisodeWorkflowRun.objects.filter(episode__script_id=script_id)
+        .select_related("episode__script__project")
+        .order_by("episode__episode_number", "-created_at", "-id")
+    )
+    for run in runs:
+        latest_by_episode.setdefault(run.episode.episode_number, workflow_payload(run))
+    for episode in workspace.get("episodes", []):
+        episode["workflow"] = latest_by_episode.get(episode.get("episode"))
+    if selected_episode is not None:
+        selected_episode["workflow"] = latest_by_episode.get(
+            selected_episode.get("episode")
+        )
 
 
 def _render_storyboard(request, workspace, error=None):

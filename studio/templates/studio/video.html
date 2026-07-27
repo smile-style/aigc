@@ -31,6 +31,9 @@
     <button class="ghost-button" type="submit">&#20999;&#25442;</button>
     <a class="secondary-button" href="{% url 'studio:storyboard_script_episode' workspace.id workspace.script_id episode.episode_number %}">&#20998;&#38236;&#24037;&#20316;&#21488;</a>
   </form>
+  {% if episode_workflow %}
+    {% include "studio/_episode_workflow.html" with workflow=episode_workflow %}
+  {% endif %}
   {% if sync_result != None %}<div class="task-status is-success" role="status"><strong>&#24050;&#21516;&#27493; {{ sync_result }} &#20010;&#35282;&#33394;&#36164;&#20135;&#24341;&#29992;</strong></div>{% endif %}
   <section class="compact-hero hero-panel">
     <div><p class="eyebrow">Episode {{ episode.episode_number }} · Step 4 / 4</p><h2>第 {{ episode.episode_number }} 集 · {{ episode.title }}</h2></div>
@@ -89,20 +92,35 @@
           {% else %}<strong>&#24050;&#20851;&#38381;</strong>{% endif %}
           {% if subtitle.track %}<span>{{ subtitle.visible_count }} &#26465;&#26174;&#31034;{% if subtitle.hidden_count %} · {{ subtitle.hidden_count }} &#26465;&#24050;&#38544;&#34255;{% endif %} · {{ subtitle.review_count }} &#26465;&#24453;&#26657;&#23545;</span>{% endif %}
         </p>
-        {% if composition.status == 'exporting' %}
-          <button class="primary-button" disabled>正在导出...</button>
-        {% else %}
-          <div class="export-actions">
-            {% if composition.status == 'ready' and composition.video %}<a class="ghost-button" href="{% url 'studio:download_composition' workspace.id episode.episode_number %}?script_id={{ workspace.script_id }}">下载当前成片</a>{% endif %}
-            {% if composition.status == 'ready' and composition.video and publishing_accounts %}<button class="secondary-button" type="button" data-modal-target="publish-composition-{{ composition.id }}">发布</button>{% endif %}
-            <button class="secondary-button" type="button" data-modal-target="subtitle-style-editor">&#23383;&#24149;&#26679;&#24335;</button>
-            <button class="secondary-button" type="button" data-modal-target="subtitle-editor">&#23383;&#24149;&#20869;&#23481;</button>
+        <div class="export-actions export-download-actions" aria-label="&#25104;&#29255;&#19979;&#36733;">
+          {% if clean_composition.status == 'ready' and clean_composition.video %}
+            <a class="primary-button" href="{% url 'studio:download_composition' workspace.id episode.episode_number %}?script_id={{ workspace.script_id }}&amp;variant=clean">&#19979;&#36733;&#26080;&#23383;&#24149;&#29256;&#26412;</a>
+          {% else %}
+            <button class="primary-button" type="button" disabled title="&#26080;&#23383;&#24149;&#25104;&#29255;&#23578;&#26410;&#23548;&#20986;">&#19979;&#36733;&#26080;&#23383;&#24149;&#29256;&#26412;</button>
+          {% endif %}
+          {% if captioned_composition.status == 'ready' and captioned_composition.video %}
+            <a class="secondary-button" href="{% url 'studio:download_composition' workspace.id episode.episode_number %}?script_id={{ workspace.script_id }}&amp;variant=captioned">&#19979;&#36733;&#26377;&#23383;&#24149;&#29256;&#26412;</a>
+          {% else %}
+            <button class="secondary-button" type="button" disabled title="{% if not subtitle.track or not subtitle.cues %}&#35831;&#20808;&#29983;&#25104;&#23383;&#24149;{% elif subtitle.is_stale %}&#23383;&#24149;&#24050;&#36807;&#26399;&#65292;&#35831;&#37325;&#26032;&#29983;&#25104;{% else %}&#26377;&#23383;&#24149;&#25104;&#29255;&#23578;&#26410;&#23548;&#20986;{% endif %}">&#19979;&#36733;&#26377;&#23383;&#24149;&#29256;&#26412;</button>
+          {% endif %}
+        </div>
+        <div class="export-actions export-tool-actions">
+          {% if composition.status == 'ready' and composition.video and publishing_accounts %}<button class="secondary-button" type="button" data-modal-target="publish-composition-{{ composition.id }}">&#21457;&#24067;</button>{% endif %}
+          <button class="secondary-button" type="button" data-modal-target="subtitle-style-editor">&#23383;&#24149;&#26679;&#24335;</button>
+          <button class="secondary-button" type="button" data-modal-target="subtitle-editor">&#23383;&#24149;&#20869;&#23481;</button>
+          {% if clean_composition.status != 'exporting' %}
             <form method="post" action="{% url 'studio:export_video' workspace.id episode.episode_number %}" data-submit-guard>
-              {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
-              <button class="primary-button" type="submit" data-loading-text="提交导出中..." {% if counts.ready != counts.total or not counts.total %}disabled{% endif %}>{% if composition.status == 'ready' %}重新导出{% else %}拼接并导出{% endif %}</button>
+              {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}"><input type="hidden" name="variant" value="clean">
+              <button class="ghost-button" type="submit" data-loading-text="&#25552;&#20132;&#23548;&#20986;&#20013;..." {% if counts.ready != counts.total or not counts.total %}disabled{% endif %}>{% if clean_composition.status == 'ready' %}&#37325;&#26032;&#23548;&#20986;&#26080;&#23383;&#24149;&#29256;{% else %}&#29983;&#25104;&#26080;&#23383;&#24149;&#29256;{% endif %}</button>
             </form>
-          </div>
-        {% endif %}
+          {% else %}<button class="ghost-button" type="button" disabled>&#26080;&#23383;&#24149;&#29256;&#23548;&#20986;&#20013;</button>{% endif %}
+          {% if captioned_composition.status != 'exporting' %}
+            <form method="post" action="{% url 'studio:export_video' workspace.id episode.episode_number %}" data-submit-guard>
+              {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}"><input type="hidden" name="variant" value="captioned">
+              <button class="ghost-button" type="submit" data-loading-text="&#25552;&#20132;&#23548;&#20986;&#20013;..." {% if counts.ready != counts.total or not counts.total or not subtitle.track or not subtitle.cues or subtitle.is_stale %}disabled{% endif %}>{% if captioned_composition.status == 'ready' %}&#37325;&#26032;&#23548;&#20986;&#23383;&#24149;&#29256;{% else %}&#29983;&#25104;&#23383;&#24149;&#29256;{% endif %}</button>
+            </form>
+          {% else %}<button class="ghost-button" type="button" disabled>&#23383;&#24149;&#29256;&#23548;&#20986;&#20013;</button>{% endif %}
+        </div>
       </div>
       <div class="detail-modal" id="subtitle-editor" role="dialog" aria-modal="true" aria-labelledby="subtitle-editor-title" {% if subtitle_auto_open %}data-auto-open{% endif %} hidden>
         <div class="detail-backdrop" data-modal-close></div>

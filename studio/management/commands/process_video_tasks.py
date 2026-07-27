@@ -6,6 +6,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from studio.models import GenerationTask, ShotSubtitleSetting, SubtitleTrack, VideoAsset, VideoComposition
+from studio.services.episode_workflow import advance_active_workflows
 from studio.services.subtitles import process_subtitle_task
 from studio.services.video import process_export_task, process_video_asset
 
@@ -29,6 +30,7 @@ class Command(BaseCommand):
             time.sleep(max(1.0, options["interval"]))
 
     def _process_pass(self):
+        advance_active_workflows()
         processed = 0
         assets = list(
             VideoAsset.objects.filter(
@@ -65,6 +67,7 @@ class Command(BaseCommand):
             self._record_export_failure,
             "video export task",
         )
+        advance_active_workflows()
         return processed
 
     def _process_items(self, items, processor, failure_recorder, label):

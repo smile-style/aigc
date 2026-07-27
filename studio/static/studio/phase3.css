@@ -198,6 +198,14 @@
 .export-bar { justify-content: space-between; gap: 18px; margin-top: 16px; padding: 14px; border-top: 1px solid var(--border); background: #101722; }
 .export-bar p { margin: 4px 0 0; color: var(--subtle); font-size: 12px; }
 .export-actions { display: flex; align-items: center; gap: 8px; }
+.export-bar { align-items: stretch; flex-direction: column; }
+.export-download-actions,
+.export-tool-actions { justify-content: flex-end; flex-wrap: wrap; }
+.export-download-actions { padding-top: 4px; }
+.export-download-actions > a,
+.export-download-actions > button { min-width: 190px; text-align: center; }
+.export-tool-actions { padding-top: 10px; border-top: 1px solid var(--border); }
+.export-tool-actions form { margin: 0; }
 .export-bar .export-blocker { color: #fca5a5; max-width: 260px; }
 .export-blocker a { color: var(--cyan); font-weight: 700; }
 
