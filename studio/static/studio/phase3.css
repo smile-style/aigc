@@ -237,3 +237,54 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+.character-delete-form { margin: 0 0 0 auto; }
+.danger-button {
+  min-height: 44px;
+  border: 1px solid rgba(251, 113, 133, .48);
+  border-radius: 5px;
+  background: rgba(127, 29, 29, .18);
+  color: #fecdd3;
+  cursor: pointer;
+  font-weight: 800;
+}
+.danger-button:hover { border-color: var(--rose); background: rgba(190, 24, 93, .24); }
+.compact-button { min-height: 36px; padding: 6px 11px; font-size: 12px; }
+.success-alert { border-color: rgba(134, 239, 172, .35); color: #bbf7d0; }
+.compact-task-status { margin: 10px 0; padding: 10px 12px; }
+.character-discovery-dialog { width: min(720px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 32px)); overflow: auto; }
+.character-discovery-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.dialog-supporting-copy { max-width: 64ch; margin: 8px 0 18px; color: var(--muted); }
+.character-discovery-list { display: grid; gap: 8px; }
+.character-discovery-option {
+  display: grid;
+  grid-template-columns: 22px 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #0d1420;
+  cursor: pointer;
+}
+.character-discovery-option:hover { border-color: var(--border-strong); }
+.character-discovery-option input { width: 18px; height: 18px; accent-color: var(--cyan); }
+.character-discovery-option b,
+.character-discovery-option small { display: block; }
+.character-discovery-option small { margin-top: 2px; color: var(--muted); }
+.candidate-avatar { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 6px; background: rgba(103, 232, 249, .12); color: var(--cyan); font-weight: 900; }
+.character-discovery-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.character-limit-counter { margin: -6px 0 12px; color: var(--muted); font-size: 12px; font-weight: 800; text-align: right; }
+.character-limit-counter.is-limit { color: var(--amber); }
+
+@media (max-width: 760px) {
+  .video-section-actions { align-items: stretch; flex-direction: column; }
+  .video-section-actions .secondary-button { width: 100%; }
+  .character-discovery-head { align-items: flex-start; }
+  .character-discovery-option { grid-template-columns: 22px 40px minmax(0, 1fr); padding: 9px; }
+  .candidate-avatar { width: 40px; height: 40px; }
+  .character-discovery-actions { align-items: stretch; flex-direction: column-reverse; }
+  .character-discovery-actions button { width: 100%; }
+}
+.discovery-selection-counter { margin: 10px 0 0; }

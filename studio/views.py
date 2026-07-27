@@ -21,6 +21,7 @@ from .llm.provider import (
 )
 from .models import GenerationTask, ModelAssignment
 from .repositories.workspace import CURRENT_WORKSPACE_ID, WorkspaceRepository
+from .models import Character
 from .services.characters import apply_character_visual_style, generate_character_profiles
 from .services.covers import decorate_cover_workspace
 from .services.model_config import image_provider_for, llm_provider_for
@@ -760,3 +761,19 @@ def _outline_by_id(workspace, outline_id):
             if isinstance(outline, dict) and outline.get("id") == outline_id:
                 return outline
     return None
+
+@require_POST
+def delete_character_view(request, workspace_id, character_id):
+    script_id = int(request.POST.get("script_id") or 0) or None
+    try:
+        character = WorkspaceRepository().delete_character(
+            workspace_id,
+            character_id,
+            script_id=script_id,
+        )
+    except (Character.DoesNotExist, FileNotFoundError) as exc:
+        raise Http404(str(exc)) from exc
+    if script_id:
+        project_id = character.script.project_id
+        return redirect(f'{reverse("studio:project_workbench", args=[project_id])}?view=characters')
+    return redirect(f'{reverse("studio:script", args=[workspace_id])}?view=characters')

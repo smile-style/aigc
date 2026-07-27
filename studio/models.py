@@ -179,6 +179,8 @@ class Character(models.Model):
     costume = models.TextField(blank=True)
     image_prompt = models.TextField()
     position = models.PositiveIntegerField(default=1)
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

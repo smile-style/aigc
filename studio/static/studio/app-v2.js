@@ -189,3 +189,56 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 });
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("form[data-confirm-submit]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      if (!window.confirm(form.dataset.confirmSubmit || "Confirm this action?")) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }, { capture: true });
+  });
+
+  document.querySelectorAll('form[action*="/shot/"][action*="/characters/"]').forEach((form) => {
+    const choices = Array.from(form.querySelectorAll('input[name="character_ids"]'));
+    if (!choices.length) return;
+    const counter = document.createElement("p");
+    counter.className = "character-limit-counter";
+    counter.setAttribute("role", "status");
+    counter.setAttribute("aria-live", "polite");
+    form.querySelector(".character-choice-grid")?.after(counter);
+
+    const updateLimit = () => {
+      const selected = choices.filter((choice) => choice.checked).length;
+      counter.textContent = `\u5df2\u9009 ${selected}/5`;
+      counter.classList.toggle("is-limit", selected >= 5);
+      choices.forEach((choice) => {
+        const unavailable = choice.closest(".character-choice")?.classList.contains("is-disabled");
+        choice.disabled = Boolean(unavailable || (selected >= 5 && !choice.checked));
+      });
+    };
+    choices.forEach((choice) => choice.addEventListener("change", updateLimit));
+    updateLimit();
+  });
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+  const discoveryForm = document.querySelector("#discover-storyboard-characters form");
+  if (!(discoveryForm instanceof HTMLFormElement)) return;
+  const choices = Array.from(discoveryForm.querySelectorAll('input[name="character_names"]'));
+  const submitButton = discoveryForm.querySelector('button[type="submit"]');
+  const counter = document.createElement("p");
+  counter.className = "character-limit-counter discovery-selection-counter";
+  counter.setAttribute("role", "status");
+  counter.setAttribute("aria-live", "polite");
+  discoveryForm.querySelector(".character-discovery-list")?.after(counter);
+
+  const updateSelection = () => {
+    const selected = choices.filter((choice) => choice.checked).length;
+    counter.textContent = `\u5df2\u9009 ${selected} \u4e2a\u89d2\u8272`;
+    if (submitButton instanceof HTMLButtonElement) submitButton.disabled = selected === 0;
+  };
+  choices.forEach((choice) => choice.addEventListener("change", updateSelection));
+  updateSelection();
+});

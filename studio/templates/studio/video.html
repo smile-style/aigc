@@ -209,9 +209,14 @@
         <div><p class="eyebrow">Shot Queue</p><h2>分镜视频队列</h2></div>
         <div class="video-section-actions">
           <span class="status-pill">720P · 有参考图则传图，无图则纯 Prompt</span>
+          <button class="secondary-button" type="button" data-modal-target="discover-storyboard-characters">&#21457;&#29616;&#24182;&#29983;&#25104;&#26032;&#35282;&#33394;{% if unknown_characters %} ({{ unknown_characters|length }}){% endif %}</button>
           <button class="secondary-button" type="button" data-modal-target="subtitle-style-editor">&#23383;&#24149;&#26679;&#24335;</button>
         </div>
       </div>
+      {% if characters_queued %}<div class="alert success-alert" role="status">&#24050;&#21019;&#24314; {{ characters_queued }} &#20010;&#35282;&#33394;&#21407;&#22270;&#20219;&#21153;&#65292;&#29983;&#25104;&#23436;&#25104;&#21518;&#23558;&#33258;&#21160;&#20851;&#32852;&#21516;&#21517;&#20998;&#38236;&#12290;</div>{% endif %}
+      {% for task in active_character_tasks %}
+        <div class="task-status is-running compact-task-status" data-task-poller data-task-url="{% url 'studio:task_status' task.id %}" data-task-kind="character-image" aria-live="polite"><span class="task-indicator" aria-hidden="true"></span><div><strong data-task-label>&#27491;&#22312;&#29983;&#25104;&#26032;&#35282;&#33394;&#21407;&#22270;</strong><p data-task-detail>&#23436;&#25104;&#21518;&#33258;&#21160;&#20851;&#32852;&#20840;&#21095;&#26412;&#21516;&#21517;&#20998;&#38236;&#12290;</p></div></div>
+      {% endfor %}
       <div class="video-shot-list">
         {% for shot in shots %}
           <article class="video-shot-row" data-video-shot="{{ shot.shot_id }}">
@@ -295,6 +300,35 @@
       </div>
     </section>
   {% endif %}
+  <div class="detail-modal" id="discover-storyboard-characters" role="dialog" aria-modal="true" aria-labelledby="discover-character-title" hidden>
+    <div class="detail-backdrop" data-modal-close></div>
+    <section class="detail-panel character-discovery-dialog">
+      <button class="modal-close" type="button" data-modal-close aria-label="&#20851;&#38381;">&times;</button>
+      <div class="character-discovery-head">
+        <div><p class="eyebrow">Character Discovery</p><h2 id="discover-character-title">&#29983;&#25104;&#20998;&#38236;&#26032;&#35282;&#33394;</h2></div>
+        <span class="status-pill">{{ unknown_characters|length }} &#20010;&#24453;&#29983;&#25104;</span>
+      </div>
+      <p class="dialog-supporting-copy">&#25353;&#20840;&#21095;&#26412;&#20998;&#38236;&#20154;&#21517;&#26816;&#27979;&#26032;&#35282;&#33394;&#12290;&#21407;&#22270;&#29983;&#25104;&#21518;&#65292;&#23558;&#33258;&#21160;&#20851;&#32852;&#21040;&#21516;&#21517;&#20998;&#38236;&#65307;&#27599;&#20010;&#38236;&#22836;&#26368;&#22810; 5 &#24352;&#35282;&#33394;&#21442;&#32771;&#22270;&#12290;</p>
+      <form method="post" action="{% url 'studio:generate_storyboard_characters' workspace.id episode.episode_number %}" data-submit-guard>
+        {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+        <div class="character-discovery-list">
+          {% for candidate in unknown_characters %}
+            <label class="character-discovery-option">
+              <input type="checkbox" name="character_names" value="{{ candidate.name }}">
+              <span class="candidate-avatar" aria-hidden="true">{{ candidate.name|first }}</span>
+              <span><b>{{ candidate.name }}</b><small>&#20986;&#29616;&#20110;&#31532; {{ candidate.episode_numbers|join:", " }} &#38598; &middot; {{ candidate.shot_count }} &#20010;&#38236;&#22836;</small></span>
+            </label>
+          {% empty %}
+            <div class="empty-state compact"><h3>&#27809;&#26377;&#21457;&#29616;&#26032;&#35282;&#33394;</h3><p>&#24403;&#20998;&#38236;&#20013;&#20986;&#29616;&#26410;&#24314;&#31435;&#36164;&#20135;&#30340;&#20154;&#21517;&#26102;&#65292;&#20250;&#22312;&#36825;&#37324;&#21015;&#20986;&#12290;</p></div>
+          {% endfor %}
+        </div>
+        <div class="character-discovery-actions">
+          <button class="ghost-button" type="button" data-modal-close>&#21462;&#28040;</button>
+          <button class="primary-button" type="submit" data-loading-text="&#21019;&#24314;&#20219;&#21153;&#20013;..." {% if not unknown_characters %}disabled{% endif %}>&#29983;&#25104;&#25152;&#36873;&#35282;&#33394;</button>
+        </div>
+      </form>
+    </section>
+  </div>
   {% include "studio/_subtitle_style_dialog.html" %}
 </section>
 {% endblock %}

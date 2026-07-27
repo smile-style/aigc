@@ -1057,3 +1057,116 @@ def test_shot_subtitle_generate_and_save_views(client):
     )
     assert page.status_code == 200
     assert f'id="shot-subtitle-{shots[0].id}"'.encode() in page.content
+
+
+def test_storyboard_character_candidates_create_image_tasks():
+    from studio.services.characters import (
+        create_storyboard_characters,
+        storyboard_character_candidates,
+    )
+
+    _, episode, storyboard = make_episode(with_character=False)
+    storyboard.prompts_payload[0]["character_names"] = ["New Hero"]
+    storyboard.save(update_fields=["prompts_payload", "updated_at"])
+    sync_storyboard_shots(storyboard)
+
+    candidates = storyboard_character_candidates(episode.script)
+    assert [(item["name"], item["shot_count"]) for item in candidates] == [
+        ("New Hero", 1)
+    ]
+
+    tasks = create_storyboard_characters(episode.script, ["New Hero"])
+
+    character = Character.objects.get(script=episode.script, name="New Hero")
+    assert character.role == "Storyboard character"
+    assert tasks[0]["target_id"] == str(character.id)
+    assert GenerationTask.objects.filter(
+        task_type=GenerationTask.TYPE_CHARACTER_IMAGE,
+        target_id=str(character.id),
+    ).exists()
+
+
+def test_saved_storyboard_character_asset_binds_all_named_shots(settings, tmp_path):
+    from studio.repositories.workspace import WorkspaceRepository
+    from studio.services.characters import create_storyboard_characters
+
+    settings.MEDIA_ROOT = tmp_path
+    project, episode, storyboard = make_episode(with_character=False)
+    for payload in storyboard.prompts_payload:
+        payload["character_names"] = ["New Hero"]
+    storyboard.save(update_fields=["prompts_payload", "updated_at"])
+    shots = sync_storyboard_shots(storyboard)
+    create_storyboard_characters(episode.script, ["New Hero"])
+    character = Character.objects.get(script=episode.script, name="New Hero")
+
+    WorkspaceRepository().save_character_asset(
+        project.workspace_id,
+        character.id,
+        SimpleNamespace(
+            model="image-model",
+            source_url="",
+            extension=".png",
+            content=b"fake-image",
+        ),
+    )
+
+    assert ShotCharacterReference.objects.filter(
+        shot__in=shots,
+        character=character,
+    ).count() == 2
+
+
+def test_bind_shot_characters_rejects_more_than_five():
+    from studio.services.video import bind_shot_characters
+
+    _, episode, storyboard = make_episode(with_character=False)
+    shot = sync_storyboard_shots(storyboard)[0]
+    character_ids = []
+    for index in range(6):
+        character = Character.objects.create(
+            script=episode.script,
+            name=f"Character {index}",
+            role="Role",
+            appearance="Appearance",
+            image_prompt="Prompt",
+            position=index + 1,
+        )
+        character_ids.append(str(character.id))
+
+    with pytest.raises(ValueError, match="up to 5"):
+        bind_shot_characters(shot, character_ids)
+
+
+def test_delete_character_view_soft_deletes_and_unbinds(client):
+    project, episode, storyboard = make_episode()
+    shot = sync_storyboard_shots(storyboard)[0]
+    reference = ShotCharacterReference.objects.get(shot=shot)
+    character = reference.character
+
+    response = client.post(
+        reverse("studio:delete_character", args=[project.workspace_id, character.id]),
+        {"script_id": episode.script_id},
+    )
+
+    assert response.status_code == 302
+    character.refresh_from_db()
+    assert character.is_deleted is True
+    assert character.assets.exists()
+    assert not ShotCharacterReference.objects.filter(character=character).exists()
+
+
+def test_video_page_lists_unknown_storyboard_characters(client):
+    project, _, storyboard = make_episode(with_character=False)
+    storyboard.prompts_payload[0]["character_names"] = ["New Hero"]
+    storyboard.save(update_fields=["prompts_payload", "updated_at"])
+    sync_storyboard_shots(storyboard)
+
+    response = client.get(
+        reverse("studio:video_episode", args=[project.workspace_id, 1])
+    )
+
+    content = response.content.decode("utf-8")
+    assert response.status_code == 200
+    assert 'data-modal-target="discover-storyboard-characters"' in content
+    assert 'value="New Hero"' in content
+    assert "New Hero" in content

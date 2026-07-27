@@ -19,6 +19,7 @@ from studio.models import (
     VideoComposition,
 )
 from studio.repositories.workspace import CURRENT_WORKSPACE_ID, WorkspaceRepository
+from studio.services.characters import create_storyboard_characters, storyboard_character_candidates
 from studio.services.model_slots import (
     get_simple_model_slots,
     save_simple_model_slot,
@@ -221,12 +222,27 @@ def _render_video_episode(request, workspace_id, episode_number, script_id=None)
     data = video_page_data(episode, sync=not has_synced_shots)
     characters = list(
         Character.objects.filter(script=episode.script)
+        .filter(is_deleted=False)
         .prefetch_related("assets")
         .order_by("position", "id")
     )
     shot_subtitle_auto_open = request.GET.get("shot_subtitle", "")
     for shot in data["shots"]:
         shot.subtitle_auto_open = str(shot.shot_id) == shot_subtitle_auto_open
+    unknown_characters = storyboard_character_candidates(episode.script)
+    active_character_tasks = [
+        task
+        for task in GenerationTask.objects.filter(
+            project=episode.script.project,
+            task_type=GenerationTask.TYPE_CHARACTER_IMAGE,
+            status__in=[
+                GenerationTask.STATUS_PENDING,
+                GenerationTask.STATUS_RUNNING,
+                GenerationTask.STATUS_RETRY_WAIT,
+            ],
+        )
+        if (task.input_snapshot or {}).get("script_id") == episode.script_id
+    ]
     return render(
         request,
         "studio/video.html",
@@ -247,6 +263,9 @@ def _render_video_episode(request, workspace_id, episode_number, script_id=None)
             "subtitle_auto_open": request.GET.get("subtitle") == "1",
             "subtitle_style_auto_open": request.GET.get("subtitle_style") == "1",
             "active_nav": "video",
+            "unknown_characters": unknown_characters,
+            "active_character_tasks": active_character_tasks,
+            "characters_queued": request.GET.get("characters_queued", ""),
         },
     )
 
@@ -678,7 +697,10 @@ def _video_error(
             "counts": data["counts"],
             "composition": data["composition"],
             "subtitle": subtitle_data,
-            "characters": Character.objects.filter(script=episode.script).prefetch_related("assets"),
+            "characters": Character.objects.filter(
+                script=episode.script,
+                is_deleted=False,
+            ).prefetch_related("assets"),
             "active_tab": tab,
             "subtitle_auto_open": subtitle_auto_open,
             "subtitle_style_auto_open": subtitle_style_auto_open,
@@ -687,3 +709,33 @@ def _video_error(
         },
         status=400,
     )
+
+
+@require_POST
+def generate_storyboard_characters_view(request, workspace_id, episode_number):
+    script_id = _request_script_id(request)
+    episode = _episode(workspace_id, episode_number, script_id=script_id)
+    try:
+        tasks = create_storyboard_characters(
+            episode.script,
+            request.POST.getlist("character_names"),
+        )
+    except ValueError as exc:
+        return _video_error(
+            request,
+            workspace_id,
+            episode_number,
+            str(exc),
+            script_id=script_id,
+        )
+    url = _video_redirect_url(workspace_id, episode_number, script_id=script_id)
+    return redirect(f"{url}?characters_queued={len(tasks)}")
+
+
+def _video_redirect_url(workspace_id, episode_number, script_id=None):
+    if script_id:
+        return reverse(
+            "studio:video_script_episode",
+            args=[workspace_id, script_id, episode_number],
+        )
+    return reverse("studio:video_episode", args=[workspace_id, episode_number])

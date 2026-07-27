@@ -66,7 +66,7 @@ def default_episode_cover_title(episode):
 
 def build_cover_prompt(script):
     outline = script.outline
-    characters = list(script.characters.order_by("position", "id")[:2])
+    characters = list(script.characters.filter(is_deleted=False).order_by("position", "id")[:2])
     character_context = "；".join(
         f"{item.name}：{item.appearance}，服装为{item.costume}" for item in characters
     )

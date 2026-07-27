@@ -49,6 +49,7 @@ def sync_storyboard_shots(storyboard):
     characters = list(
         Character.objects.filter(script=storyboard.script).prefetch_related("assets").order_by("position", "id")
     )
+    characters = [character for character in characters if not character.is_deleted]
     seen_numbers = []
     for position, payload in enumerate(storyboard.prompts_payload or [], start=1):
         shot_number = _as_int(payload.get("shot_number"), position)
@@ -95,8 +96,12 @@ def sync_episode_shots(episode):
 
 
 def bind_shot_characters(shot, character_ids):
+    character_ids = list(dict.fromkeys(str(value) for value in character_ids))
+    if len(character_ids) > 5:
+        raise ValueError("Each shot supports up to 5 character references.")
     characters = list(
         Character.objects.filter(pk__in=character_ids, script=shot.storyboard.script)
+        .filter(is_deleted=False)
         .prefetch_related("assets")
         .order_by("position", "id")[:5]
     )
@@ -626,3 +631,38 @@ def _run_ffmpeg(command, cwd=None):
     except subprocess.CalledProcessError as exc:
         detail = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else str(exc)
         raise RuntimeError(f"FFmpeg 导出失败：{detail[-1200:]}") from exc
+
+
+def bind_character_to_named_shots(character, asset):
+    if character.is_deleted:
+        return {"bound": 0, "skipped": 0}
+    bound = 0
+    skipped = 0
+    shots = StoryboardShot.objects.filter(storyboard__script=character.script).prefetch_related(
+        "character_references"
+    )
+    with transaction.atomic():
+        for shot in shots:
+            names = [str(name).strip() for name in (shot.character_names or [])]
+            if character.name not in names:
+                continue
+            existing = list(shot.character_references.all())
+            reference = next(
+                (item for item in existing if item.character_id == character.id), None
+            )
+            if reference:
+                if reference.asset_id != asset.id:
+                    reference.asset = asset
+                    reference.save(update_fields=["asset"])
+                continue
+            if len(existing) >= 5:
+                skipped += 1
+                continue
+            ShotCharacterReference.objects.create(
+                shot=shot,
+                character=character,
+                asset=asset,
+                position=len(existing) + 1,
+            )
+            bound += 1
+    return {"bound": bound, "skipped": skipped}

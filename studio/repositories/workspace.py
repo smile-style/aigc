@@ -636,6 +636,8 @@ class WorkspaceRepository:
                 raise ValueError("Script is required")
             names = []
             for position, profile in enumerate(profiles, start=1):
+                if script.characters.filter(name=profile["name"], is_deleted=True).exists():
+                    continue
                 names.append(profile["name"])
                 Character.objects.update_or_create(
                     script=script,
@@ -649,6 +651,7 @@ class WorkspaceRepository:
                         "position": position,
                     },
                 )
+            names.extend(script.characters.filter(is_deleted=True).values_list("name", flat=True))
             script.characters.exclude(name__in=names).filter(assets__isnull=True).delete()
         return self.get_workspace(workspace_id, script_id=script_id)
 
@@ -661,6 +664,8 @@ class WorkspaceRepository:
                 pk=character_id,
                 script__project=project,
             )
+            if character.is_deleted:
+                raise ValueError("Deleted characters cannot generate new images.")
             character.image_prompt = prompt.strip()
             character.save(update_fields=["image_prompt", "updated_at"])
             running = project.generation_tasks.filter(
@@ -698,6 +703,8 @@ class WorkspaceRepository:
                 pk=character_id,
                 script__project__workspace_id=workspace_id,
             )
+            if character.is_deleted:
+                raise Character.DoesNotExist
         except Character.DoesNotExist as exc:
             raise FileNotFoundError(f"Character not found: {character_id}") from exc
         return self._character_to_dict(character)
@@ -708,6 +715,8 @@ class WorkspaceRepository:
                 pk=character_id,
                 script__project__workspace_id=workspace_id,
             )
+            if character.is_deleted:
+                raise Character.DoesNotExist
             version = (character.assets.aggregate(value=Max("version"))["value"] or 0) + 1
             asset = CharacterAsset(
                 character=character,
@@ -719,6 +728,9 @@ class WorkspaceRepository:
             filename = f"{uuid.uuid4().hex}{result.extension}"
             asset.image.save(filename, ContentFile(result.content), save=False)
             asset.save()
+            from studio.services.video import bind_character_to_named_shots
+
+            bind_character_to_named_shots(character, asset)
         return self.get_character(workspace_id, character_id)
 
     def get_latest_character_asset(self, workspace_id, character_id):
@@ -832,6 +844,7 @@ class WorkspaceRepository:
             script = getattr(selected_outline, "script", None)
         episodes = list(script.episodes.select_related("storyboard_prompt").order_by("episode_number")) if script else []
         characters = list(script.characters.prefetch_related("assets")) if script else []
+        characters = [character for character in characters if not character.is_deleted]
         script_choices = list(
             project.scripts.select_related("outline").order_by("-updated_at", "-id")
         )
@@ -1149,4 +1162,40 @@ class WorkspaceRepository:
         return timezone.localtime(value).isoformat(timespec="seconds")
 
 
+    def delete_character(self, workspace_id, character_id, script_id=None):
+        from studio.models import ShotCharacterReference
+
+        with transaction.atomic():
+            project = Project.objects.select_for_update().get(workspace_id=workspace_id)
+            try:
+                character = Character.objects.select_for_update().get(
+                    pk=character_id,
+                    script__project=project,
+                    is_deleted=False,
+                )
+            except Character.DoesNotExist as exc:
+                raise FileNotFoundError(f"Character not found: {character_id}") from exc
+            if script_id and character.script_id != script_id:
+                raise FileNotFoundError(f"Character not found: {character_id}")
+            ShotCharacterReference.objects.filter(character=character).delete()
+            project.generation_tasks.filter(
+                task_type=GenerationTask.TYPE_CHARACTER_IMAGE,
+                target_id=str(character.id),
+                status__in=[
+                    GenerationTask.STATUS_PENDING,
+                    GenerationTask.STATUS_RUNNING,
+                    GenerationTask.STATUS_RETRY_WAIT,
+                ],
+            ).update(
+                status=GenerationTask.STATUS_CANCELLED,
+                error_message="Character deleted; generation task cancelled.",
+                finished_at=timezone.now(),
+                next_retry_at=None,
+                lease_owner="",
+                lease_expires_at=None,
+            )
+            character.is_deleted = True
+            character.deleted_at = timezone.now()
+            character.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
+        return character
 JsonWorkspaceRepository = WorkspaceRepository

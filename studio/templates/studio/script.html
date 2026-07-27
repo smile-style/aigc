@@ -133,6 +133,10 @@
               <div class="card-head">
                 <div><p class="eyebrow">角色 {{ forloop.counter|stringformat:"02d" }}</p><h3>{{ character.name }}</h3></div>
                 {% if character.version %}<span class="status-pill success">原图 v{{ character.version }}</span>{% endif %}
+                <form class="character-delete-form" method="post" action="{% url 'studio:delete_character' workspace.id character.id %}" data-confirm-submit="&#30830;&#23450;&#21024;&#38500;&#35282;&#33394; {{ character.name }} &#21527;&#65311;&#24050;&#20851;&#32852;&#30340;&#20998;&#38236;&#23558;&#31227;&#38500;&#35813;&#21442;&#32771;&#22270;&#12290;">
+                  {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+                  <button class="danger-button compact-button" type="submit" aria-label="&#21024;&#38500;&#35282;&#33394; {{ character.name }}">&#21024;&#38500;</button>
+                </form>
               </div>
               <p class="character-role">{{ character.role }}</p>
               <dl class="character-facts">

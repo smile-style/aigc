@@ -209,3 +209,16 @@ urlpatterns = [
         name="download_composition",
     ),
 ]
+
+urlpatterns += [
+    path(
+        "script/<str:workspace_id>/characters/<int:character_id>/delete/",
+        views.delete_character_view,
+        name="delete_character",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/characters/generate/",
+        video_views.generate_storyboard_characters_view,
+        name="generate_storyboard_characters",
+    ),
+]

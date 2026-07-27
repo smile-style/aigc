@@ -112,3 +112,104 @@ def validate_character_profiles(payload):
             item[field] = value.strip()
         validated.append(item)
     return validated
+
+
+def normalize_character_name(value):
+    return " ".join(str(value or "").strip().split())
+
+
+def storyboard_character_candidates(script):
+    from studio.models import StoryboardShot
+
+    existing = {
+        normalize_character_name(name)
+        for name in script.characters.filter(is_deleted=False).values_list("name", flat=True)
+    }
+    candidates = {}
+    shots = StoryboardShot.objects.filter(storyboard__script=script).select_related(
+        "storyboard__episode"
+    )
+    for shot in shots:
+        for raw_name in shot.character_names or []:
+            name = normalize_character_name(raw_name)
+            if not name or name in existing:
+                continue
+            item = candidates.setdefault(
+                name,
+                {"name": name, "shot_count": 0, "episodes": set(), "contexts": []},
+            )
+            item["shot_count"] += 1
+            item["episodes"].add(shot.storyboard.episode.episode_number)
+            context = " ".join(
+                part.strip()
+                for part in (shot.visual_description, shot.character_action, shot.image_prompt)
+                if part and part.strip()
+            )
+            if context and context not in item["contexts"]:
+                item["contexts"].append(context)
+    return [
+        {
+            "name": item["name"],
+            "shot_count": item["shot_count"],
+            "episode_numbers": sorted(item["episodes"]),
+            "context": " ".join(item["contexts"][:4])[:1600],
+        }
+        for item in candidates.values()
+    ]
+
+
+def create_storyboard_characters(script, selected_names):
+    from django.db import transaction
+    from django.db.models import Max
+
+    from studio.models import Character
+    from studio.repositories.workspace import WorkspaceRepository
+
+    candidates = {item["name"]: item for item in storyboard_character_candidates(script)}
+    names = []
+    for value in selected_names:
+        name = normalize_character_name(value)
+        if name and name not in names:
+            names.append(name)
+    invalid = [name for name in names if name not in candidates]
+    if invalid:
+        raise ValueError("Selected characters already exist or are no longer in the storyboard.")
+    if not names:
+        raise ValueError("Select at least one character to generate.")
+
+    tasks = []
+    repository = WorkspaceRepository()
+    with transaction.atomic():
+        next_position = script.characters.aggregate(value=Max("position"))["value"] or 0
+        for name in names:
+            next_position += 1
+            candidate = candidates[name]
+            context = candidate["context"] or f"{name} appears in the storyboard"
+            image_prompt = (
+                f"Character name: {name}. Keep the design consistent with these storyboard scenes: "
+                f"{context}. Single character full-body reference sheet, front three-quarter view, "
+                "consistent face, hairstyle, costume and color palette, plain background, "
+                "no text, no watermark."
+            )
+            character, _ = Character.objects.update_or_create(
+                script=script,
+                name=name,
+                defaults={
+                    "role": "Storyboard character",
+                    "appearance": context,
+                    "personality": "Keep behavior consistent with the script",
+                    "costume": "Keep wardrobe consistent across the full script",
+                    "image_prompt": image_prompt,
+                    "position": next_position,
+                    "is_deleted": False,
+                    "deleted_at": None,
+                },
+            )
+            tasks.append(
+                repository.create_character_image_task(
+                    script.project.workspace_id,
+                    character.id,
+                    image_prompt,
+                )
+            )
+    return tasks
