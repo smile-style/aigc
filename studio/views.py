@@ -774,6 +774,6 @@ def delete_character_view(request, workspace_id, character_id):
     except (Character.DoesNotExist, FileNotFoundError) as exc:
         raise Http404(str(exc)) from exc
     if script_id:
-        project_id = character.script.project_id
+        project_id = character.script.outline_id
         return redirect(f'{reverse("studio:project_workbench", args=[project_id])}?view=characters')
     return redirect(f'{reverse("studio:script", args=[workspace_id])}?view=characters')

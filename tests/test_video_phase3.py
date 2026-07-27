@@ -430,6 +430,35 @@ def test_ready_composition_can_be_downloaded_and_reexported(client):
     assert "include_subtitles" not in content
 
 
+def test_assembly_page_identifies_shots_blocking_export(client):
+    from studio.services.video import video_page_data
+
+    project, episode, storyboard = make_episode(with_character=False)
+    shots = sync_storyboard_shots(storyboard)
+    asset = VideoAsset.objects.create(
+        shot=shots[0],
+        version=1,
+        status=VideoAsset.STATUS_READY,
+        prompt_snapshot="prompt",
+        is_selected=True,
+    )
+    asset.video.save("ready-shot.mp4", ContentFile(b"video"))
+
+    data = video_page_data(episode)
+    response = client.get(
+        reverse("studio:video_episode", args=[project.workspace_id, 1]),
+        {"tab": "assembly"},
+    )
+    content = response.content.decode("utf-8")
+
+    assert data["counts"]["missing_shot_numbers"] == [2]
+    assert "data-export-blocker" in content
+    export_url = reverse("studio:export_video", args=[project.workspace_id, 1])
+    export_form = content.split(f'action="{export_url}"', 1)[1].split("</form>", 1)[0]
+    button = export_form.split("<button", 1)[1].split("</button>", 1)[0]
+    assert "disabled" in button
+
+
 def test_video_prompt_can_be_saved_and_reset(client):
     project, _, storyboard = make_episode()
     shot = sync_storyboard_shots(storyboard)[0]
@@ -1149,6 +1178,10 @@ def test_delete_character_view_soft_deletes_and_unbinds(client):
     )
 
     assert response.status_code == 302
+    assert response["Location"] == (
+        f'{reverse("studio:project_workbench", args=[episode.script.outline_id])}'
+        "?view=characters"
+    )
     character.refresh_from_db()
     assert character.is_deleted is True
     assert character.assets.exists()

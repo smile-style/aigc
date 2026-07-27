@@ -75,6 +75,11 @@
       {% for shot in shots %}{% include "studio/_shot_subtitle_dialog.html" %}{% endfor %}
       <div class="export-bar">
         <div><strong>成片导出</strong><p>保留原片声音，统一为 720 × 1280、H.264、AAC、25fps 后按当前顺序拼接。</p></div>
+        {% if not counts.total %}
+          <p class="export-blocker" id="export-blocker" data-export-blocker>&#26242;&#26080;&#21487;&#23548;&#20986;&#30340;&#38236;&#22836;&#12290;</p>
+        {% elif counts.missing_shot_numbers %}
+          <p class="export-blocker" id="export-blocker" data-export-blocker>&#36824;&#26377; {{ counts.missing_shot_numbers|length }} &#20010;&#38236;&#22836;&#26410;&#23601;&#32490;&#65306;&#38236;&#22836; {{ counts.missing_shot_numbers|join:", " }}&#12290;<a href="?tab=shots">&#36820;&#22238;&#34917;&#40784;</a></p>
+        {% endif %}
         <p class="subtitle-export-summary" data-subtitle-summary>
           <span>&#23383;&#24149;</span>
           {% if not subtitle.track %}<strong>&#26410;&#29983;&#25104;</strong>

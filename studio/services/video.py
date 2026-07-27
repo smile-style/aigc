@@ -407,6 +407,7 @@ def video_page_data(episode, sync=False):
             shot.has_prompt_override
             and shot.video_prompt_override_source_hash != _prompt_hash(shot.storyboard_prompt_for_page)
         )
+    missing_shot_numbers = [shot.shot_number for shot in shots if not shot.selected_video]
     composition = VideoComposition.objects.filter(episode=episode).first()
     asset_updates_available = sum(
         1
@@ -421,7 +422,8 @@ def video_page_data(episode, sync=False):
         "asset_updates_available": asset_updates_available,
         "counts": {
             "total": len(shots),
-            "ready": sum(bool(shot.selected_video) for shot in shots),
+            "ready": len(shots) - len(missing_shot_numbers),
+            "missing_shot_numbers": missing_shot_numbers,
             "running": sum(bool(shot.latest_video and shot.latest_video.status in ACTIVE_VIDEO_STATUSES) for shot in shots),
             "failed": sum(bool(shot.latest_video and shot.latest_video.status == VideoAsset.STATUS_FAILED) for shot in shots),
         },
