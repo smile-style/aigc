@@ -86,6 +86,19 @@ class BilibiliUploader:
         finally:
             client.close()
         if payload.get("OK") not in {None, 1}:
+            platform_code = payload.get("code")
+            platform_message = payload.get("message") or payload.get("info")
+            if platform_code == 601:
+                message = str(platform_message or "Bilibili upload rate limit reached. Please retry later.")
+                raise PublishingRetryableError(
+                    message,
+                    code="platform_rate_limited",
+                    details={
+                        "platform_code": platform_code,
+                        "platform_message": message,
+                        "retry_after_seconds": 600,
+                    },
+                )
             raise PublishingRetryableError(payload.get("message") or "Bilibili 创建上传会话失败。")
         return payload
 

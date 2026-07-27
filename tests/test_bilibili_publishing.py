@@ -6,10 +6,52 @@ from django.core.files.base import ContentFile
 
 from django.core.files.storage import default_storage
 from django.test import override_settings
-from studio.publishing.errors import PublishingOutcomeUnknown, PublishingValidationError
+from studio.publishing.errors import PublishingOutcomeUnknown, PublishingRetryableError, PublishingValidationError
+from studio.publishing.platforms.bilibili.client import BilibiliClient
 from studio.publishing.platforms.bilibili.check import BilibiliChecker
 from studio.publishing.platforms.bilibili.login import BilibiliLogin
 from studio.publishing.platforms.bilibili.upload import BilibiliUploader
+
+def test_http_406_rate_limit_preserves_provider_error_and_is_retryable():
+    def handler(request):
+        return httpx.Response(
+            406,
+            request=request,
+            json={
+                "OK": 0,
+                "code": 601,
+                "message": "You are uploading videos too quickly. Please try again later.",
+            },
+        )
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = BilibiliClient(client=http_client)
+
+    with pytest.raises(PublishingRetryableError) as error:
+        client.request_json("GET", BilibiliUploader.PREUPLOAD_URL)
+
+    assert error.value.code == "platform_rate_limited"
+    assert error.value.details == {
+        "http_status": 406,
+        "platform_code": 601,
+        "platform_message": "You are uploading videos too quickly. Please try again later.",
+        "retry_after_seconds": 600,
+    }
+
+
+def test_http_406_without_rate_limit_code_remains_non_retryable():
+    def handler(request):
+        return httpx.Response(406, request=request, json={"code": 1001, "message": "Invalid request"})
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = BilibiliClient(client=http_client)
+
+    with pytest.raises(PublishingValidationError) as error:
+        client.request_json("GET", BilibiliUploader.PREUPLOAD_URL)
+
+    assert error.value.details["http_status"] == 406
+    assert error.value.details["platform_message"] == "Invalid request"
+
 
 
 def test_cookie_header_parser_ignores_invalid_segments():

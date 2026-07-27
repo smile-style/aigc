@@ -12,6 +12,9 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 )
 
+AUTH_ERROR_CODES = {-101, -111, -400, -403}
+RATE_LIMIT_CODES = {-412, 601, 21070, 21122}
+
 
 class BilibiliClient:
     def __init__(self, cookies=None, *, timeout=120, client=None):
@@ -31,6 +34,25 @@ class BilibiliClient:
             raise PublishingRetryableError("连接 Bilibili 失败，请稍后重试。", details={"type": type(exc).__name__}) from exc
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
+            payload = self._error_payload(exc.response)
+            platform_code = payload.get("code")
+            platform_message = payload.get("message") or payload.get("msg") or payload.get("info")
+            details = {"http_status": status}
+            if platform_code is not None:
+                details["platform_code"] = platform_code
+            if platform_message:
+                details["platform_message"] = str(platform_message)
+            if platform_code in RATE_LIMIT_CODES:
+                details["retry_after_seconds"] = 600
+                raise PublishingRetryableError(
+                    str(platform_message or "Bilibili upload rate limit reached. Please retry later."),
+                    code="platform_rate_limited",
+                    details=details,
+                ) from exc
+            if platform_code in AUTH_ERROR_CODES:
+                raise PublishingAuthError(str(platform_message or "Bilibili login has expired."), details=details) from exc
+            if platform_message and status not in {401, 403, 429} and status < 500:
+                raise PublishingValidationError(str(platform_message), details=details) from exc
             if status in {401, 403}:
                 raise PublishingAuthError(details={"http_status": status}) from exc
             if status == 429 or status >= 500:
@@ -48,11 +70,27 @@ class BilibiliClient:
         if code == 0:
             return payload.get("data"), payload
         message = payload.get("message") or payload.get("msg") or f"错误码 {code}"
-        if code in {-101, -111, -400, -403}:
-            raise PublishingAuthError(message, details={"platform_code": code})
-        if code in {-412, 21070, 21122}:
-            raise PublishingRetryableError(message, code="platform_rate_limited", details={"platform_code": code})
+        if code in AUTH_ERROR_CODES:
+            raise PublishingAuthError(message, details={"platform_code": code, "platform_message": message})
+        if code in RATE_LIMIT_CODES:
+            raise PublishingRetryableError(
+                message,
+                code="platform_rate_limited",
+                details={
+                    "platform_code": code,
+                    "platform_message": message,
+                    "retry_after_seconds": 600,
+                },
+            )
         raise PublishingValidationError(message, code=f"bilibili_{code}", details={"platform_code": code})
+
+    @staticmethod
+    def _error_payload(response):
+        try:
+            payload = response.json()
+        except ValueError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
 
     def close(self):
         if self._owns_client:

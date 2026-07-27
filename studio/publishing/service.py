@@ -334,6 +334,9 @@ def process_claimed_task(task_id, worker_id):
         _finish_with_error(task, attempt, exc, task.STATUS_RETRY_WAIT if should_retry else task.STATUS_FAILED)
         if should_retry:
             delay = RETRY_DELAYS[min(task.attempt_count - 1, len(RETRY_DELAYS) - 1)]
+            suggested_delay = exc.details.get("retry_after_seconds", 0)
+            if isinstance(suggested_delay, (int, float)):
+                delay = max(delay, min(int(suggested_delay), 86400))
             task.next_retry_at = timezone.now() + timedelta(seconds=delay + secrets.randbelow(max(1, delay // 5)))
             task.finished_at = None
             task.save(update_fields=["next_retry_at", "finished_at", "updated_at"])

@@ -173,6 +173,31 @@ def test_retryable_error_waits_before_retry(tmp_path, monkeypatch):
     assert task.attempts.get().retryable is True
 
 
+def test_retryable_error_honors_provider_retry_delay(tmp_path, monkeypatch):
+    _, composition = make_composition(tmp_path)
+    account = make_account()
+    platform = permissive_platform()
+    platform.uploader.upload_media = lambda *args: (_ for _ in ()).throw(
+        PublishingRetryableError(
+            "Rate limited",
+            code="platform_rate_limited",
+            details={"retry_after_seconds": 600},
+        )
+    )
+    monkeypatch.setattr("studio.publishing.service.get_platform", lambda name: platform)
+    task, _ = create_publishing_task(composition, account, metadata())
+
+    claimed = claim_next_task("worker-1")
+    process_claimed_task(claimed.id, "worker-1")
+
+    task.refresh_from_db()
+    assert task.status == PublishingTask.STATUS_RETRY_WAIT
+    assert task.next_retry_at >= timezone.now() + timedelta(seconds=590)
+    assert task.error_details["retry_after_seconds"] == 600
+
+
+
+
 def test_expired_submit_lease_becomes_outcome_unknown(tmp_path, monkeypatch):
     _, composition = make_composition(tmp_path)
     account = make_account()
