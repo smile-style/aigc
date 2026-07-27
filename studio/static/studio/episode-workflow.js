@@ -27,7 +27,9 @@ document.addEventListener("DOMContentLoaded", () => {
           const ready = payload.details?.video_ready;
           const total = payload.details?.video_total;
           detail.textContent =
-            payload.stage === "videos" && total
+            payload.auto_retrying
+              ? `\u6b63\u5728\u81ea\u52a8\u91cd\u8bd5 ${payload.auto_retry_count}/${payload.auto_retry_max}\uff1a${payload.auto_retry_message}`
+              : payload.stage === "videos" && total
               ? `\u5df2\u5b8c\u6210 ${ready || 0} / ${total} \u4e2a\u955c\u5934`
               : payload.error_message ||
                 "\u53ef\u4ee5\u79bb\u5f00\u9875\u9762\uff0c\u540e\u53f0\u4f1a\u7ee7\u7eed\u6267\u884c\u3002";

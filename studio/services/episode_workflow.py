@@ -20,6 +20,11 @@ from studio.services.video import queue_episode_videos, queue_export, sync_episo
 
 logger = logging.getLogger(__name__)
 
+MAX_AUTO_RETRIES = 3
+AUTO_RETRY_COUNT_KEY = "auto_retry_count"
+AUTO_RETRY_MESSAGE_KEY = "auto_retry_message"
+AUTO_RETRY_EXHAUSTED_KEY = "auto_retry_exhausted"
+
 ACTIVE_RUN_STATUSES = {
     EpisodeWorkflowRun.STATUS_QUEUED,
     EpisodeWorkflowRun.STATUS_RUNNING,
@@ -88,11 +93,13 @@ def retry_episode_workflow(run):
         run.error_message = ""
         run.finished_at = None
         details = dict(run.details or {})
-        if run.stage == EpisodeWorkflowRun.STAGE_CHARACTERS:
-            details.pop("character_image_task_ids", None)
-            details.pop("character_ready", None)
-        elif run.stage == EpisodeWorkflowRun.STAGE_VIDEOS:
-            details["retry_failed_videos"] = True
+        for key in (
+            AUTO_RETRY_COUNT_KEY,
+            AUTO_RETRY_MESSAGE_KEY,
+            AUTO_RETRY_EXHAUSTED_KEY,
+        ):
+            details.pop(key, None)
+        details = _prepare_stage_retry(run, details)
         run.details = details
         run.save(
             update_fields=[
@@ -165,6 +172,9 @@ def advance_episode_workflow(run_id):
 def workflow_payload(run):
     run = EpisodeWorkflowRun.objects.select_related("episode__script__project").get(pk=run.pk)
     details = dict(run.details or {})
+    auto_retry_count = int(details.get(AUTO_RETRY_COUNT_KEY) or 0)
+    auto_retry_message = str(details.get(AUTO_RETRY_MESSAGE_KEY) or "")
+    auto_retrying = run.status in ACTIVE_RUN_STATUSES and auto_retry_count > 0
     current_index = STAGES.index(run.stage)
     steps = []
     for index, stage in enumerate(STAGES[:-1]):
@@ -182,6 +192,10 @@ def workflow_payload(run):
         "stage_label": STAGE_LABELS[run.stage],
         "progress_percent": run.progress_percent,
         "error_message": run.error_message,
+        "auto_retry_count": auto_retry_count,
+        "auto_retry_max": MAX_AUTO_RETRIES,
+        "auto_retry_message": auto_retry_message,
+        "auto_retrying": auto_retrying,
         "details": details,
         "steps": steps,
         "episode_number": run.episode.episode_number,
@@ -392,6 +406,7 @@ def _handle_export(run, variant, include_subtitles, next_stage, waiting_progress
 
 
 def _move_to(run, stage):
+    run.details = _clear_auto_retry(dict(run.details or {}))
     run.stage = stage
     run.progress_percent = STAGE_PROGRESS[stage]
     run.child_task = None
@@ -400,21 +415,65 @@ def _move_to(run, stage):
 
 
 def _mark_failed(run, message):
+    message = str(message)
+    details = dict(run.details or {})
+    retry_count = int(details.get(AUTO_RETRY_COUNT_KEY) or 0)
+    if retry_count < MAX_AUTO_RETRIES:
+        retry_count += 1
+        details[AUTO_RETRY_COUNT_KEY] = retry_count
+        details[AUTO_RETRY_MESSAGE_KEY] = message
+        details.pop(AUTO_RETRY_EXHAUSTED_KEY, None)
+        run.details = _prepare_stage_retry(run, details)
+        run.status = EpisodeWorkflowRun.STATUS_RUNNING
+        run.child_task = None
+        run.error_message = ""
+        run.finished_at = None
+        return run
+
+    details[AUTO_RETRY_MESSAGE_KEY] = message
+    details[AUTO_RETRY_EXHAUSTED_KEY] = True
+    run.details = details
     run.status = EpisodeWorkflowRun.STATUS_FAILED
-    run.error_message = str(message)
+    run.error_message = message
     run.finished_at = timezone.now()
     return run
 
 
+def _prepare_stage_retry(run, details):
+    if run.stage == EpisodeWorkflowRun.STAGE_CHARACTERS:
+        details.pop("character_image_task_ids", None)
+        details.pop("character_ready", None)
+    elif run.stage == EpisodeWorkflowRun.STAGE_VIDEOS:
+        details["retry_failed_videos"] = True
+    return details
+
+
+def _clear_auto_retry(details):
+    for key in (
+        AUTO_RETRY_COUNT_KEY,
+        AUTO_RETRY_MESSAGE_KEY,
+        AUTO_RETRY_EXHAUSTED_KEY,
+    ):
+        details.pop(key, None)
+    return details
+
+
 def _fail_run(run_id, error):
-    EpisodeWorkflowRun.objects.filter(
-        pk=run_id,
-        status__in=ACTIVE_RUN_STATUSES,
-    ).update(
-        status=EpisodeWorkflowRun.STATUS_FAILED,
-        error_message=str(error),
-        finished_at=timezone.now(),
-    )
+    try:
+        with transaction.atomic():
+            run = (
+                EpisodeWorkflowRun.objects.select_for_update()
+                .filter(pk=run_id, status__in=ACTIVE_RUN_STATUSES)
+                .first()
+            )
+            if not run:
+                return None
+            _mark_failed(run, error)
+            _save_run(run)
+            return run
+    except Exception:
+        logger.exception("Could not persist workflow retry state for %s", run_id)
+        return None
 
 
 def _save_run(run):

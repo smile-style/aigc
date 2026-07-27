@@ -1,4 +1,5 @@
 import pytest
+from django.template.loader import render_to_string
 from django.urls import reverse
 
 from studio.models import (
@@ -111,24 +112,80 @@ def test_workflow_starts_script_task_and_reuses_active_run():
     assert run.status == EpisodeWorkflowRun.STATUS_RUNNING
 
 
-def test_failed_child_marks_workflow_failed_and_retry_creates_new_task():
+def test_failed_child_is_automatically_retried_three_times_before_workflow_fails():
     _, _, episode = make_episode()
     run, _ = create_episode_workflow(episode)
-    first_task_id = run.child_task_id
-    GenerationTask.objects.filter(pk=first_task_id).update(
+    task_ids = []
+
+    for retry_count in range(1, 4):
+        task_ids.append(run.child_task_id)
+        GenerationTask.objects.filter(pk=run.child_task_id).update(
+            status=GenerationTask.STATUS_FAILED,
+            error_message="invalid generated pacing",
+        )
+
+        run = advance_episode_workflow(run.id)
+
+        assert run.status == EpisodeWorkflowRun.STATUS_RUNNING
+        assert run.child_task_id is None
+        assert run.details["auto_retry_count"] == retry_count
+        assert run.details["auto_retry_message"] == "invalid generated pacing"
+
+        run = advance_episode_workflow(run.id)
+        assert run.child_task_id not in task_ids
+
+    GenerationTask.objects.filter(pk=run.child_task_id).update(
         status=GenerationTask.STATUS_FAILED,
-        error_message="provider failed",
+        error_message="invalid generated pacing",
     )
 
     run = advance_episode_workflow(run.id)
 
     assert run.status == EpisodeWorkflowRun.STATUS_FAILED
-    assert run.error_message == "provider failed"
+    assert run.error_message == "invalid generated pacing"
+    assert run.details["auto_retry_count"] == 3
+
+
+def test_successful_stage_transition_resets_automatic_retry_count():
+    _, _, episode = make_episode()
+    run, _ = create_episode_workflow(episode)
+    GenerationTask.objects.filter(pk=run.child_task_id).update(
+        status=GenerationTask.STATUS_FAILED,
+        error_message="invalid generated pacing",
+    )
+    run = advance_episode_workflow(run.id)
+    run = advance_episode_workflow(run.id)
+    script_task_id = run.child_task_id
+    episode.full_script = "Generated script"
+    episode.script_status = Episode.SCRIPT_READY
+    episode.save(update_fields=["full_script", "script_status"])
+    GenerationTask.objects.filter(pk=script_task_id).update(
+        status=GenerationTask.STATUS_SUCCEEDED,
+    )
+
+    run = advance_episode_workflow(run.id)
+
+    assert run.stage == EpisodeWorkflowRun.STAGE_CHARACTERS
+    assert run.details.get("auto_retry_count") is None
+    assert run.details.get("auto_retry_message") is None
+
+
+def test_manual_retry_resets_automatic_retry_budget():
+    _, _, episode = make_episode()
+    run, _ = create_episode_workflow(episode)
+    run.status = EpisodeWorkflowRun.STATUS_FAILED
+    run.error_message = "still invalid"
+    run.details = {
+        "auto_retry_count": 3,
+        "auto_retry_message": "still invalid",
+    }
+    run.save()
 
     run = retry_episode_workflow(run)
 
     assert run.status == EpisodeWorkflowRun.STATUS_RUNNING
-    assert run.child_task_id != first_task_id
+    assert run.details.get("auto_retry_count") is None
+    assert run.details.get("auto_retry_message") is None
     assert run.child_task.task_type == GenerationTask.TYPE_EPISODE_SCRIPT
 
 
@@ -142,6 +199,27 @@ def test_workflow_payload_reports_ordered_steps():
     assert payload["steps"][0]["key"] == EpisodeWorkflowRun.STAGE_SCRIPT
     assert payload["steps"][0]["status"] == "running"
     assert payload["steps"][-1]["key"] == EpisodeWorkflowRun.STAGE_CAPTIONED_EXPORT
+    assert payload["auto_retry_count"] == 0
+    assert payload["auto_retry_max"] == 3
+    assert payload["auto_retrying"] is False
+
+
+def test_workflow_partial_shows_automatic_retry_progress():
+    _, _, episode = make_episode()
+    run, _ = create_episode_workflow(episode)
+    run.details = {
+        "auto_retry_count": 1,
+        "auto_retry_message": "invalid pacing",
+    }
+    run.save(update_fields=["details"])
+
+    html = render_to_string(
+        "studio/_episode_workflow.html",
+        {"workflow": workflow_payload(run)},
+    )
+
+    assert "1/3" in html
+    assert "invalid pacing" in html
 
 
 def test_start_workflow_view_redirects_to_episode_context(client):

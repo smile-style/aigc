@@ -20,7 +20,9 @@
     {% endfor %}
   </ol>
   <p class="episode-workflow-detail" data-workflow-detail>
-    {% if workflow.stage == 'videos' and workflow.details.video_total %}
+    {% if workflow.auto_retrying %}
+      &#27491;&#22312;&#33258;&#21160;&#37325;&#35797; {{ workflow.auto_retry_count }}/{{ workflow.auto_retry_max }}&#65306;{{ workflow.auto_retry_message }}
+    {% elif workflow.stage == 'videos' and workflow.details.video_total %}
       &#24050;&#23436;&#25104; {{ workflow.details.video_ready }} / {{ workflow.details.video_total }} &#20010;&#38236;&#22836;
     {% elif workflow.status == 'failed' %}
       {{ workflow.error_message }}
