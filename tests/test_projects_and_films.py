@@ -8,6 +8,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from studio.models import Episode, Outline, Project, Script, VideoComposition
+from studio.publishing_models import PublishingAccount, PublishingTask
 from studio.repositories.workspace import WorkspaceRepository
 
 
@@ -232,3 +233,97 @@ def test_unscripted_project_can_open_without_using_global_selection(client):
     assert response.status_code == 200
     assert response.context["workspace"]["project_id"] == unscripted_outline.id
     assert response.context["workspace"]["script_id"] is None
+
+
+def test_finished_films_support_status_search_project_and_sort_filters(client):
+    workspace = make_workspace()
+    first_outline, first_script, first_episode = make_project(
+        workspace, "first", "First"
+    )
+    second_outline, _, second_episode = make_project(
+        workspace, "second", "Second", 2
+    )
+    later_episode = Episode.objects.create(
+        script=first_script,
+        episode_number=2,
+        title="First finale",
+        summary="Summary",
+        key_conflict="Conflict",
+        cliffhanger="Cliffhanger",
+        full_script="Script",
+    )
+    now = timezone.now()
+    first_composition = VideoComposition.objects.create(
+        episode=first_episode,
+        version=1,
+        status=VideoComposition.STATUS_READY,
+        video="films/first.mp4",
+        exported_at=now - timedelta(minutes=10),
+    )
+    VideoComposition.objects.create(
+        episode=later_episode,
+        version=1,
+        status=VideoComposition.STATUS_READY,
+        video="films/finale.mp4",
+        exported_at=now,
+    )
+    VideoComposition.objects.create(
+        episode=second_episode,
+        version=1,
+        status=VideoComposition.STATUS_READY,
+        video="films/second.mp4",
+        exported_at=now - timedelta(minutes=5),
+    )
+    account = PublishingAccount.objects.create(
+        platform=PublishingAccount.PLATFORM_BILIBILI,
+        remote_account_id="films-test",
+        display_name="Films test",
+        credential_ciphertext="encrypted",
+    )
+    PublishingTask.objects.create(
+        composition=first_composition,
+        account=account,
+        platform=account.platform,
+        status=PublishingTask.STATUS_PUBLISHED,
+        content_hash="published-hash",
+        dedup_key="published-dedup",
+    )
+
+    response = client.get(reverse("studio:finished_films"))
+
+    assert response.status_code == 200
+    assert response.context["film_stats"] == {
+        "ready": 3,
+        "unpublished": 2,
+        "publishing": 0,
+        "published": 1,
+        "attention": 0,
+    }
+    html = response.content.decode()
+    assert "film-summary-grid" in html
+    assert "film-play-button" in html
+    assert 'id="film-player"' in html
+
+    published = client.get(
+        reverse("studio:finished_films"), {"status": "published"}
+    )
+    assert published.context["filtered_count"] == 1
+    assert published.context["film_projects"][0]["project_id"] == first_outline.id
+
+    searched = client.get(reverse("studio:finished_films"), {"q": "Second"})
+    assert searched.context["filtered_count"] == 1
+    assert searched.context["film_projects"][0]["project_id"] == second_outline.id
+
+    selected = client.get(
+        reverse("studio:finished_films"), {"project": second_outline.id}
+    )
+    assert selected.context["filtered_count"] == 1
+
+    sorted_response = client.get(
+        reverse("studio:finished_films"),
+        {"project": first_outline.id, "sort": "episode_desc"},
+    )
+    assert [
+        item["number"]
+        for item in sorted_response.context["film_projects"][0]["episodes"]
+    ] == [2, 1]

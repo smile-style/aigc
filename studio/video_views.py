@@ -155,10 +155,97 @@ def finished_films_page(request):
         else:
             episode_item["history"].append(composition)
 
+    publishing_groups = {
+        "publishing": {
+            PublishingTask.STATUS_QUEUED,
+            PublishingTask.STATUS_RUNNING,
+            PublishingTask.STATUS_RETRY_WAIT,
+            PublishingTask.STATUS_SUBMITTED,
+        },
+        "attention": {
+            PublishingTask.STATUS_REJECTED,
+            PublishingTask.STATUS_OUTCOME_UNKNOWN,
+            PublishingTask.STATUS_FAILED,
+        },
+    }
+    state_labels = {
+        "unpublished": "\u5f85\u53d1\u5e03",
+        "publishing": "\u53d1\u5e03\u4e2d",
+        "published": "\u5df2\u53d1\u5e03",
+        "attention": "\u9700\u5904\u7406",
+    }
+    for project in projects.values():
+        for episode_item in project["episodes"].values():
+            task = episode_item["latest"].latest_publishing_task
+            if task and task.status == PublishingTask.STATUS_PUBLISHED:
+                state = "published"
+            elif task and task.status in publishing_groups["publishing"]:
+                state = "publishing"
+            elif task and task.status in publishing_groups["attention"]:
+                state = "attention"
+            else:
+                state = "unpublished"
+            episode_item["publishing_state"] = state
+            episode_item["publishing_state_label"] = state_labels[state]
+
+    all_projects = list(projects.values())
+    project_options = [
+        {"id": project["project_id"], "title": project["title"]}
+        for project in all_projects
+    ]
+    all_episode_items = [
+        episode
+        for project in all_projects
+        for episode in project["episodes"].values()
+    ]
+    film_stats = {
+        "ready": len(all_episode_items),
+        "unpublished": sum(item["publishing_state"] == "unpublished" for item in all_episode_items),
+        "publishing": sum(item["publishing_state"] == "publishing" for item in all_episode_items),
+        "published": sum(item["publishing_state"] == "published" for item in all_episode_items),
+        "attention": sum(item["publishing_state"] == "attention" for item in all_episode_items),
+    }
+
+    query = request.GET.get("q", "").strip()[:80]
+    selected_project = request.GET.get("project", "").strip()
+    selected_status = request.GET.get("status", "").strip()
+    selected_sort = request.GET.get("sort", "recent").strip()
+    if selected_status not in {"", *state_labels}:
+        selected_status = ""
+    if selected_sort not in {"recent", "episode_asc", "episode_desc"}:
+        selected_sort = "recent"
     project_rows = []
     for project in projects.values():
-        project["episodes"] = list(project["episodes"].values())
+        if selected_project and str(project["project_id"]) != selected_project:
+            continue
+        episodes = list(project["episodes"].values())
+        if query:
+            normalized_query = query.casefold()
+            episodes = [
+                item
+                for item in episodes
+                if normalized_query in project["title"].casefold()
+                or normalized_query in item["title"].casefold()
+                or normalized_query in str(item["number"])
+            ]
+        if selected_status:
+            episodes = [item for item in episodes if item["publishing_state"] == selected_status]
+        if not episodes:
+            continue
+        if selected_sort == "episode_asc":
+            episodes.sort(key=lambda item: item["number"])
+        elif selected_sort == "episode_desc":
+            episodes.sort(key=lambda item: item["number"], reverse=True)
+        else:
+            episodes.sort(
+                key=lambda item: item["latest"].exported_at or item["latest"].updated_at,
+                reverse=True,
+            )
+        project["episodes"] = episodes
         project["ready_count"] = len(project["episodes"])
+        project["ready_percent"] = round(
+            project["ready_count"] / project["total_episodes"] * 100
+        ) if project["total_episodes"] else 0
         project_rows.append(project)
     project_rows.sort(
         key=lambda item: item["latest_exported"].timestamp() if item["latest_exported"] else 0,
@@ -170,6 +257,15 @@ def finished_films_page(request):
         {
             "film_projects": project_rows,
             "film_count": len(compositions),
+            "filtered_count": sum(len(project["episodes"]) for project in project_rows),
+            "film_stats": film_stats,
+            "project_options": project_options,
+            "filters": {
+                "q": query,
+                "project": selected_project,
+                "status": selected_status,
+                "sort": selected_sort,
+            },
             "publishing_accounts": publishing_accounts,
             "publishing_task_id": request.GET.get("publishing_task", ""),
             "active_nav": "films",

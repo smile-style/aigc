@@ -6,6 +6,7 @@
 {% block extra_scripts %}
   {% load static %}
   <script src="{% static 'studio/publishing.js' %}?v=20260724-publishing" defer></script>
+  <script src="{% static 'studio/films.js' %}?v=20260727-films-library" defer></script>
 {% endblock %}
 
 {% block content %}
@@ -20,6 +21,48 @@
       <strong>{{ film_count }}</strong><span>个版本</span>
     </div>
   </header>
+  <section class="film-summary-grid" aria-label="Film library status">
+    <div><span>&#24050;&#25104;&#29255;</span><strong>{{ film_stats.ready }}</strong></div>
+    <div><span>&#24453;&#21457;&#24067;</span><strong>{{ film_stats.unpublished }}</strong></div>
+    <div><span>&#21457;&#24067;&#20013;</span><strong>{{ film_stats.publishing }}</strong></div>
+    <div><span>&#24050;&#21457;&#24067;</span><strong>{{ film_stats.published }}</strong></div>
+    <div class="{% if film_stats.attention %}has-attention{% endif %}"><span>&#38656;&#22788;&#29702;</span><strong>{{ film_stats.attention }}</strong></div>
+  </section>
+
+  <form class="film-toolbar" method="get">
+    <label class="film-search">
+      <span class="sr-only">&#25628;&#32034;&#25104;&#29255;</span>
+      <input type="search" name="q" value="{{ filters.q }}" placeholder="&#25628;&#32034;&#38598;&#25968;&#25110;&#26631;&#39064;">
+    </label>
+    <label>
+      <span class="sr-only">&#39033;&#30446;</span>
+      <select name="project">
+        <option value="">&#20840;&#37096;&#39033;&#30446;</option>
+        {% for option in project_options %}<option value="{{ option.id }}" {% if filters.project == option.id|stringformat:"s" %}selected{% endif %}>{{ option.title }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>
+      <span class="sr-only">&#21457;&#24067;&#29366;&#24577;</span>
+      <select name="status">
+        <option value="">&#20840;&#37096;&#29366;&#24577;</option>
+        <option value="unpublished" {% if filters.status == "unpublished" %}selected{% endif %}>&#24453;&#21457;&#24067;</option>
+        <option value="publishing" {% if filters.status == "publishing" %}selected{% endif %}>&#21457;&#24067;&#20013;</option>
+        <option value="published" {% if filters.status == "published" %}selected{% endif %}>&#24050;&#21457;&#24067;</option>
+        <option value="attention" {% if filters.status == "attention" %}selected{% endif %}>&#38656;&#22788;&#29702;</option>
+      </select>
+    </label>
+    <label>
+      <span class="sr-only">&#25490;&#24207;</span>
+      <select name="sort">
+        <option value="recent" {% if filters.sort == "recent" %}selected{% endif %}>&#26368;&#36817;&#23548;&#20986;</option>
+        <option value="episode_asc" {% if filters.sort == "episode_asc" %}selected{% endif %}>&#38598;&#25968;&#21319;&#24207;</option>
+        <option value="episode_desc" {% if filters.sort == "episode_desc" %}selected{% endif %}>&#38598;&#25968;&#38477;&#24207;</option>
+      </select>
+    </label>
+    <button class="secondary-button" type="submit">&#31579;&#36873;</button>
+    {% if filters.q or filters.project or filters.status or filters.sort != "recent" %}<a class="ghost-button" href="{% url 'studio:finished_films' %}">&#37325;&#32622;</a>{% endif %}
+    <span class="film-result-count">{{ filtered_count }} &#38598;</span>
+  </form>
 
   {% if film_projects %}
     <div class="film-project-list">
@@ -36,13 +79,27 @@
               <a class="secondary-button" href="{% url 'studio:project_workbench' project.project_id %}">打开项目</a>
             </div>
           </header>
+          <div class="film-project-progress" aria-label="&#25104;&#29255;&#36827;&#24230; {{ project.ready_percent }}%">
+            <span style="--film-progress: {{ project.ready_percent }}%"></span>
+          </div>
 
           <div class="film-grid">
             {% for episode in project.episodes %}
               <article class="film-card">
-                <div class="film-preview">
+                <button class="film-preview" type="button" data-modal-target="film-player"
+                        data-film-preview-url="{{ episode.latest.video.url }}"
+                        data-film-preview-download="{% url 'studio:download_finished_film' episode.latest.id %}"
+                        data-film-preview-title="&#31532; {{ episode.number }} &#38598; &#183; {{ episode.title }}"
+                        data-film-preview-meta="v{{ episode.latest.version }} &#183; {{ episode.latest.exported_at|date:'Y-m-d H:i' }}"
+                        aria-label="&#25773;&#25918;&#31532; {{ episode.number }} &#38598;&#25104;&#29255;">
                   <video controls playsinline preload="metadata" src="{{ episode.latest.video.url }}" aria-label="第 {{ episode.number }} 集成片预览"></video>
-                </div>
+                  <span class="film-preview-shade" aria-hidden="true"></span>
+                  <span class="film-preview-badges">
+                    <span>EP {{ episode.number|stringformat:"02d" }}</span>
+                    <span class="is-{{ episode.publishing_state }}">{{ episode.publishing_state_label }}</span>
+                  </span>
+                  <span class="film-play-button" aria-hidden="true"><span></span></span>
+                </button>
                 <div class="film-card-body">
                   <div class="film-card-title">
                     <div><span>第 {{ episode.number }} 集</span><h3>{{ episode.title }}</h3></div>
@@ -85,11 +142,29 @@
       {% endfor %}
     </div>
   {% else %}
+    {% if film_count %}
+      <div class="empty-state film-filter-empty">
+        <h2>&#27809;&#26377;&#31526;&#21512;&#26465;&#20214;&#30340;&#25104;&#29255;</h2>
+        <p>&#35843;&#25972;&#25628;&#32034;&#35789;&#25110;&#31579;&#36873;&#26465;&#20214;&#21518;&#20877;&#35797;&#12290;</p>
+        <a class="secondary-button" href="{% url 'studio:finished_films' %}">&#28165;&#38500;&#31579;&#36873;</a>
+      </div>
+    {% else %}
     <div class="empty-state">
       <h2>还没有成片</h2>
       <p>完成任意分集的镜头拼接与导出后，成片会自动出现在这里。</p>
       <a class="primary-button" href="{% url 'studio:script_index' %}">进入项目工作台</a>
     </div>
+    {% endif %}
   {% endif %}
+
+  <div class="detail-modal film-player-modal" id="film-player" role="dialog" aria-modal="true" aria-labelledby="film-player-title" hidden>
+    <div class="detail-backdrop" data-modal-close></div>
+    <section class="detail-panel film-player-panel">
+      <button class="modal-close" type="button" data-modal-close aria-label="&#20851;&#38381;&#39044;&#35272;">&times;</button>
+      <header><p class="eyebrow">Film Preview</p><h2 id="film-player-title"></h2><p data-film-player-meta></p></header>
+      <div class="film-player-stage"><video controls playsinline preload="metadata" data-film-player-video></video></div>
+      <footer><a class="secondary-button" href="#" data-film-player-download>&#19979;&#36733;&#25104;&#29255;</a></footer>
+    </section>
+  </div>
 </section>
 {% endblock %}
