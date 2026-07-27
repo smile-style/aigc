@@ -75,6 +75,35 @@ def test_generate_character_profiles_returns_editable_image_prompt():
     assert "角色原图" in provider.messages[-1]["content"]
 
 
+def test_episode_character_profiles_request_only_new_named_characters():
+    provider = FakeLLM({"characters": []})
+
+    result = generate_character_profiles(
+        provider,
+        {
+            "title": "Rebirth",
+            "core_premise": "The lead returns to the past",
+            "protagonist": "Chen Mo",
+            "arc_summary": "Chen Mo changes his fate",
+        },
+        [],
+        episode_focus={
+            "episode": 9,
+            "title": "The hospital",
+            "summary": "Chen Mo meets a new doctor",
+            "full_script": "Chen Mo enters the hospital and meets the new doctor Lin Zhou.",
+        },
+        existing_character_names=["Chen Mo"],
+    )
+
+    assert result == []
+    prompt = provider.messages[-1]["content"]
+    assert "Current episode 9" in prompt
+    assert "new doctor Lin Zhou" in prompt
+    assert "Existing character names: Chen Mo" in prompt
+    assert "Return only new named characters" in prompt
+
+
 def test_image_provider_accepts_openai_base64_response():
     image_bytes = b"fake-png"
     client = FakeHTTPClient(

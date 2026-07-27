@@ -3,6 +3,8 @@ from django.template.loader import render_to_string
 from django.urls import reverse
 
 from studio.models import (
+    Character,
+    CharacterAsset,
     Episode,
     EpisodeWorkflowRun,
     GenerationTask,
@@ -110,6 +112,72 @@ def test_workflow_starts_script_task_and_reuses_active_run():
     assert run.stage == EpisodeWorkflowRun.STAGE_SCRIPT
     assert run.child_task.task_type == GenerationTask.TYPE_EPISODE_SCRIPT
     assert run.status == EpisodeWorkflowRun.STATUS_RUNNING
+
+
+def test_character_stage_targets_current_episode_and_reports_new_and_reused_assets():
+    _, script, episode = make_episode(full_script="Episode script")
+    existing = Character.objects.create(
+        script=script,
+        name="Existing lead",
+        role="Lead",
+        appearance="Black hair",
+        personality="Calm",
+        costume="Black coat",
+        image_prompt="Existing lead reference",
+    )
+    CharacterAsset.objects.create(
+        character=existing,
+        model="image-model",
+        prompt_snapshot="Existing lead reference",
+        image="characters/existing.png",
+    )
+
+    run, _ = create_episode_workflow(episode)
+
+    assert run.stage == EpisodeWorkflowRun.STAGE_CHARACTERS
+    assert run.child_task.input_snapshot["episode_number"] == episode.episode_number
+    assert run.child_task.target_id.endswith(f":episode:{episode.episode_number}")
+
+    new_character = Character.objects.create(
+        script=script,
+        name="New doctor",
+        role="Doctor",
+        appearance="White coat",
+        personality="Direct",
+        costume="White coat",
+        image_prompt="New doctor reference",
+    )
+    GenerationTask.objects.filter(pk=run.child_task_id).update(
+        status=GenerationTask.STATUS_SUCCEEDED,
+        result_snapshot={
+            "character_count": 2,
+            "character_names": [existing.name, new_character.name],
+        },
+    )
+
+    run = advance_episode_workflow(run.id)
+
+    assert run.details["character_new_total"] == 1
+    assert run.details["character_reused"] == 1
+    assert run.details["character_total"] == 1
+    assert run.details["character_ready"] == 0
+    assert len(run.details["character_image_task_ids"]) == 1
+    image_task = GenerationTask.objects.get(pk=run.details["character_image_task_ids"][0])
+    assert image_task.target_id == str(new_character.id)
+
+    CharacterAsset.objects.create(
+        character=new_character,
+        model="image-model",
+        prompt_snapshot="New doctor reference",
+        image="characters/new-doctor.png",
+    )
+    GenerationTask.objects.filter(pk=image_task.id).update(
+        status=GenerationTask.STATUS_SUCCEEDED,
+    )
+    run = advance_episode_workflow(run.id)
+
+    assert run.details["character_new_total"] == 1
+    assert run.details["character_reused"] == 1
 
 
 def test_failed_child_is_automatically_retried_three_times_before_workflow_fails():

@@ -22,6 +22,9 @@
   <p class="episode-workflow-detail" data-workflow-detail>
     {% if workflow.auto_retrying %}
       &#27491;&#22312;&#33258;&#21160;&#37325;&#35797; {{ workflow.auto_retry_count }}/{{ workflow.auto_retry_max }}&#65306;{{ workflow.auto_retry_message }}
+    {% elif workflow.stage == 'characters' and workflow.details.character_profile_complete %}
+      &#26032;&#22686;&#29983;&#25104; {{ workflow.details.character_new_total|default:0 }} &#20010;&#65292;&#22797;&#29992;&#24050;&#26377;&#36164;&#20135; {{ workflow.details.character_reused|default:0 }} &#20010;&#65292;
+      &#35282;&#33394;&#22270;&#29255; {{ workflow.details.character_ready|default:0 }}/{{ workflow.details.character_total|default:0 }}
     {% elif workflow.stage == 'videos' and workflow.details.video_total %}
       &#24050;&#23436;&#25104; {{ workflow.details.video_ready }} / {{ workflow.details.video_total }} &#20010;&#38236;&#22836;
     {% elif workflow.status == 'failed' %}

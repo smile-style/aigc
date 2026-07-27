@@ -46,7 +46,14 @@ def apply_character_visual_style(prompt, visual_style):
     return f"{prompt.strip()}\n{style_lock}"
 
 
-def generate_character_profiles(provider, outline, episodes, visual_style="comic"):
+def generate_character_profiles(
+    provider,
+    outline,
+    episodes,
+    visual_style="comic",
+    episode_focus=None,
+    existing_character_names=None,
+):
     if not isinstance(outline, dict):
         raise ValueError("Selected outline is required")
     style = normalize_character_visual_style(visual_style)
@@ -55,6 +62,19 @@ def generate_character_profiles(provider, outline, episodes, visual_style="comic
         f"第 {episode.get('episode')} 集：{episode.get('title')}；{episode.get('summary')}"
         for episode in episodes[:12]
     )
+    if episode_focus:
+        existing_names = ", ".join(existing_character_names or []) or "(none)"
+        episode_context = (
+            f"Current episode {episode_focus.get('episode', '')}: "
+            f"{episode_focus.get('title', '')}\n"
+            f"Summary: {episode_focus.get('summary', '')}\n"
+            f"Full script:\n{episode_focus.get('full_script', '')}\n"
+            f"Existing character names: {existing_names}\n"
+            "Return only new named characters introduced in the current episode. "
+            "Do not return existing characters, unnamed extras, crowds, or generic roles. "
+            "If there are no new named characters, return {\"characters\": []}."
+        )
+
     payload = provider.generate_json(
         [
             {
@@ -82,7 +102,7 @@ def generate_character_profiles(provider, outline, episodes, visual_style="comic
         ],
         temperature=0.6,
     )
-    profiles = validate_character_profiles(payload)
+    profiles = validate_character_profiles(payload, allow_empty=bool(episode_focus))
     for profile in profiles:
         profile["image_prompt"] = apply_character_visual_style(
             profile["image_prompt"],
@@ -91,11 +111,12 @@ def generate_character_profiles(provider, outline, episodes, visual_style="comic
     return profiles
 
 
-def validate_character_profiles(payload):
+def validate_character_profiles(payload, allow_empty=False):
     if not isinstance(payload, dict):
         raise ValueError("Model response must be an object")
     characters = payload.get("characters")
-    if not isinstance(characters, list) or not 1 <= len(characters) <= 12:
+    minimum = 0 if allow_empty else 1
+    if not isinstance(characters, list) or not minimum <= len(characters) <= 12:
         raise ValueError("Model response must include 1 to 12 characters")
     validated = []
     for index, character in enumerate(characters, start=1):

@@ -587,7 +587,13 @@ class WorkspaceRepository:
         task = project.generation_tasks.filter(task_type=task_type).order_by("-created_at", "-id").first()
         return self._task_to_dict(task) if task else None
 
-    def create_character_profile_task(self, workspace_id, visual_style=None, script_id=None):
+    def create_character_profile_task(
+        self,
+        workspace_id,
+        visual_style=None,
+        script_id=None,
+        episode_number=None,
+    ):
         with transaction.atomic():
             project = Project.objects.select_for_update().get(workspace_id=workspace_id)
             script = self._script_for_context(project, script_id)
@@ -598,6 +604,8 @@ class WorkspaceRepository:
             if selected_style not in valid_styles:
                 raise ValueError(f"Unsupported character visual style: {selected_style}")
             target_id = f"script:{script.id}"
+            if episode_number is not None:
+                target_id = f"{target_id}:episode:{int(episode_number)}"
             running = project.generation_tasks.filter(
                 task_type=GenerationTask.TYPE_CHARACTER_PROFILE,
                 target_id=target_id,
@@ -622,13 +630,20 @@ class WorkspaceRepository:
                     "script_id": script.id,
                     "project_id": script.outline_id,
                     "visual_style": selected_style,
+                    "episode_number": int(episode_number) if episode_number is not None else None,
                 },
             )
             data = self._task_to_dict(task)
             data["created"] = True
             return data
 
-    def save_character_profiles(self, workspace_id, profiles, script_id=None):
+    def save_character_profiles(
+        self,
+        workspace_id,
+        profiles,
+        script_id=None,
+        preserve_existing=False,
+    ):
         with transaction.atomic():
             project = Project.objects.select_for_update().get(workspace_id=workspace_id)
             script = self._script_for_context(project, script_id)
@@ -651,8 +666,9 @@ class WorkspaceRepository:
                         "position": position,
                     },
                 )
-            names.extend(script.characters.filter(is_deleted=True).values_list("name", flat=True))
-            script.characters.exclude(name__in=names).filter(assets__isnull=True).delete()
+            if not preserve_existing:
+                names.extend(script.characters.filter(is_deleted=True).values_list("name", flat=True))
+                script.characters.exclude(name__in=names).filter(assets__isnull=True).delete()
         return self.get_workspace(workspace_id, script_id=script_id)
 
     def create_character_image_task(self, workspace_id, character_id, prompt):

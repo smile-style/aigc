@@ -26,9 +26,15 @@ document.addEventListener("DOMContentLoaded", () => {
         if (detail) {
           const ready = payload.details?.video_ready;
           const total = payload.details?.video_total;
+          const characterNew = payload.details?.character_new_total || 0;
+          const characterReused = payload.details?.character_reused || 0;
+          const characterReady = payload.details?.character_ready || 0;
+          const characterTotal = payload.details?.character_total || 0;
           detail.textContent =
             payload.auto_retrying
               ? `\u6b63\u5728\u81ea\u52a8\u91cd\u8bd5 ${payload.auto_retry_count}/${payload.auto_retry_max}\uff1a${payload.auto_retry_message}`
+              : payload.stage === "characters" && payload.details?.character_profile_complete
+              ? `\u65b0\u589e\u751f\u6210 ${characterNew} \u4e2a\uff0c\u590d\u7528\u5df2\u6709\u8d44\u4ea7 ${characterReused} \u4e2a\uff0c\u89d2\u8272\u56fe\u7247 ${characterReady}/${characterTotal}`
               : payload.stage === "videos" && total
               ? `\u5df2\u5b8c\u6210 ${ready || 0} / ${total} \u4e2a\u955c\u5934`
               : payload.error_message ||

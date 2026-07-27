@@ -124,18 +124,49 @@ def handle_character_profile_generation(task):
     snapshot = task.input_snapshot or {}
     script_id = snapshot.get("script_id")
     workspace = repository.get_workspace(workspace_id, script_id=script_id)
+    episode_number = snapshot.get("episode_number")
+    episode_focus = None
+    if episode_number is not None:
+        episode_number = int(episode_number)
+        episode_focus = next(
+            (
+                item
+                for item in workspace.get("episodes", [])
+                if int(item.get("episode") or 0) == episode_number
+            ),
+            None,
+        )
+        if episode_focus is None:
+            raise FileNotFoundError(f"Episode not found: {episode_number}")
+    existing_names = [
+        item["name"] for item in workspace.get("characters", []) if item.get("name")
+    ]
     profiles = generate_character_profiles(
         llm_provider_for(ModelAssignment.PURPOSE_CHARACTER_PROFILE),
         workspace["selected_outline"],
         workspace.get("episodes", []),
         snapshot.get("visual_style", workspace["character_visual_style"]),
+        episode_focus=episode_focus,
+        existing_character_names=existing_names,
     )
     repository.save_character_profiles(
         workspace_id,
         profiles,
         script_id=script_id,
+        preserve_existing=episode_focus is not None,
     )
-    return {"character_count": len(profiles)}
+    profile_names = [profile["name"] for profile in profiles]
+    reused_names = []
+    if episode_focus:
+        full_script = str(episode_focus.get("full_script") or "")
+        reused_names = [name for name in existing_names if name in full_script]
+    character_names = list(dict.fromkeys([*reused_names, *profile_names]))
+    return {
+        "character_count": len(character_names),
+        "character_names": character_names,
+        "new_character_names": profile_names,
+        "reused_character_names": reused_names,
+    }
 
 
 def handle_character_image_generation(task):

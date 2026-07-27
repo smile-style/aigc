@@ -158,6 +158,12 @@ def advance_episode_workflow(run_id):
                     return run
                 details = dict(run.details or {})
                 details[f"{child.task_type}_complete"] = True
+                if child.task_type == GenerationTask.TYPE_CHARACTER_PROFILE:
+                    result = child.result_snapshot or {}
+                    details["character_names"] = list(result.get("character_names") or [])
+                    details["character_new_names"] = list(
+                        result.get("new_character_names") or []
+                    )
                 run.details = details
                 run.child_task = None
 
@@ -232,20 +238,22 @@ def _handle_characters(run):
             episode.script.project.workspace_id,
             episode.script.character_visual_style,
             script_id=episode.script_id,
+            episode_number=episode.episode_number,
         )
         run.child_task_id = task_data["id"]
         run.progress_percent = 18
         return False
 
-    characters = list(
-        Character.objects.filter(script=episode.script, is_deleted=False).prefetch_related("assets")
-    )
+    characters_query = Character.objects.filter(script=episode.script, is_deleted=False)
+    if "character_names" in details:
+        characters_query = characters_query.filter(name__in=details["character_names"])
+    characters = list(characters_query.prefetch_related("assets"))
+    new_characters = [character for character in characters if not character.assets.exists()]
+    reused = len(characters) - len(new_characters)
     task_ids = list(details.get("character_image_task_ids") or [])
-    if not task_ids:
+    if "character_image_task_ids" not in details:
         repository = WorkspaceRepository()
-        for character in characters:
-            if character.assets.exists():
-                continue
+        for character in new_characters:
             task_data = repository.create_character_image_task(
                 episode.script.project.workspace_id,
                 character.id,
@@ -253,8 +261,10 @@ def _handle_characters(run):
             )
             task_ids.append(task_data["id"])
         details["character_image_task_ids"] = task_ids
-        details["character_total"] = len(task_ids)
-        run.details = details
+    details.setdefault("character_new_total", len(new_characters))
+    details.setdefault("character_reused", reused)
+    details["character_total"] = len(task_ids)
+    run.details = details
 
     tasks = list(GenerationTask.objects.filter(pk__in=task_ids))
     failed = next((task for task in tasks if task.status in FAILED_TASK_STATUSES), None)
