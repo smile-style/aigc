@@ -222,8 +222,8 @@ def test_validate_script_payload_accepts_int_episode_number():
     assert payload["script_plan"][0]["episode"] == 1
 
 
-@pytest.mark.parametrize(("start_second", "end_second"), [(1, 3), (0, 5)])
-def test_validate_script_payload_normalizes_near_miss_crisis_open(
+@pytest.mark.parametrize(("start_second", "end_second"), [(1, 3), (0, 5), (4, 7)])
+def test_validate_script_payload_normalizes_model_crisis_open_timing(
     start_second,
     end_second,
 ):
@@ -239,15 +239,6 @@ def test_validate_script_payload_normalizes_near_miss_crisis_open(
     assert crisis["end_second"] == 3
     assert goal["start_second"] == 3
 
-
-def test_validate_script_payload_rejects_crisis_far_from_open():
-    payload = make_payload()
-    payload["episode_1_pacing"]["beats"][0]["start_second"] = 4
-    payload["episode_1_pacing"]["beats"][0]["end_second"] = 7
-    payload["episode_1_pacing"]["beats"][1]["start_second"] = 7
-
-    with pytest.raises(ValueError, match="crisis_open"):
-        validate_script_payload(payload)
 
 
 def test_validate_script_payload_rejects_wrong_episode_number():

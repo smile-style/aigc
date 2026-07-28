@@ -440,8 +440,7 @@ def _normalize_model_pacing(pacing):
             isinstance(value, int) and not isinstance(value, bool)
             for value in (crisis_start, crisis_end, goal_start)
         )
-        and crisis_start in {0, 1}
-        and 1 <= crisis_end <= 5
+        and 0 <= crisis_start < crisis_end <= duration
         and goal_start == crisis_end
     ):
         corrected_end = min(crisis_end, 3)
