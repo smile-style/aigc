@@ -6,9 +6,11 @@ from django.db import models
 class PublishingAccount(models.Model):
     PLATFORM_BILIBILI = "bilibili"
     PLATFORM_ACFUN = "acfun"
+    PLATFORM_DOUYIN = "douyin"
     PLATFORM_CHOICES = [
         (PLATFORM_BILIBILI, "Bilibili"),
         (PLATFORM_ACFUN, "AcFun"),
+        (PLATFORM_DOUYIN, "抖音"),
     ]
     STATUS_CONNECTED = "connected"
     STATUS_EXPIRED = "expired"
@@ -59,6 +61,7 @@ class PublishingLoginSession(models.Model):
     session_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     platform = models.CharField(max_length=32, choices=PublishingAccount.PLATFORM_CHOICES)
     provider_key_ciphertext = models.TextField()
+    callback_state_hash = models.CharField(max_length=64, blank=True, db_index=True)
     login_url = models.URLField(max_length=2000)
     status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_PENDING)
     account = models.ForeignKey(

@@ -2,6 +2,7 @@ from io import BytesIO
 
 from django.http import Http404, HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
 from studio.models import PublishingAccount, PublishingLoginSession, PublishingTask, VideoComposition
@@ -10,6 +11,7 @@ from .errors import PublishingError
 from .service import (
     cancel_task,
     check_publishing_account,
+    complete_oauth_login,
     connect_cookie_account,
     create_publishing_task,
     poll_login_session,
@@ -141,8 +143,9 @@ def cookie_login_view(request):
 @require_POST
 def qr_login_start_view(request):
     try:
-        session = start_login_session()
-    except PublishingError as exc:
+        platform_name = request.POST.get("platform") or PublishingAccount.PLATFORM_BILIBILI
+        session = start_login_session(platform_name)
+    except (PublishingError, ValueError) as exc:
         return JsonResponse({"ok": False, "error": str(exc)}, status=502)
     return JsonResponse(
         {
@@ -153,6 +156,27 @@ def qr_login_start_view(request):
             "expires_at": session.expires_at.isoformat(),
         }
     )
+
+
+@require_GET
+def oauth_login_start_view(request, platform):
+    try:
+        session = start_login_session(platform)
+    except (PublishingError, ValueError) as exc:
+        return redirect(f"/system/?publishing_error={str(exc)}")
+    return redirect(session.login_url)
+
+
+@require_GET
+def oauth_login_callback_view(request, platform):
+    provider_error = request.GET.get("error") or request.GET.get("error_description")
+    if provider_error:
+        return redirect(f"/system/?publishing_error={provider_error}")
+    try:
+        complete_oauth_login(platform, request.GET.get("state"), request.GET.get("code"))
+    except (PublishingError, ValueError) as exc:
+        return redirect(f"/system/?publishing_error={str(exc)}")
+    return redirect(reverse("studio:system_settings") + "?publishing_success=1")
 
 
 @require_GET

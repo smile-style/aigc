@@ -1,3 +1,4 @@
+{% load studio_extras %}
 <div class="detail-modal publish-dialog" id="publish-composition-{{ composition.id }}" role="dialog" aria-modal="true" aria-labelledby="publish-title-{{ composition.id }}" hidden>
   <div class="detail-backdrop" data-modal-close></div>
   <section class="detail-panel publish-dialog__panel">
@@ -14,8 +15,8 @@
     <form method="post" action="{% url 'studio:publishing_task_create' %}" data-publish-form>
       {% csrf_token %}<input type="hidden" name="composition_id" value="{{ composition.id }}">
       <div class="publish-form-grid">
-        <label><span>发布账号</span><select name="account_id" data-publish-account required><option value="">请选择账号</option>{% for account in publishing_accounts %}<option value="{{ account.id }}" data-platform="{{ account.platform }}">{{ account.get_platform_display }} · {{ account.display_name }}</option>{% endfor %}</select></label>
-        <label><span>稿件分区</span><select name="tid" data-publish-partition required>
+        <label><span>发布账号</span><select name="account_id" data-publish-account required><option value="">请选择账号</option>{% for account in publishing_accounts %}<option value="{{ account.id }}" data-platform="{{ account.platform }}" data-platform-label="{{ account.get_platform_display }}" data-title-limit="{{ account.platform|platform_title_limit }}" data-requires-partition="{{ account.platform|platform_requires_partition|yesno:'true,false' }}">{{ account.get_platform_display }} · {{ account.display_name }}</option>{% endfor %}</select></label>
+        <label data-partition-field><span>稿件分区</span><select name="tid" data-publish-partition required>
           <option value="21" data-platform="bilibili">Bilibili · 生活 / 日常</option>
           <option value="138" data-platform="bilibili">Bilibili · 生活 / 搞笑</option>
           <option value="47" data-platform="bilibili">Bilibili · 动画 / 短片</option>
@@ -29,7 +30,7 @@
         <label class="field-wide"><span>标题</span><input type="text" name="title" maxlength="80" value="{{ episode.title }}" required><small><span data-character-count>0</span> / <span data-title-limit>80</span></small></label>
         <label class="field-wide"><span>简介</span><textarea name="description" rows="5">{{ composition.episode.summary }}</textarea></label>
         <label class="field-wide"><span>标签</span><input type="text" name="tags" placeholder="漫剧, AI动画, 短剧"><small>使用逗号分隔</small></label>
-        <fieldset><legend>稿件类型</legend><label><input type="radio" name="copyright" value="1" checked> 自制</label><label><input type="radio" name="copyright" value="2"> 转载</label></fieldset>
+        <fieldset data-copyright-field><legend>稿件类型</legend><label><input type="radio" name="copyright" value="1" checked> 自制</label><label><input type="radio" name="copyright" value="2"> 转载</label></fieldset>
         <label data-source-field hidden><span>原作地址</span><input type="url" name="source" placeholder="https://"></label>
       </div>
       <p class="inline-error" data-publish-error role="alert" hidden></p>

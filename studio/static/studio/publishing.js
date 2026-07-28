@@ -7,7 +7,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const titleLimit = form.querySelector("[data-title-limit]");
     const account = form.querySelector("[data-publish-account]");
     const partition = form.querySelector("[data-publish-partition]");
+    const partitionField = form.querySelector("[data-partition-field]");
     const platformLabel = form.closest(".publish-dialog")?.querySelector("[data-publish-platform-label]");
+    const copyrightField = form.querySelector("[data-copyright-field]");
     const sourceField = form.querySelector("[data-source-field]");
     const sourceInput = sourceField?.querySelector("input");
     const error = form.querySelector("[data-publish-error]");
@@ -17,11 +19,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const updatePlatform = () => {
       const selected = account?.selectedOptions[0];
       const platform = selected?.dataset.platform || "";
-      const limit = platform === "acfun" ? 50 : 80;
+      const limit = Number(selected?.dataset.titleLimit || 80);
+      const requiresPartition = selected?.dataset.requiresPartition !== "false";
       if (title) title.maxLength = limit;
       if (titleLimit) titleLimit.textContent = String(limit);
-      if (platformLabel) platformLabel.textContent = platform === "acfun" ? "AcFun" : platform === "bilibili" ? "Bilibili" : "发布平台";
+      if (platformLabel) platformLabel.textContent = selected?.dataset.platformLabel || "发布平台";
+      if (partitionField) partitionField.hidden = !requiresPartition;
       if (partition) {
+        partition.required = requiresPartition;
         let firstAvailable = null;
         [...partition.options].forEach((option) => {
           const available = !platform || option.dataset.platform === platform;
@@ -31,15 +36,20 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         if (partition.selectedOptions[0]?.disabled && firstAvailable) firstAvailable.selected = true;
       }
+      if (copyrightField) copyrightField.hidden = platform === "douyin";
       updateTitleCount();
     };
     const updateCopyright = () => {
-      const repost = form.querySelector("input[name='copyright']:checked")?.value === "2";
+      const platform = account?.selectedOptions[0]?.dataset.platform || "";
+      const repost = platform !== "douyin" && form.querySelector("input[name='copyright']:checked")?.value === "2";
       if (sourceField) sourceField.hidden = !repost;
       if (sourceInput) sourceInput.required = repost;
     };
     title?.addEventListener("input", updateTitleCount);
-    account?.addEventListener("change", updatePlatform);
+    account?.addEventListener("change", () => {
+      updatePlatform();
+      updateCopyright();
+    });
     form.querySelectorAll("input[name='copyright']").forEach((input) => input.addEventListener("change", updateCopyright));
     updatePlatform();
     updateCopyright();

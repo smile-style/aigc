@@ -102,7 +102,9 @@
 .film-publish-state a { color: #67e8f9; }
 
 @media (max-width: 820px) {
-  .publishing-page-head { align-items: stretch; flex-direction: column; }
+  .publishing-page-head,
+  .publishing-account-head { align-items: stretch; flex-direction: column; }
+  .publishing-account-actions { flex-wrap: wrap; }
   .publishing-filters { overflow-x: auto; }
   .publishing-task { align-items: flex-start; flex-wrap: wrap; }
   .publishing-task__identity { width: calc(100% - 120px); }

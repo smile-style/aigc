@@ -7,6 +7,7 @@ class LoginStart:
     provider_key: str
     login_url: str
     expires_in: int = 180
+    mode: str = "qr"
 
 
 @dataclass
