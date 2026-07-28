@@ -30,8 +30,10 @@ from studio.services.model_config import ensure_default_video_models, normalize_
 from studio.services.subtitles import (
     generate_subtitle_cues,
     process_subtitle_task,
+    recognize_speech_alignment,
     render_ass,
     render_srt,
+    retime_subtitle_snapshot,
     save_shot_subtitle,
     save_subtitle_style,
     save_subtitle_track,
@@ -737,6 +739,107 @@ def test_subtitle_snapshot_follows_reordered_shots():
     assert after["cues"][1]["start_ms"] == shots[1].duration_seconds * 1000 + 100
 
 
+def test_recognize_speech_alignment_uses_word_timestamps(monkeypatch, tmp_path):
+    from studio.services import subtitles
+
+    words = [
+        SimpleNamespace(word="快", start=0.20, end=0.30),
+        SimpleNamespace(word="走", start=0.31, end=0.42),
+        SimpleNamespace(word="等", start=1.00, end=1.10),
+        SimpleNamespace(word="等", start=1.11, end=1.24),
+    ]
+    segment = SimpleNamespace(text="快走等等", start=0.20, end=1.24, words=words)
+    fake_model = SimpleNamespace(
+        transcribe=lambda *args, **kwargs: ([segment], SimpleNamespace())
+    )
+    monkeypatch.setenv("SUBTITLE_ASR_BACKEND", "faster_whisper")
+    monkeypatch.setattr(subtitles, "_WHISPER_MODEL", fake_model)
+    video_path = tmp_path / "speech.mp4"
+    video_path.write_bytes(b"video")
+    asset = SimpleNamespace(video=SimpleNamespace(path=str(video_path)))
+
+    alignment = recognize_speech_alignment(asset, "快走。等等。", ["快走", "等等"])
+
+    assert alignment[0] == [(200, 420), (1000, 1240)]
+    assert alignment[1] == "快走等等"
+    assert alignment[2] == 1.0
+
+
+def test_retime_subtitle_snapshot_uses_normalized_clip_durations():
+    snapshot = {
+        "style": {},
+        "global_offset_ms": 0,
+        "shots": [
+            {"shot_id": "shot-1", "duration_ms": 5000},
+            {"shot_id": "shot-2", "duration_ms": 5000},
+        ],
+        "cues": [
+            {
+                "position": 1,
+                "shot_id": "shot-2",
+                "text": "第二镜头",
+                "start_ms": 5100,
+                "end_ms": 5900,
+                "local_start_ms": 100,
+                "local_end_ms": 900,
+                "shot_offset_ms": 0,
+                "style": {},
+            }
+        ],
+    }
+
+    retimed = retime_subtitle_snapshot(
+        snapshot,
+        [5200, 4800],
+        max_timeline_drift_ms=500,
+    )
+
+    assert retimed["cues"][0]["start_ms"] == 5300
+    assert retimed["cues"][0]["end_ms"] == 6100
+    assert retimed["timeline"]["normalized_duration_ms"] == 10000
+    assert retimed["timeline"]["max_drift_ms"] == 200
+
+
+def test_retime_subtitle_snapshot_rejects_excessive_timeline_drift():
+    snapshot = {
+        "style": {},
+        "shots": [
+            {"shot_id": "shot-1", "duration_ms": 5000},
+            {"shot_id": "shot-2", "duration_ms": 5000},
+        ],
+        "cues": [],
+    }
+
+    with pytest.raises(ValueError, match="累计偏差 1000ms"):
+        retime_subtitle_snapshot(
+            snapshot,
+            [6000, 4000],
+            max_timeline_drift_ms=500,
+        )
+
+
+def test_retime_subtitle_snapshot_rejects_cue_outside_shot(monkeypatch):
+    monkeypatch.setenv("SUBTITLE_CUE_BOUNDARY_TOLERANCE_MS", "300")
+    snapshot = {
+        "style": {},
+        "shots": [{"shot_id": "shot-1", "duration_ms": 5000}],
+        "cues": [
+            {
+                "position": 1,
+                "shot_id": "shot-1",
+                "text": "late caption",
+                "start_ms": 4800,
+                "end_ms": 5500,
+                "local_start_ms": 4800,
+                "local_end_ms": 5500,
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="超出所属镜头 500ms"):
+        retime_subtitle_snapshot(snapshot, [5000])
+
+
 def test_shot_subtitle_setting_uses_track_style_and_controls_visibility():
     _, episode, storyboard = make_episode(with_character=False)
     shots = sync_storyboard_shots(storyboard)
@@ -1039,6 +1142,63 @@ def test_ffmpeg_export_burns_ass_when_subtitles_are_enabled(tmp_path, monkeypatc
     burn_command = next(command for command in commands if "ass=subtitles.ass" in command)
     assert content == b"exported-video"
     assert burn_command[burn_command.index("-c:a") + 1] == "copy"
+
+
+def test_ffmpeg_export_retimes_subtitles_from_normalized_clips(tmp_path, monkeypatch):
+    assets = []
+    for index in range(1, 3):
+        source = tmp_path / f"shot-{index}.mp4"
+        source.write_bytes(b"source")
+        assets.append(
+            SimpleNamespace(
+                video=SimpleNamespace(path=str(source)),
+                shot=SimpleNamespace(shot_id=f"shot-{index}", duration_seconds=5),
+            )
+        )
+
+    monkeypatch.setattr("studio.services.video.shutil.which", lambda name: name)
+
+    def fake_run(command, **kwargs):
+        if command[0] == "ffprobe":
+            if "stream=index" in command:
+                return SimpleNamespace(stdout="")
+            duration = "5.2\n" if "normalized-001" in command[-1] else "4.8\n"
+            return SimpleNamespace(stdout=duration)
+        Path(command[-1]).write_bytes(b"exported-video")
+        return SimpleNamespace(stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("studio.services.video.subprocess.run", fake_run)
+    snapshot = {
+        "style": {},
+        "global_offset_ms": 0,
+        "shots": [
+            {"shot_id": "shot-1", "duration_ms": 5000},
+            {"shot_id": "shot-2", "duration_ms": 5000},
+        ],
+        "cues": [
+            {
+                "position": 1,
+                "shot_id": "shot-2",
+                "text": "caption",
+                "start_ms": 5100,
+                "end_ms": 5900,
+                "local_start_ms": 100,
+                "local_end_ms": 900,
+                "shot_offset_ms": 0,
+                "style": {},
+            }
+        ],
+    }
+
+    content, effective = _ffmpeg_concat(
+        assets,
+        subtitle_snapshot=snapshot,
+        return_subtitle_snapshot=True,
+    )
+
+    assert content == b"exported-video"
+    assert effective["cues"][0]["start_ms"] == 5300
+    assert effective["timeline"]["max_drift_ms"] == 200
 
 
 def test_subtitle_generate_save_and_download_views(client):

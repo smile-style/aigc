@@ -236,6 +236,31 @@ class CoverTemplate(models.Model):
         return f"Cover template for {self.script} v{self.version}"
 
 
+class CoverTemplateVersion(models.Model):
+    template = models.ForeignKey(
+        CoverTemplate, on_delete=models.CASCADE, related_name="versions"
+    )
+    prompt_snapshot = models.TextField()
+    background = models.FileField(upload_to="covers/templates/%Y/%m/%d")
+    source_url = models.URLField(blank=True, max_length=1000)
+    model = models.CharField(max_length=120)
+    style_payload = models.JSONField(default=dict, blank=True)
+    version = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-version", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["template", "version"],
+                name="unique_cover_template_version",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.template} history v{self.version}"
+
+
 class EpisodeCover(models.Model):
     template = models.ForeignKey(
         CoverTemplate, on_delete=models.CASCADE, related_name="episode_covers"

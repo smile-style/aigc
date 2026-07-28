@@ -99,3 +99,14 @@ migrated to MySQL.
 
 Run `down` with the matching Compose file. Never delete or overwrite
 `db.sqlite3`, `media/`, or `workspace/` without a verified backup.
+## Speech-aligned subtitles
+
+Runtime Compose files enable `faster-whisper` with the CPU `small` model and
+`int8` compute by default. The first subtitle alignment downloads the model to
+`/app/workspace/.cache/huggingface`; this path is persisted by the workspace
+volume, so later jobs and container restarts reuse the same model files.
+
+`SUBTITLE_MAX_TIMELINE_DRIFT_MS` controls the maximum cumulative difference
+between source clips and normalized 25fps clips. Captioned export fails with a
+diagnostic message when that limit is exceeded. Per-cue overflow is controlled
+by `SUBTITLE_CUE_BOUNDARY_TOLERANCE_MS`.

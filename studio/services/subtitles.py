@@ -263,16 +263,27 @@ def generate_subtitle_cues(track, assets, source_hash=None):
             speaker_names=shot.character_names,
         )
         parts = [segment[1] for segment in segments]
-        recognized = recognize_speech_window(asset, shot.dialogue_or_narration)
-        if recognized:
-            speech_start, speech_end, recognized_text, confidence = recognized
+        alignment = recognize_speech_alignment(
+            asset,
+            shot.dialogue_or_narration,
+            parts,
+        )
+        if alignment:
+            ranges, recognized_text, confidence = alignment
+            ranges = [
+                (max(0, start), min(duration_ms, end))
+                for start, end in ranges
+            ]
         else:
             speech_start = min(250, max(0, duration_ms // 10))
             speech_end = max(speech_start + 500, duration_ms - speech_start)
             recognized_text = ""
             confidence = 0.5
-
-        ranges = distribute_cues(parts, speech_start, min(duration_ms, speech_end))
+            ranges = distribute_cues(
+                parts,
+                speech_start,
+                min(duration_ms, speech_end),
+            )
         previous_manual = manual_by_shot.get(shot.id, [])
         for local_index, (
             (cue_text_source, cleaned_text),
@@ -520,28 +531,32 @@ def distribute_cues(parts, start_ms, end_ms):
     return ranges
 
 
-def recognize_speech_window(asset, source_text):
+def recognize_speech_alignment(asset, source_text, parts):
     if os.environ.get("SUBTITLE_ASR_BACKEND", "").lower() != "faster_whisper":
         return None
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError as exc:
-        raise RuntimeError(
-            "已启用 faster-whisper 字幕对齐，但当前环境没有安装 faster-whisper。"
-        ) from exc
-
+    if not parts:
+        return [], "", 1.0
     global _WHISPER_MODEL
     if _WHISPER_MODEL is None:
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError as exc:
+            raise RuntimeError(
+                "已启用 faster-whisper 字幕对齐，但当前环境没有安装 faster-whisper。"
+            ) from exc
         _WHISPER_MODEL = WhisperModel(
-            os.environ.get("SUBTITLE_WHISPER_MODEL", "large-v3-turbo"),
-            device=os.environ.get("SUBTITLE_WHISPER_DEVICE", "auto"),
-            compute_type=os.environ.get("SUBTITLE_WHISPER_COMPUTE_TYPE", "default"),
+            os.environ.get("SUBTITLE_WHISPER_MODEL", "small"),
+            device=os.environ.get("SUBTITLE_WHISPER_DEVICE", "cpu"),
+            compute_type=os.environ.get("SUBTITLE_WHISPER_COMPUTE_TYPE", "int8"),
         )
+    expected_text = "".join(parts)
     segments, _ = _WHISPER_MODEL.transcribe(
         asset.video.path,
         language=os.environ.get("SUBTITLE_LANGUAGE", "zh"),
         word_timestamps=True,
         vad_filter=True,
+        initial_prompt=expected_text,
+        condition_on_previous_text=False,
     )
     segments = list(segments)
     if not segments:
@@ -549,16 +564,62 @@ def recognize_speech_window(asset, source_text):
     recognized_text = "".join(segment.text.strip() for segment in segments)
     confidence = SequenceMatcher(
         None,
-        normalize_text(source_text),
+        normalize_text(expected_text or source_text),
         normalize_text(recognized_text),
     ).ratio()
-    return (
-        max(0, round(segments[0].start * 1000)),
-        max(100, round(segments[-1].end * 1000)),
-        recognized_text,
-        confidence,
-    )
+    words = [
+        word
+        for segment in segments
+        for word in (getattr(segment, "words", None) or [])
+        if normalize_text(getattr(word, "word", ""))
+    ]
+    if words and len(words) >= len(parts):
+        ranges = _align_parts_to_words(parts, words)
+    else:
+        ranges = distribute_cues(
+            parts,
+            max(0, round(segments[0].start * 1000)),
+            max(100, round(segments[-1].end * 1000)),
+        )
+    return ranges, recognized_text, confidence
 
+
+def recognize_speech_window(asset, source_text):
+    alignment = recognize_speech_alignment(asset, source_text, [source_text])
+    if not alignment:
+        return None
+    ranges, recognized_text, confidence = alignment
+    return ranges[0][0], ranges[-1][1], recognized_text, confidence
+
+
+def _align_parts_to_words(parts, words):
+    word_lengths = [len(normalize_text(word.word)) for word in words]
+    recognized_total = sum(word_lengths)
+    source_lengths = [max(1, len(normalize_text(part))) for part in parts]
+    source_total = sum(source_lengths)
+    ranges = []
+    word_start = 0
+    recognized_consumed = 0
+    source_consumed = 0
+    for index, source_length in enumerate(source_lengths):
+        source_consumed += source_length
+        target = round(recognized_total * source_consumed / source_total)
+        word_end = word_start
+        while word_end < len(words) - 1:
+            recognized_consumed += word_lengths[word_end]
+            if recognized_consumed >= target:
+                break
+            word_end += 1
+        if index == len(source_lengths) - 1:
+            word_end = len(words) - 1
+        ranges.append(
+            (
+                max(0, round(words[word_start].start * 1000)),
+                max(100, round(words[word_end].end * 1000)),
+            )
+        )
+        word_start = min(word_end + 1, len(words) - 1)
+    return ranges
 
 def probe_duration_ms(asset):
     fallback = max(1000, int(asset.shot.duration_seconds * 1000))
@@ -805,6 +866,7 @@ def subtitle_snapshot(track, assets=None):
 
     base_style = subtitle_style(track.style_options)
     cues = []
+    shot_timeline = []
     timeline_offset = 0
     for shot in shots:
         asset = asset_map.get(shot.id)
@@ -812,6 +874,9 @@ def subtitle_snapshot(track, assets=None):
             probe_duration_ms(asset)
             if asset is not None
             else max(1000, int(shot.duration_seconds * 1000))
+        )
+        shot_timeline.append(
+            {"shot_id": str(shot.shot_id), "duration_ms": duration_ms}
         )
         setting = settings.get(shot.id)
         if setting is None or setting.enabled:
@@ -838,6 +903,9 @@ def subtitle_snapshot(track, assets=None):
                         "text": cue.text,
                         "start_ms": start_ms,
                         "end_ms": end_ms,
+                        "local_start_ms": local_start,
+                        "local_end_ms": local_end,
+                        "shot_offset_ms": shot_offset,
                         "style": base_style,
                     }
                 )
@@ -847,8 +915,112 @@ def subtitle_snapshot(track, assets=None):
         "track_id": track.id,
         "revision": track.revision,
         "style": base_style,
+        "global_offset_ms": track.global_offset_ms,
+        "shots": shot_timeline,
         "cues": cues,
     }
+
+def retime_subtitle_snapshot(
+    snapshot,
+    normalized_durations_ms,
+    *,
+    max_timeline_drift_ms=None,
+):
+    source_shots = list(snapshot.get("shots") or [])
+    if not source_shots:
+        return snapshot
+    if len(source_shots) != len(normalized_durations_ms):
+        raise ValueError("字幕时间轴与标准化视频片段数量不一致。")
+
+    normalized_durations = [max(100, int(value)) for value in normalized_durations_ms]
+    drift_limit = (
+        int(max_timeline_drift_ms)
+        if max_timeline_drift_ms is not None
+        else int(os.environ.get("SUBTITLE_MAX_TIMELINE_DRIFT_MS", "1000"))
+    )
+    boundary_tolerance = int(
+        os.environ.get("SUBTITLE_CUE_BOUNDARY_TOLERANCE_MS", "300")
+    )
+    source_offset = 0
+    normalized_offset = 0
+    max_drift = 0
+    shot_offsets = {}
+    for index, (source_shot, normalized_duration) in enumerate(
+        zip(source_shots, normalized_durations),
+        start=1,
+    ):
+        shot_id = str(source_shot["shot_id"])
+        source_duration = max(100, int(source_shot["duration_ms"]))
+        shot_offsets[shot_id] = {
+            "source_offset_ms": source_offset,
+            "normalized_offset_ms": normalized_offset,
+            "normalized_duration_ms": normalized_duration,
+        }
+        source_offset += source_duration
+        normalized_offset += normalized_duration
+        drift = abs(normalized_offset - source_offset)
+        max_drift = max(max_drift, drift)
+        if drift > drift_limit:
+            raise ValueError(
+                "字幕时间轴校验失败："
+                f"第 {index} 个镜头后累计偏差 {drift}ms，"
+                f"超过允许值 {drift_limit}ms。"
+            )
+
+    global_offset = int(snapshot.get("global_offset_ms") or 0)
+    retimed_cues = []
+    for cue in snapshot.get("cues", []):
+        timing = shot_offsets.get(str(cue.get("shot_id")))
+        if timing is None:
+            raise ValueError("字幕条目对应的镜头不在本次导出时间轴中。")
+        source_timeline_offset = timing["source_offset_ms"]
+        local_start = int(
+            cue.get("local_start_ms", cue["start_ms"] - source_timeline_offset)
+        )
+        local_end = int(
+            cue.get("local_end_ms", cue["end_ms"] - source_timeline_offset)
+        )
+        shot_offset = int(cue.get("shot_offset_ms") or 0)
+        normalized_timeline_offset = timing["normalized_offset_ms"]
+        start_ms = max(
+            0,
+            normalized_timeline_offset + local_start + shot_offset + global_offset,
+        )
+        end_ms = max(
+            start_ms + 100,
+            normalized_timeline_offset + local_end + shot_offset + global_offset,
+        )
+        shot_end = normalized_timeline_offset + timing["normalized_duration_ms"]
+        if end_ms > shot_end + boundary_tolerance:
+            raise ValueError(
+                "字幕时间轴校验失败："
+                f"第 {cue.get('position', '?')} 条字幕超出所属镜头 "
+                f"{end_ms - shot_end}ms。"
+            )
+        retimed_cues.append(
+            {**cue, "start_ms": start_ms, "end_ms": end_ms}
+        )
+
+    return {
+        **snapshot,
+        "shots": [
+            {
+                **shot,
+                "normalized_duration_ms": normalized_duration,
+            }
+            for shot, normalized_duration in zip(
+                source_shots,
+                normalized_durations,
+            )
+        ],
+        "cues": retimed_cues,
+        "timeline": {
+            "source_duration_ms": source_offset,
+            "normalized_duration_ms": normalized_offset,
+            "max_drift_ms": max_drift,
+        },
+    }
+
 
 def render_srt(snapshot):
     blocks = []

@@ -13,6 +13,7 @@ from studio.services.covers import (
     normalize_cover_title,
     render_episode_cover,
     save_cover_template,
+    switch_cover_template_version,
 )
 
 
@@ -193,3 +194,52 @@ def test_automatic_cover_title_follows_updated_episode_title(tmp_path):
         decorate_cover_workspace(workspace)
 
         assert workspace["episodes"][0]["cover_title"] == "重生末日前三十天"
+
+
+@pytest.mark.django_db
+def test_cover_template_versions_can_switch_without_losing_custom_titles(tmp_path):
+    script = create_script_with_episodes()
+    with override_settings(MEDIA_ROOT=tmp_path):
+        template = save_cover_template(script, make_image_result(), "prompt one")
+        episode = script.episodes.get(episode_number=1)
+        render_episode_cover(
+            template,
+            episode,
+            "钱没到账灾难先来",
+            title_customized=True,
+        )
+        first_background = template.background.name
+
+        template = save_cover_template(script, make_image_result(), "prompt two")
+        second_background = template.background.name
+        template = switch_cover_template_version(template, 1)
+
+        cover = episode.cover
+        cover.refresh_from_db()
+        assert template.version == 1
+        assert template.background.name == first_background
+        assert cover.title == "钱没到账灾难先来"
+        assert cover.title_customized is True
+        assert cover.template_version == 1
+
+        template = save_cover_template(script, make_image_result(), "prompt three")
+        assert template.version == 3
+        assert list(template.versions.values_list("version", flat=True)) == [3, 2, 1]
+        assert (tmp_path / first_background).exists()
+        assert (tmp_path / second_background).exists()
+
+
+@pytest.mark.django_db
+def test_cover_workspace_lists_versions_and_selected_version(tmp_path):
+    script = create_script_with_episodes()
+    with override_settings(MEDIA_ROOT=tmp_path):
+        template = save_cover_template(script, make_image_result(), "prompt one")
+        template = save_cover_template(script, make_image_result(), "prompt two")
+        switch_cover_template_version(template, 1)
+        workspace = {"script_id": script.id, "episodes": []}
+
+        decorate_cover_workspace(workspace)
+
+        versions = workspace["cover_template_versions"]
+        assert [item["version"] for item in versions] == [2, 1]
+        assert [item["is_selected"] for item in versions] == [False, True]

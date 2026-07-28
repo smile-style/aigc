@@ -32,6 +32,31 @@
       </form>
     </div>
 
+    {% if workspace.cover_template_versions %}
+      <div class="cover-version-section" aria-labelledby="cover-version-title">
+        <div class="cover-version-heading">
+          <h3 id="cover-version-title">母版版本</h3>
+          <span>切换后会重新生成全部逐集封面</span>
+        </div>
+        <div class="cover-version-list">
+          {% for version in workspace.cover_template_versions %}
+            <form method="post" action="{% url 'studio:select_cover_template_version' workspace.id version.version %}" data-submit-guard>
+              {% csrf_token %}
+              <input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+              <button class="cover-version-button{% if version.is_selected %} is-selected{% endif %}" type="submit" aria-label="切换到封面母版 v{{ version.version }}" {% if version.is_selected %}aria-current="true" disabled{% endif %}>
+                <span class="cover-version-thumb"><img src="{{ version.background_url }}" alt=""></span>
+                <span class="cover-version-meta">
+                  <strong>v{{ version.version }}</strong>
+                  <small>{{ version.created_at|date:"m-d H:i" }}</small>
+                </span>
+                {% if version.is_selected %}<span class="cover-version-current">当前</span>{% endif %}
+              </button>
+            </form>
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
+
     {% with task=workspace.cover_task %}
       {% if task.status == "pending" or task.status == "running" or task.status == "retry_wait" %}
         <div class="task-status is-running" data-task-poller data-task-url="{% url 'studio:task_status' task.id %}" data-task-kind="cover-image" aria-live="polite">

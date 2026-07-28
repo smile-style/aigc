@@ -7,9 +7,18 @@ from pathlib import Path
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.db.models import Max
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from studio.models import CoverTemplate, Episode, EpisodeCover, GenerationTask, Project, Script
+from studio.models import (
+    CoverTemplate,
+    CoverTemplateVersion,
+    Episode,
+    EpisodeCover,
+    GenerationTask,
+    Project,
+    Script,
+)
 
 
 COVER_WIDTH = 1600
@@ -96,7 +105,7 @@ def split_cover_title(title):
 
 @transaction.atomic
 def save_cover_template(script, image_result, prompt_snapshot):
-    template, created = CoverTemplate.objects.select_for_update().get_or_create(
+    template, _ = CoverTemplate.objects.select_for_update().get_or_create(
         script=script,
         defaults={
             "prompt_snapshot": prompt_snapshot,
@@ -105,26 +114,58 @@ def save_cover_template(script, image_result, prompt_snapshot):
             "version": 1,
         },
     )
-    old_background = template.background.name if template.background else ""
-    if not created:
-        template.version += 1
-        template.prompt_snapshot = prompt_snapshot
-        template.model = image_result.model
-        template.source_url = image_result.source_url
+    latest_version = template.versions.aggregate(value=Max("version"))["value"] or 0
+    next_version = latest_version + 1
     extension = image_result.extension if image_result.extension in {".png", ".jpg", ".jpeg", ".webp"} else ".png"
-    filename = f"master-v{template.version:03d}{extension}"
-    template.background.save(filename, ContentFile(image_result.content), save=False)
-    template.style_payload = {
+    filename = f"master-v{next_version:03d}{extension}"
+    style_payload = {
         "canvas": [COVER_WIDTH, COVER_HEIGHT],
         "title_anchor": "bottom_left",
         "title_color": "#FFFFFF",
         "accent_color": "#FFCA3A",
     }
-    template.save()
-    if old_background and old_background != template.background.name:
-        template.background.storage.delete(old_background)
+    version = CoverTemplateVersion(
+        template=template,
+        prompt_snapshot=prompt_snapshot,
+        source_url=image_result.source_url,
+        model=image_result.model,
+        style_payload=style_payload,
+        version=next_version,
+    )
+    version.background.save(filename, ContentFile(image_result.content), save=False)
+    version.save()
 
-    for episode in script.episodes.order_by("episode_number"):
+    template.version = next_version
+    template.prompt_snapshot = prompt_snapshot
+    template.model = image_result.model
+    template.source_url = image_result.source_url
+    template.style_payload = style_payload
+    template.background = version.background.name
+    template.save()
+    _render_all_episode_covers(template)
+    return template
+
+
+@transaction.atomic
+def switch_cover_template_version(template, version_number):
+    template = CoverTemplate.objects.select_for_update().get(pk=template.pk)
+    selected = template.versions.get(version=version_number)
+    if template.version == selected.version:
+        return template
+
+    template.version = selected.version
+    template.prompt_snapshot = selected.prompt_snapshot
+    template.background = selected.background.name
+    template.source_url = selected.source_url
+    template.model = selected.model
+    template.style_payload = selected.style_payload
+    template.save()
+    _render_all_episode_covers(template)
+    return template
+
+
+def _render_all_episode_covers(template):
+    for episode in template.script.episodes.order_by("episode_number"):
         existing = getattr(episode, "cover", None)
         title_customized = bool(existing and existing.title_customized)
         title = (
@@ -135,7 +176,6 @@ def save_cover_template(script, image_result, prompt_snapshot):
         render_episode_cover(
             template, episode, title, title_customized=title_customized
         )
-    return template
 
 
 @transaction.atomic
@@ -258,6 +298,7 @@ def decorate_cover_workspace(workspace):
     script_id = workspace.get("script_id") if isinstance(workspace, dict) else None
     if not script_id:
         workspace["cover_template"] = None
+        workspace["cover_template_versions"] = []
         workspace["cover_task"] = None
         workspace["cover_prompt"] = ""
         return workspace
@@ -300,6 +341,21 @@ def decorate_cover_workspace(workspace):
         }
         if template and template.background
         else None
+    )
+    workspace["cover_template_versions"] = (
+        [
+            {
+                "id": item.id,
+                "background_url": item.background.url,
+                "model": item.model,
+                "version": item.version,
+                "created_at": item.created_at,
+                "is_selected": item.version == template.version,
+            }
+            for item in template.versions.exclude(background="").order_by("-version", "-id")
+        ]
+        if template
+        else []
     )
     workspace["cover_task"] = (
         {

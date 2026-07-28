@@ -9,3 +9,4 @@ PyMySQL>=1.1,<2.0
 cryptography>=44.0,<47.0
 qrcode[pil]>=7.4,<9.0
 Pillow>=11.0,<13.0
+faster-whisper>=1.1,<2.0

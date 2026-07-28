@@ -82,6 +82,65 @@ def test_update_cover_title_rejects_empty_title(client):
     assert "最多 10" in response.content.decode("utf-8")
 
 
+def test_select_cover_template_version_switches_and_redirects(client, monkeypatch):
+    project, script, _ = create_cover_workspace()
+    template = CoverTemplate.objects.create(
+        script=script,
+        prompt_snapshot="cover prompt",
+        model="cover-model",
+        version=2,
+    )
+    selected = []
+    monkeypatch.setattr(
+        "studio.cover_views.switch_cover_template_version",
+        lambda current, version: selected.append((current.id, version)),
+    )
+
+    response = client.post(
+        reverse(
+            "studio:select_cover_template_version",
+            args=[project.workspace_id, 1],
+        ),
+        {"script_id": script.id},
+    )
+
+    assert response.status_code == 302
+    assert "view=covers" in response.url
+    assert selected == [(template.id, 1)]
+
+
+def test_select_cover_template_version_rejects_script_from_another_workspace(client):
+    project, _, _ = create_cover_workspace()
+    other_project = Project.objects.create(
+        workspace_id="other-cover-workspace",
+        name="Other cover project",
+        genre="都市",
+        episode_count=1,
+        episode_duration_minutes=2,
+    )
+    other_outline = Outline.objects.create(
+        project=other_project,
+        outline_id="other-cover-outline",
+        position=1,
+        title="其他项目",
+        core_premise="核心设定",
+        protagonist="主角设定",
+        hook="强钩子",
+        arc_summary="主线梗概",
+    )
+    other_script = Script.objects.create(project=other_project, outline=other_outline)
+
+    response = client.post(
+        reverse(
+            "studio:select_cover_template_version",
+            args=[project.workspace_id, 1],
+        ),
+        {"script_id": other_script.id},
+    )
+
+    assert response.status_code == 404
+
+
 def test_download_all_episode_covers_returns_ordered_zip(client, tmp_path):
     project, script, first_episode = create_cover_workspace()
     second_episode = Episode.objects.create(

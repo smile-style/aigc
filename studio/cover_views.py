@@ -8,7 +8,7 @@ from django.shortcuts import redirect
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
-from studio.models import CoverTemplate, EpisodeCover, Script
+from studio.models import CoverTemplate, CoverTemplateVersion, EpisodeCover, Script
 from studio.repositories.workspace import WorkspaceRepository
 from studio.services.covers import (
     COVER_GENERATION_SIZE,
@@ -17,6 +17,7 @@ from studio.services.covers import (
     normalize_cover_title,
     render_episode_cover,
     save_cover_template,
+    switch_cover_template_version,
 )
 from studio.services.model_config import image_provider_for
 
@@ -56,6 +57,25 @@ def update_episode_cover_view(request, workspace_id, episode_number):
         return redirect(_cover_redirect_url(episode.script.project, episode.script.outline_id))
     except (ValueError, FileNotFoundError) as exc:
         return HttpResponseBadRequest(str(exc))
+
+
+@require_POST
+def select_cover_template_version_view(request, workspace_id, version):
+    script_id = int(request.POST.get("script_id") or 0) or None
+    script = Script.objects.filter(
+        pk=script_id,
+        project__workspace_id=workspace_id,
+    ).select_related("project").first()
+    if script is None:
+        raise Http404("剧本不存在。")
+    try:
+        template = script.cover_template
+        switch_cover_template_version(template, version)
+    except CoverTemplate.DoesNotExist as exc:
+        raise Http404("封面母版尚未生成。") from exc
+    except CoverTemplateVersion.DoesNotExist as exc:
+        raise Http404("封面母版版本不存在。") from exc
+    return redirect(_cover_redirect_url(script.project, script.outline_id))
 
 
 @require_GET

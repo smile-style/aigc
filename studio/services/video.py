@@ -25,7 +25,13 @@ from studio.models import (
     VideoComposition,
 )
 from studio.services.model_config import assigned_model, ensure_default_video_models, video_provider_for
-from studio.services.subtitles import is_subtitle_stale, render_ass, render_srt, subtitle_snapshot
+from studio.services.subtitles import (
+    is_subtitle_stale,
+    render_ass,
+    render_srt,
+    retime_subtitle_snapshot,
+    subtitle_snapshot,
+)
 
 
 ACTIVE_VIDEO_STATUSES = {
@@ -374,7 +380,11 @@ def process_export_task(task_id):
         asset_map = {asset.id: asset for asset in assets}
         ordered = [asset_map[asset_id] for asset_id in task.input_snapshot["video_asset_ids"]]
         subtitle_data = task.input_snapshot.get("subtitle_snapshot") or {}
-        content = _ffmpeg_concat(ordered, subtitle_snapshot=subtitle_data)
+        content, subtitle_data = _ffmpeg_concat(
+            ordered,
+            subtitle_snapshot=subtitle_data,
+            return_subtitle_snapshot=True,
+        )
         composition.video.save("result.mp4", ContentFile(content), save=False)
         if composition.include_subtitles and subtitle_data:
             composition.subtitle_file.save(
@@ -382,12 +392,20 @@ def process_export_task(task_id):
                 ContentFile(render_srt(subtitle_data).encode("utf-8")),
                 save=False,
             )
+        composition.subtitle_snapshot = subtitle_data
         composition.content_hash = hashlib.sha256(content).hexdigest()
         composition.status = VideoComposition.STATUS_READY
         composition.error_message = ""
         composition.exported_at = timezone.now()
         composition.save()
-        _finish_task(task, {"composition_id": composition.id, "video_url": composition.video.url})
+        _finish_task(
+            task,
+            {
+                "composition_id": composition.id,
+                "video_url": composition.video.url,
+                "subtitle_timeline": subtitle_data.get("timeline", {}),
+            },
+        )
     except Exception as exc:
         composition.status = VideoComposition.STATUS_FAILED
         composition.error_message = str(exc)
@@ -565,7 +583,12 @@ def _fail_task(task, error):
     )
 
 
-def _ffmpeg_concat(assets, subtitle_snapshot=None):
+def _ffmpeg_concat(
+    assets,
+    subtitle_snapshot=None,
+    *,
+    return_subtitle_snapshot=False,
+):
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("未找到 FFmpeg，请先安装 FFmpeg 后再导出。")
@@ -575,6 +598,7 @@ def _ffmpeg_concat(assets, subtitle_snapshot=None):
     with tempfile.TemporaryDirectory(prefix="aigc-video-") as temp_dir:
         temp = Path(temp_dir)
         normalized = []
+        normalized_durations_ms = []
         for index, asset in enumerate(assets, start=1):
             output = temp / f"normalized-{index:03d}.mp4"
             video_filter = (
@@ -603,6 +627,10 @@ def _ffmpeg_concat(assets, subtitle_snapshot=None):
             )
             _run_ffmpeg(command, cwd=temp)
             normalized.append(output)
+            if subtitle_snapshot and subtitle_snapshot.get("shots"):
+                normalized_durations_ms.append(
+                    _probe_video_duration_ms(ffprobe, output)
+                )
         concat_file = temp / "concat.txt"
         concat_file.write_text("".join(f"file '{path.as_posix()}'\n" for path in normalized), encoding="utf-8")
         clean_result = temp / "episode-clean.mp4"
@@ -614,10 +642,16 @@ def _ffmpeg_concat(assets, subtitle_snapshot=None):
             ],
             cwd=temp,
         )
+        effective_subtitles = subtitle_snapshot or {}
+        if effective_subtitles.get("shots"):
+            effective_subtitles = retime_subtitle_snapshot(
+                effective_subtitles,
+                normalized_durations_ms,
+            )
         result = clean_result
-        if subtitle_snapshot and subtitle_snapshot.get("cues"):
+        if effective_subtitles.get("cues"):
             ass_path = temp / "subtitles.ass"
-            ass_path.write_text(render_ass(subtitle_snapshot), encoding="utf-8")
+            ass_path.write_text(render_ass(effective_subtitles), encoding="utf-8")
             result = temp / "episode.mp4"
             _run_ffmpeg(
                 [
@@ -630,7 +664,33 @@ def _ffmpeg_concat(assets, subtitle_snapshot=None):
                 ],
                 cwd=temp,
             )
-        return result.read_bytes()
+        content = result.read_bytes()
+        if return_subtitle_snapshot:
+            return content, effective_subtitles
+        return content
+
+
+def _probe_video_duration_ms(ffprobe, video_path):
+    result = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(video_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    try:
+        return max(100, round(float(result.stdout.strip()) * 1000))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"无法读取标准化视频时长：{video_path}") from exc
 
 
 def _has_audio_stream(ffprobe, video_path):

@@ -70,6 +70,11 @@ urlpatterns = [
         name="generate_cover",
     ),
     path(
+        "script/<str:workspace_id>/covers/version/<int:version>/select/",
+        cover_views.select_cover_template_version_view,
+        name="select_cover_template_version",
+    ),
+    path(
         "script/<str:workspace_id>/covers/episode/<int:episode_number>/",
         cover_views.update_episode_cover_view,
         name="update_episode_cover",
