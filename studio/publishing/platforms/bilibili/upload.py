@@ -183,7 +183,7 @@ class BilibiliUploader:
                 "tid": metadata["tid"],
                 "cover": cover_url,
                 "title": metadata["title"],
-                "desc_format_id": 0,
+                "desc_format_id": 9999,
                 "desc": metadata.get("description", ""),
                 "dynamic": metadata.get("dynamic", ""),
                 "tag": ",".join(metadata.get("tags") or []),
@@ -192,6 +192,7 @@ class BilibiliUploader:
                 "interactive": 0,
                 "act_reserve_create": 0,
                 "no_disturbance": 0,
+                "adorder_type": 9,
                 "no_reprint": 0,
                 "dolby": 0,
                 "lossless_music": 0,
@@ -199,6 +200,7 @@ class BilibiliUploader:
                 "up_close_reply": 0,
                 "up_close_danmu": 0,
                 "web_os": 1,
+                "watermark": {"state": 0},
                 "videos": [
                     {
                         "filename": upload_result.media_id,

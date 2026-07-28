@@ -200,7 +200,18 @@ def test_submit_uploads_local_cover_before_creating_submission(tmp_path, monkeyp
     assert cover_call[1] == BilibiliUploader.COVER_UPLOAD_URL
     assert cover_call[2]["data"]["cover"].startswith("data:image/jpeg;base64,")
     assert submit_call[2]["json"]["cover"] == "https://i.example.com/cover.jpg"
-    assert submit_call[2]["json"]["videos"][0]["cid"] == 42
+    submit_payload = submit_call[2]["json"]
+    assert submit_payload["desc_format_id"] == 9999
+    assert submit_payload["adorder_type"] == 9
+    assert submit_payload["watermark"] == {"state": 0}
+    assert submit_payload["videos"] == [
+        {
+            "filename": "media-id",
+            "cid": 42,
+            "title": "Title",
+            "desc": "",
+        }
+    ]
 
 
 def test_submit_rejects_upload_result_without_cid():
