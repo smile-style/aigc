@@ -167,15 +167,10 @@ class BilibiliUploader:
         csrf = credentials.get("bili_jct")
         if not csrf:
             raise PublishingValidationError("登录凭据缺少 bili_jct，请重新登录。", code="missing_csrf")
-        preupload = (getattr(upload_result, "payload", {}) or {}).get("preupload") or {}
-        try:
-            cid = int(preupload.get("biz_id"))
-        except (TypeError, ValueError) as exc:
-            raise PublishingValidationError(
-                "Bilibili 上传结果缺少 cid，请重新上传视频。", code="missing_cid"
-            ) from exc
         client = BilibiliClient(credentials)
         try:
+            if hasattr(client, "ensure_device_cookies"):
+                client.ensure_device_cookies()
             cover_url = self._upload_cover(metadata.get("cover", ""), csrf, client)
             payload = {
                 "copyright": metadata["copyright"],
@@ -183,33 +178,22 @@ class BilibiliUploader:
                 "tid": metadata["tid"],
                 "cover": cover_url,
                 "title": metadata["title"],
-                "desc_format_id": 9999,
+                "desc_format_id": 0,
                 "desc": metadata.get("description", ""),
                 "dynamic": metadata.get("dynamic", ""),
                 "tag": ",".join(metadata.get("tags") or []),
                 "subtitle": {"open": 0, "lan": ""},
-                "recreate": -1,
                 "interactive": 0,
-                "act_reserve_create": 0,
-                "no_disturbance": 0,
-                "adorder_type": 9,
                 "no_reprint": 0,
                 "dolby": 0,
                 "lossless_music": 0,
-                "up_selection_reply": 0,
-                "up_close_reply": 0,
-                "up_close_danmu": 0,
-                "web_os": 1,
-                "watermark": {"state": 0},
                 "videos": [
                     {
                         "filename": upload_result.media_id,
-                        "cid": cid,
                         "title": metadata["title"],
                         "desc": "",
                     }
                 ],
-                "csrf": csrf,
             }
             try:
                 data, raw = client.checked_data(

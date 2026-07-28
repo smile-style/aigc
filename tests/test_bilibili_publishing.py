@@ -166,10 +166,14 @@ def test_submit_timeout_is_not_treated_as_normal_retry(monkeypatch):
 
 def test_submit_uploads_local_cover_before_creating_submission(tmp_path, monkeypatch):
     calls = []
+    device_cookies_ensured = []
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
             pass
+
+        def ensure_device_cookies(self):
+            device_cookies_ensured.append(True)
 
         def checked_data(self, method, url, **kwargs):
             calls.append((method, url, kwargs))
@@ -196,30 +200,45 @@ def test_submit_uploads_local_cover_before_creating_submission(tmp_path, monkeyp
         )
 
     assert result.remote_video_id == "BV1COVER"
+    assert device_cookies_ensured == [True]
     cover_call, submit_call = calls
     assert cover_call[1] == BilibiliUploader.COVER_UPLOAD_URL
     assert cover_call[2]["data"]["cover"].startswith("data:image/jpeg;base64,")
     assert submit_call[2]["json"]["cover"] == "https://i.example.com/cover.jpg"
     submit_payload = submit_call[2]["json"]
-    assert submit_payload["desc_format_id"] == 9999
-    assert submit_payload["adorder_type"] == 9
-    assert submit_payload["watermark"] == {"state": 0}
+    assert submit_payload["desc_format_id"] == 0
+    assert "adorder_type" not in submit_payload
+    assert "watermark" not in submit_payload
+    assert "csrf" not in submit_payload
     assert submit_payload["videos"] == [
         {
             "filename": "media-id",
-            "cid": 42,
             "title": "Title",
             "desc": "",
         }
     ]
 
 
-def test_submit_rejects_upload_result_without_cid():
-    with pytest.raises(PublishingValidationError) as error:
-        BilibiliUploader().submit(
-            SimpleNamespace(media_id="media-id", payload={}),
-            {"title": "Title", "tid": 21, "copyright": 1, "tags": ["动画"]},
-            {"bili_jct": "csrf"},
-        )
+def test_submit_does_not_require_upload_cid(monkeypatch):
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
 
-    assert error.value.code == "missing_cid"
+        def ensure_device_cookies(self):
+            pass
+
+        def checked_data(self, *args, **kwargs):
+            return {"bvid": "BV1CURRENT"}, {"code": 0, "data": {"bvid": "BV1CURRENT"}}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("studio.publishing.platforms.bilibili.upload.BilibiliClient", FakeClient)
+
+    result = BilibiliUploader().submit(
+        SimpleNamespace(media_id="media-id", payload={}),
+        {"title": "Title", "tid": 21, "copyright": 1, "tags": ["动画"]},
+        {"bili_jct": "csrf"},
+    )
+
+    assert result.remote_video_id == "BV1CURRENT"
