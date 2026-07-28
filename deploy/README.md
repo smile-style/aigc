@@ -110,3 +110,8 @@ volume, so later jobs and container restarts reuse the same model files.
 between source clips and normalized 25fps clips. Captioned export fails with a
 diagnostic message when that limit is exceeded. Per-cue overflow is controlled
 by `SUBTITLE_CUE_BOUNDARY_TOLERANCE_MS`.
+
+`SUBTITLE_WHISPER_VAD_FILTER=false` keeps short dialogue under music from being
+discarded before recognition. `SUBTITLE_ASR_PART_MIN_CONFIDENCE` controls the
+minimum per-caption text match; unmatched script lines are hidden and sent for
+manual review instead of receiving fabricated timestamps.

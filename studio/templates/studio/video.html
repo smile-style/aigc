@@ -203,6 +203,7 @@
                           <span class="subtitle-confidence {% if cue.needs_review %}is-warning{% endif %}">{{ cue.confidence_percent }}%</span>
                         </div>
                         <label class="subtitle-text-field"><span>&#23383;&#24149;&#25991;&#23383;</span><textarea name="cue_text_{{ cue.id }}" rows="2" maxlength="200" data-subtitle-text>{{ cue.text }}</textarea></label>
+                        {% if cue.is_hidden and cue.needs_review %}<p class="subtitle-alignment-warning">未匹配到对应语音，已从导出中隐藏。原台词：{{ cue.source_text }}</p>{% endif %}
                         {% if cue.recognized_text %}<details><summary>&#35821;&#38899;&#35782;&#21035;&#32467;&#26524;</summary><p>{{ cue.recognized_text }}</p></details>{% endif %}
                       </div>
                       <label class="subtitle-reviewed"><input type="checkbox" name="cue_reviewed_{{ cue.id }}" value="1" {% if not cue.needs_review %}checked{% endif %}><span>&#24050;&#26657;&#23545;</span></label>

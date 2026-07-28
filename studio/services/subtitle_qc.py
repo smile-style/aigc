@@ -88,6 +88,7 @@ def subtitle_qc_content_hash(cues):
                 "start_ms": start,
                 "end_ms": end,
                 "confidence": round(float(_value(cue, "confidence", 0.0) or 0.0), 6),
+                "needs_review": bool(_value(cue, "needs_review", False)),
             }
         )
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -118,11 +119,17 @@ def _analyze(cues):
     suspicious_count = 0
     low_confidence_count = 0
     recognized_count = 0
+    unmatched_speech_count = 0
     groups = defaultdict(list)
 
     for cue in cues:
         text = str(_value(cue, "text", "") or "").strip()
         if not text:
+            if (
+                bool(_value(cue, "needs_review", False))
+                and _normalized(_value(cue, "source_text", ""))
+            ):
+                unmatched_speech_count += 1
             continue
         norm = _normalized(text)
         start, end = _cue_times(cue)
@@ -187,6 +194,7 @@ def _analyze(cues):
         "recognized_count": recognized_count,
         "low_confidence_count": low_confidence_count,
         "low_confidence_ratio": low_confidence_count / max(1, recognized_count),
+        "unmatched_speech_count": unmatched_speech_count,
         "total_text_chars": total_chars,
         "display_seconds": round(timeline_ms / 1000.0, 3),
     }
@@ -213,6 +221,7 @@ def check_subtitle_rules(cues):
     metrics = _analyze(cues)
     score = _score(metrics)
     hard_failures = (
+        (metrics["unmatched_speech_count"] > 0, "unmatched_speech"),
         (metrics["visible_count"] == 0, "empty"),
         (metrics["invalid_time_count"] > 0, "invalid_timing"),
         (metrics["overlap_count"] > 0, "overlap"),
@@ -362,6 +371,7 @@ def _track_cues_for_qc(track):
                 "local_start_ms": effective_start,
                 "local_end_ms": effective_end,
                 "confidence": cue.confidence,
+                "needs_review": cue.needs_review,
             }
         )
     return effective

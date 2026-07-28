@@ -54,6 +54,7 @@ def test_healthy_short_drama_subtitles_pass_rules():
         ([], "empty"),
         ([cue("bad", 1000, 900)], "invalid_timing"),
         ([cue("one", 0, 1200), cue("two", 1100, 2200)], "overlap"),
+        ([cue("", 0, 100, source_text="missing", needs_review=True)], "unmatched_speech"),
         ([cue("late", 0, 2500, duration_seconds=2)], "out_of_bounds"),
         ([cue("Transcribed by somebody", 0, 1500)], "hallucination_meta"),
         ([cue("点击", 0, 1500)], "hallucination_meta"),

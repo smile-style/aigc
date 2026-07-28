@@ -210,9 +210,13 @@ def process_subtitle_task(task_id):
             track,
             ordered,
             source_hash=task.input_snapshot.get("source_hash"),
+            task_id=task.id,
         )
         GenerationTask.objects.filter(pk=task.pk).update(
             status=GenerationTask.STATUS_SUCCEEDED,
+            progress_current=len(ordered),
+            progress_total=len(ordered),
+            progress_percent=100,
             result_snapshot={
                 "subtitle_track_id": track.id,
                 "cue_count": track.cues.count(),
@@ -244,7 +248,7 @@ def process_subtitle_task(task_id):
     return track
 
 
-def generate_subtitle_cues(track, assets, source_hash=None):
+def generate_subtitle_cues(track, assets, source_hash=None, task_id=None):
     target_shot_ids = [asset.shot_id for asset in assets]
     manual_by_shot = {}
     for cue in track.cues.filter(
@@ -255,7 +259,15 @@ def generate_subtitle_cues(track, assets, source_hash=None):
 
     rows = []
     timeline_offset = 0
-    for asset in assets:
+    total_assets = len(assets)
+    if task_id is not None:
+        GenerationTask.objects.filter(pk=task_id).update(
+            progress_current=0,
+            progress_total=total_assets,
+            progress_percent=0,
+            heartbeat_at=timezone.now(),
+        )
+    for asset_index, asset in enumerate(assets, start=1):
         shot = asset.shot
         duration_ms = probe_duration_ms(asset)
         segments = subtitle_dialogue_segments(
@@ -271,8 +283,10 @@ def generate_subtitle_cues(track, assets, source_hash=None):
         if alignment:
             ranges, recognized_text, confidence = alignment
             ranges = [
-                (max(0, start), min(duration_ms, end))
-                for start, end in ranges
+                None
+                if item is None
+                else (max(0, item[0]), min(duration_ms, item[1]))
+                for item in ranges
             ]
         else:
             speech_start = min(250, max(0, duration_ms // 10))
@@ -285,15 +299,23 @@ def generate_subtitle_cues(track, assets, source_hash=None):
                 min(duration_ms, speech_end),
             )
         previous_manual = manual_by_shot.get(shot.id, [])
-        for local_index, (
-            (cue_text_source, cleaned_text),
-            (local_start, local_end),
-        ) in enumerate(
+        for local_index, ((cue_text_source, cleaned_text), cue_range) in enumerate(
             zip(segments, ranges)
         ):
             old = previous_manual[local_index] if local_index < len(previous_manual) else None
-            cue_text = old.text if old else cleaned_text
             reviewed = bool(old and not old.needs_review)
+            if old is not None:
+                local_start, local_end = _cue_local_times(old)
+                cue_text = old.text
+                cue_confidence = old.confidence
+            elif cue_range is None:
+                local_start, local_end = 0, 100
+                cue_text = ""
+                cue_confidence = 0.0
+            else:
+                local_start, local_end = cue_range
+                cue_text = cleaned_text
+                cue_confidence = confidence
             rows.append(
                 SubtitleCue(
                     track=track,
@@ -303,15 +325,22 @@ def generate_subtitle_cues(track, assets, source_hash=None):
                     recognized_text=recognized_text if local_index == 0 else "",
                     text=cue_text,
                     start_ms=max(0, timeline_offset + local_start),
-                    end_ms=max(timeline_offset + local_start + 100, timeline_offset + local_end),
+                    end_ms=max(timeline_offset + local_start + 1, timeline_offset + local_end),
                     local_start_ms=max(0, local_start),
-                    local_end_ms=max(local_start + 100, local_end),
-                    confidence=confidence,
-                    needs_review=False if reviewed else confidence < 0.85,
+                    local_end_ms=max(local_start + 1, local_end),
+                    confidence=cue_confidence,
+                    needs_review=False if reviewed else cue_confidence < 0.85,
                     is_manually_edited=bool(old),
                 )
             )
         timeline_offset += duration_ms
+        if task_id is not None:
+            GenerationTask.objects.filter(pk=task_id).update(
+                progress_current=asset_index,
+                progress_total=total_assets,
+                progress_percent=int(asset_index * 100 / max(1, total_assets)),
+                heartbeat_at=timezone.now(),
+            )
 
     now = timezone.now()
     with transaction.atomic():
@@ -477,7 +506,8 @@ def _append_dialogue_parts(segments, source, content):
         ):
             continue
         for part in _split_cue_text(sentence):
-            segments.append((source, part))
+            if normalize_text(part):
+                segments.append((source, part))
 
 
 def subtitle_dialogue_segments(value, speaker_names=None):
@@ -550,17 +580,21 @@ def recognize_speech_alignment(asset, source_text, parts):
             compute_type=os.environ.get("SUBTITLE_WHISPER_COMPUTE_TYPE", "int8"),
         )
     expected_text = "".join(parts)
+    vad_filter = os.environ.get(
+        "SUBTITLE_WHISPER_VAD_FILTER",
+        "false",
+    ).lower() in {"1", "true", "yes", "on"}
     segments, _ = _WHISPER_MODEL.transcribe(
         asset.video.path,
         language=os.environ.get("SUBTITLE_LANGUAGE", "zh"),
         word_timestamps=True,
-        vad_filter=True,
+        vad_filter=vad_filter,
         initial_prompt=expected_text,
         condition_on_previous_text=False,
     )
     segments = list(segments)
     if not segments:
-        return None
+        return [None] * len(parts), "", 0.0
     recognized_text = "".join(segment.text.strip() for segment in segments)
     confidence = SequenceMatcher(
         None,
@@ -573,14 +607,10 @@ def recognize_speech_alignment(asset, source_text, parts):
         for word in (getattr(segment, "words", None) or [])
         if normalize_text(getattr(word, "word", ""))
     ]
-    if words and len(words) >= len(parts):
+    if words:
         ranges = _align_parts_to_words(parts, words)
     else:
-        ranges = distribute_cues(
-            parts,
-            max(0, round(segments[0].start * 1000)),
-            max(100, round(segments[-1].end * 1000)),
-        )
+        ranges = [None] * len(parts)
     return ranges, recognized_text, confidence
 
 
@@ -589,37 +619,85 @@ def recognize_speech_window(asset, source_text):
     if not alignment:
         return None
     ranges, recognized_text, confidence = alignment
-    return ranges[0][0], ranges[-1][1], recognized_text, confidence
+    matched = [item for item in ranges if item is not None]
+    if not matched:
+        return None
+    return matched[0][0], matched[-1][1], recognized_text, confidence
 
 
 def _align_parts_to_words(parts, words):
-    word_lengths = [len(normalize_text(word.word)) for word in words]
-    recognized_total = sum(word_lengths)
-    source_lengths = [max(1, len(normalize_text(part))) for part in parts]
-    source_total = sum(source_lengths)
-    ranges = []
-    word_start = 0
-    recognized_consumed = 0
-    source_consumed = 0
-    for index, source_length in enumerate(source_lengths):
-        source_consumed += source_length
-        target = round(recognized_total * source_consumed / source_total)
-        word_end = word_start
-        while word_end < len(words) - 1:
-            recognized_consumed += word_lengths[word_end]
-            if recognized_consumed >= target:
-                break
-            word_end += 1
-        if index == len(source_lengths) - 1:
-            word_end = len(words) - 1
-        ranges.append(
-            (
-                max(0, round(words[word_start].start * 1000)),
-                max(100, round(words[word_end].end * 1000)),
+    expected_parts = [normalize_text(part) for part in parts]
+    expected_text = "".join(expected_parts)
+    recognized_characters = []
+    character_times = []
+    for word in words:
+        token = normalize_text(word.word)
+        if not token:
+            continue
+        start_ms = max(0, round(word.start * 1000))
+        end_ms = max(start_ms + 1, round(word.end * 1000))
+        duration_ms = end_ms - start_ms
+        for index, character in enumerate(token):
+            recognized_characters.append(character)
+            character_times.append(
+                (
+                    start_ms + round(duration_ms * index / len(token)),
+                    start_ms + round(duration_ms * (index + 1) / len(token)),
+                )
             )
-        )
-        word_start = min(word_end + 1, len(words) - 1)
-    return ranges
+
+    recognized_text = "".join(recognized_characters)
+    if not expected_text or not recognized_text:
+        return [None] * len(parts)
+
+    expected_to_recognized = {}
+    matcher = SequenceMatcher(None, expected_text, recognized_text, autojunk=False)
+    for block in matcher.get_matching_blocks():
+        for offset in range(block.size):
+            expected_to_recognized[block.a + offset] = block.b + offset
+
+    minimum_match_ratio = float(
+        os.environ.get("SUBTITLE_ASR_PART_MIN_CONFIDENCE", "0.55")
+    )
+    ranges = []
+    expected_offset = 0
+    for part in expected_parts:
+        matched_indexes = [
+            expected_to_recognized[index]
+            for index in range(expected_offset, expected_offset + len(part))
+            if index in expected_to_recognized
+        ]
+        match_ratio = len(matched_indexes) / max(1, len(part))
+        if not matched_indexes or match_ratio < minimum_match_ratio:
+            ranges.append(None)
+        else:
+            start_ms = character_times[min(matched_indexes)][0]
+            end_ms = character_times[max(matched_indexes)][1]
+            ranges.append((start_ms, max(start_ms + 1, end_ms)))
+        expected_offset += len(part)
+    return _remove_alignment_overlaps(ranges)
+
+
+def _remove_alignment_overlaps(ranges):
+    normalized = list(ranges)
+    previous_index = None
+    for index, item in enumerate(normalized):
+        if item is None:
+            continue
+        start_ms, end_ms = item
+        if previous_index is not None:
+            previous_start, previous_end = normalized[previous_index]
+            if start_ms < previous_end:
+                boundary = round((start_ms + previous_end) / 2)
+                boundary = max(previous_start + 1, min(end_ms - 1, boundary))
+                normalized[previous_index] = (previous_start, boundary)
+                start_ms = boundary
+        if end_ms <= start_ms:
+            normalized[index] = None
+            continue
+        normalized[index] = (start_ms, end_ms)
+        previous_index = index
+    return normalized
 
 def probe_duration_ms(asset):
     fallback = max(1000, int(asset.shot.duration_seconds * 1000))

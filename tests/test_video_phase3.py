@@ -765,6 +765,94 @@ def test_recognize_speech_alignment_uses_word_timestamps(monkeypatch, tmp_path):
     assert alignment[2] == 1.0
 
 
+def test_recognize_speech_alignment_hides_unmatched_parts(monkeypatch, tmp_path):
+    from studio.services import subtitles
+
+    words = [SimpleNamespace(word="secondline", start=1.0, end=2.0)]
+    segment = SimpleNamespace(text="second line", start=1.0, end=2.0, words=words)
+    fake_model = SimpleNamespace(
+        transcribe=lambda *args, **kwargs: ([segment], SimpleNamespace())
+    )
+    monkeypatch.setenv("SUBTITLE_ASR_BACKEND", "faster_whisper")
+    monkeypatch.setattr(subtitles, "_WHISPER_MODEL", fake_model)
+    video_path = tmp_path / "partial-speech.mp4"
+    video_path.write_bytes(b"video")
+    asset = SimpleNamespace(video=SimpleNamespace(path=str(video_path)))
+
+    alignment = recognize_speech_alignment(
+        asset,
+        "missing second line",
+        ["missing", "second line"],
+    )
+
+    assert alignment[0] == [None, (1000, 2000)]
+
+
+def test_recognize_speech_alignment_splits_one_word_without_overlap(
+    monkeypatch,
+    tmp_path,
+):
+    from studio.services import subtitles
+
+    words = [SimpleNamespace(word="abcd", start=0.2, end=1.2)]
+    segment = SimpleNamespace(text="abcd", start=0.2, end=1.2, words=words)
+    fake_model = SimpleNamespace(
+        transcribe=lambda *args, **kwargs: ([segment], SimpleNamespace())
+    )
+    monkeypatch.setenv("SUBTITLE_ASR_BACKEND", "faster_whisper")
+    monkeypatch.setattr(subtitles, "_WHISPER_MODEL", fake_model)
+    video_path = tmp_path / "single-word.mp4"
+    video_path.write_bytes(b"video")
+    asset = SimpleNamespace(video=SimpleNamespace(path=str(video_path)))
+
+    alignment = recognize_speech_alignment(asset, "abcd", ["ab", "cd"])
+
+    assert alignment[0] == [(200, 700), (700, 1200)]
+
+
+def test_split_dialogue_drops_punctuation_only_tail():
+    assert split_dialogue(f"Speaker: {'a' * 18}.") == ["a" * 18]
+
+
+def test_generate_subtitles_hides_unmatched_cues_and_updates_progress(monkeypatch):
+    project, episode, storyboard = make_episode(with_character=False)
+    shot = sync_storyboard_shots(storyboard)[0]
+    shot.dialogue_or_narration = "Speaker: missing. Speaker: second line."
+    shot.save(update_fields=["dialogue_or_narration", "updated_at"])
+    asset = VideoAsset.objects.create(
+        shot=shot,
+        version=1,
+        status=VideoAsset.STATUS_READY,
+        prompt_snapshot="prompt",
+        is_selected=True,
+    )
+    asset.video.save("partial-subtitle.mp4", ContentFile(b"not-a-real-video"))
+    track = SubtitleTrack.objects.create(episode=episode)
+    task = GenerationTask.objects.create(
+        project=project,
+        task_type=GenerationTask.TYPE_SUBTITLE_ALIGN,
+        target_id=str(track.id),
+    )
+    monkeypatch.setattr(
+        "studio.services.subtitles.recognize_speech_alignment",
+        lambda *args, **kwargs: ([None, (1000, 2000)], "second line", 0.8),
+    )
+
+    generate_subtitle_cues(track, [asset], task_id=task.id)
+
+    cues = list(track.cues.order_by("position"))
+    task.refresh_from_db()
+    assert [cue.text for cue in cues] == ["", "second line."]
+    assert cues[0].needs_review is True
+    assert track.qc_reason == "rule_fail:unmatched_speech"
+    assert cues[1].local_start_ms == 1000
+    assert cues[1].local_end_ms == 2000
+    assert (task.progress_current, task.progress_total, task.progress_percent) == (
+        1,
+        1,
+        100,
+    )
+
 def test_retime_subtitle_snapshot_uses_normalized_clip_durations():
     snapshot = {
         "style": {},
