@@ -129,7 +129,10 @@ def reconcile_task_view(request, task_id):
 @require_POST
 def cookie_login_view(request):
     try:
-        connect_cookie_account(request.POST.get("cookie"))
+        connect_cookie_account(
+            request.POST.get("cookie"),
+            request.POST.get("platform") or PublishingAccount.PLATFORM_BILIBILI,
+        )
     except PublishingError as exc:
         return redirect(f"/system/?publishing_error={str(exc)}")
     return redirect("/system/?publishing_success=1")

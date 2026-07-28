@@ -4,20 +4,44 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll("[data-publish-form]").forEach((form) => {
     const title = form.querySelector("input[name='title']");
     const counter = form.querySelector("[data-character-count]");
+    const titleLimit = form.querySelector("[data-title-limit]");
+    const account = form.querySelector("[data-publish-account]");
+    const partition = form.querySelector("[data-publish-partition]");
+    const platformLabel = form.closest(".publish-dialog")?.querySelector("[data-publish-platform-label]");
     const sourceField = form.querySelector("[data-source-field]");
     const sourceInput = sourceField?.querySelector("input");
     const error = form.querySelector("[data-publish-error]");
     const submit = form.querySelector("button[type='submit']");
 
     const updateTitleCount = () => { if (counter && title) counter.textContent = String(title.value.length); };
+    const updatePlatform = () => {
+      const selected = account?.selectedOptions[0];
+      const platform = selected?.dataset.platform || "";
+      const limit = platform === "acfun" ? 50 : 80;
+      if (title) title.maxLength = limit;
+      if (titleLimit) titleLimit.textContent = String(limit);
+      if (platformLabel) platformLabel.textContent = platform === "acfun" ? "AcFun" : platform === "bilibili" ? "Bilibili" : "发布平台";
+      if (partition) {
+        let firstAvailable = null;
+        [...partition.options].forEach((option) => {
+          const available = !platform || option.dataset.platform === platform;
+          option.disabled = !available;
+          option.hidden = !available;
+          if (available && !firstAvailable) firstAvailable = option;
+        });
+        if (partition.selectedOptions[0]?.disabled && firstAvailable) firstAvailable.selected = true;
+      }
+      updateTitleCount();
+    };
     const updateCopyright = () => {
       const repost = form.querySelector("input[name='copyright']:checked")?.value === "2";
       if (sourceField) sourceField.hidden = !repost;
       if (sourceInput) sourceInput.required = repost;
     };
     title?.addEventListener("input", updateTitleCount);
+    account?.addEventListener("change", updatePlatform);
     form.querySelectorAll("input[name='copyright']").forEach((input) => input.addEventListener("change", updateCopyright));
-    updateTitleCount();
+    updatePlatform();
     updateCopyright();
 
     form.addEventListener("submit", async (event) => {

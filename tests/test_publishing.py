@@ -246,7 +246,7 @@ def test_publishing_pages_and_status_api(client, tmp_path, monkeypatch):
     settings = client.get(reverse("studio:system_settings"))
 
     assert films.status_code == 200
-    assert "发布到 Bilibili" in films.content.decode("utf-8")
+    assert "发布到平台" in films.content.decode("utf-8")
     assert tasks.status_code == 200
     assert "平台投稿进度" in tasks.content.decode("utf-8")
     assert status.json()["tasks"][0]["status"] == "queued"

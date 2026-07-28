@@ -1,6 +1,6 @@
 <article class="publishing-task" data-publishing-task="{{ task.id }}" data-status="{{ task.status }}">
   <div class="publishing-task__identity">
-    <span class="publishing-platform-mark" aria-hidden="true">B</span>
+    <span class="publishing-platform-mark" aria-hidden="true">{% if task.platform == 'acfun' %}A{% else %}B{% endif %}</span>
     <div><strong>第 {{ task.composition.episode.episode_number }} 集 · v{{ task.composition.version }}</strong><small>{{ task.composition.episode.title }} · {{ task.account.display_name }}</small></div>
   </div>
   <div class="publishing-task__progress">
@@ -16,5 +16,5 @@
     {% if task.status == 'submitted' or task.status == 'outcome_unknown' and task.remote_video_id %}<form method="post" action="{% url 'studio:publishing_task_reconcile' task.id %}">{% csrf_token %}<button class="secondary-button small" type="submit">核对平台</button></form>{% endif %}
     {% if task.status == 'outcome_unknown' and not task.remote_video_id %}<small>请先在创作中心确认是否已有稿件</small>{% endif %}
   </div>
-    {% if task.status == 'outcome_unknown' %}<form method="post" action="{% url 'studio:publishing_task_republish' task.id %}" onsubmit="return confirm('请先确认 Bilibili 创作中心没有对应稿件。仍要再次发布吗？')">{% csrf_token %}<button class="ghost-button small" type="submit">确认后再次发布</button></form>{% endif %}
+    {% if task.status == 'outcome_unknown' %}<form method="post" action="{% url 'studio:publishing_task_republish' task.id %}" onsubmit="return confirm('请先确认平台创作中心没有对应稿件。仍要再次发布吗？')">{% csrf_token %}<button class="ghost-button small" type="submit">确认后再次发布</button></form>{% endif %}
 </article>

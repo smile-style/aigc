@@ -64,12 +64,16 @@ def save_connected_account(platform, credentials, profile):
     return account
 
 
-def connect_cookie_account(raw_cookie):
-    platform_name = PublishingAccount.PLATFORM_BILIBILI
+def connect_cookie_account(raw_cookie, platform_name=PublishingAccount.PLATFORM_BILIBILI):
+    if platform_name not in dict(PublishingAccount.PLATFORM_CHOICES):
+        raise PublishingValidationError("不支持的发布平台。", details={"field": "platform"})
     platform = get_platform(platform_name)
     credentials = platform.login.parse_cookie_header(raw_cookie)
     if not credentials:
-        raise PublishingValidationError("请粘贴有效的 Bilibili Cookie。", details={"field": "cookie"})
+        platform_label = dict(PublishingAccount.PLATFORM_CHOICES)[platform_name]
+        raise PublishingValidationError(
+            f"请粘贴有效的 {platform_label} Cookie。", details={"field": "cookie"}
+        )
     profile = platform.checker.check_account(credentials)
     return save_connected_account(platform_name, credentials, profile)
 
@@ -175,8 +179,6 @@ def create_publishing_task(composition, account, metadata, *, force_republish=Fa
         raise PublishingValidationError("只有已导出的成片才能发布。")
     if account.status != PublishingAccount.STATUS_CONNECTED:
         raise PublishingAuthError()
-    if account.platform != PublishingAccount.PLATFORM_BILIBILI:
-        raise PublishingValidationError("账号平台与发布平台不匹配。")
     normalized = normalize_metadata(metadata)
     normalized = get_platform(account.platform).checker.check_submission(composition, normalized)
     content_hash = ensure_composition_hash(composition)

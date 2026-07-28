@@ -110,7 +110,7 @@
                     <a class="ghost-button" href="{% url 'studio:download_finished_film' episode.latest.id %}">下载成片</a>
                   </div>
                   <div class="film-publish-actions">
-                    {% if publishing_accounts %}<button class="secondary-button" type="button" data-modal-target="publish-composition-{{ episode.latest.id }}">发布到 Bilibili</button>{% else %}<a class="secondary-button" href="{% url 'studio:system_settings' %}">连接发布账号</a>{% endif %}
+                    {% if publishing_accounts %}<button class="secondary-button" type="button" data-modal-target="publish-composition-{{ episode.latest.id }}">发布到平台</button>{% else %}<a class="secondary-button" href="{% url 'studio:system_settings' %}">连接发布账号</a>{% endif %}
                   </div>
                   {% if episode.latest.latest_publishing_task %}
                     {% with task=episode.latest.latest_publishing_task %}

@@ -26,7 +26,7 @@ class BilibiliClient:
             follow_redirects=True,
         )
 
-    def request_json(self, method, url, **kwargs):
+    def request(self, method, url, **kwargs):
         try:
             response = self.client.request(method, url, **kwargs)
             response.raise_for_status()
@@ -58,6 +58,10 @@ class BilibiliClient:
             if status == 429 or status >= 500:
                 raise PublishingRetryableError(f"Bilibili 暂时不可用（HTTP {status}）。") from exc
             raise PublishingValidationError(f"Bilibili 拒绝了请求（HTTP {status}）。") from exc
+        return response
+
+    def request_json(self, method, url, **kwargs):
+        response = self.request(method, url, **kwargs)
         try:
             payload = response.json()
         except ValueError as exc:
@@ -91,6 +95,21 @@ class BilibiliClient:
         except ValueError:
             return {}
         return payload if isinstance(payload, dict) else {}
+
+    def ensure_device_cookies(self):
+        if self.client.cookies.get("buvid3"):
+            return
+        try:
+            _, payload = self.request_json(
+                "GET", "https://api.bilibili.com/x/frontend/finger/spi"
+            )
+        except (PublishingRetryableError, PublishingValidationError):
+            return
+        data = payload.get("data") or {}
+        if data.get("b_3"):
+            self.client.cookies.set("buvid3", data["b_3"], domain=".bilibili.com")
+        if data.get("b_4"):
+            self.client.cookies.set("buvid4", data["b_4"], domain=".bilibili.com")
 
     def close(self):
         if self._owns_client:

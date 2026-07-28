@@ -121,6 +121,21 @@ def test_upos_upload_reports_progress_and_returns_media_id(monkeypatch):
     assert progress == [(5, 12), (10, 12), (12, 12)]
     assert len([call for call in calls if call[0] == "PUT"]) == 3
     assert "secret-upload-auth" not in str(result.payload)
+    preupload_call = next(call for call in calls if call[1] == BilibiliUploader.PREUPLOAD_URL)
+    assert preupload_call[2]["params"]["profile"] == "ugcfx/bup"
+    assert preupload_call[2]["params"]["upcdn"] == "bda2"
+    init_call = next(call for call in calls if call[0] == "POST" and "uploads" in call[2].get("params", {}))
+    assert init_call[2]["params"] == {
+        "uploads": "",
+        "output": "json",
+        "profile": "ugcfx/bup",
+        "filesize": 12,
+        "partsize": 5,
+        "biz_id": 12,
+    }
+    complete_call = calls[-1]
+    assert complete_call[2]["params"]["profile"] == "ugcfx/bup"
+
 
 
 def test_submit_timeout_is_not_treated_as_normal_retry(monkeypatch):

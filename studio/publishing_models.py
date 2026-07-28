@@ -5,7 +5,11 @@ from django.db import models
 
 class PublishingAccount(models.Model):
     PLATFORM_BILIBILI = "bilibili"
-    PLATFORM_CHOICES = [(PLATFORM_BILIBILI, "Bilibili")]
+    PLATFORM_ACFUN = "acfun"
+    PLATFORM_CHOICES = [
+        (PLATFORM_BILIBILI, "Bilibili"),
+        (PLATFORM_ACFUN, "AcFun"),
+    ]
     STATUS_CONNECTED = "connected"
     STATUS_EXPIRED = "expired"
     STATUS_ERROR = "error"

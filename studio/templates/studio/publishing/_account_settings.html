@@ -11,7 +11,7 @@
     <div class="publishing-account-list">
       {% for account in publishing_accounts %}
         <article class="publishing-account-row">
-          <div><strong>{{ account.display_name }}</strong> <span class="status-pill {% if account.status == 'connected' %}success{% else %}warning{% endif %}">{{ account.get_status_display }}</span><p>UID {{ account.remote_account_id }}{% if account.last_checked_at %} · 最近检查 {{ account.last_checked_at|date:"Y-m-d H:i" }}{% endif %}</p>{% if account.last_error %}<p class="inline-error">{{ account.last_error }}</p>{% endif %}</div>
+          <div><strong>{{ account.display_name }}</strong> <span class="status-pill">{{ account.get_platform_display }}</span> <span class="status-pill {% if account.status == 'connected' %}success{% else %}warning{% endif %}">{{ account.get_status_display }}</span><p>UID {{ account.remote_account_id }}{% if account.last_checked_at %} · 最近检查 {{ account.last_checked_at|date:"Y-m-d H:i" }}{% endif %}</p>{% if account.last_error %}<p class="inline-error">{{ account.last_error }}</p>{% endif %}</div>
           <div class="publishing-account-actions">
             <form method="post" action="{% url 'studio:publishing_account_check' account.id %}">{% csrf_token %}<button class="ghost-button small" type="submit">检查连接</button></form>
             <form method="post" action="{% url 'studio:publishing_account_logout' account.id %}">{% csrf_token %}<button class="ghost-button small" type="submit">注销</button></form>
@@ -26,7 +26,13 @@
   <details>
     <summary>高级方式：导入 Bilibili Cookie</summary>
     <form class="cookie-login" method="post" action="{% url 'studio:publishing_cookie_login' %}">
-      {% csrf_token %}<textarea name="cookie" aria-label="Bilibili Cookie" placeholder="SESSDATA=...; bili_jct=...; DedeUserID=..." required></textarea><button class="secondary-button" type="submit">检查并连接</button>
+      {% csrf_token %}<input type="hidden" name="platform" value="bilibili"><textarea name="cookie" aria-label="Bilibili Cookie" placeholder="SESSDATA=...; bili_jct=...; DedeUserID=...; buvid3=..." required></textarea><button class="secondary-button" type="submit">检查并连接</button>
+    </form>
+  </details>
+  <details>
+    <summary>连接 AcFun：导入 Cookie</summary>
+    <form class="cookie-login" method="post" action="{% url 'studio:publishing_cookie_login' %}">
+      {% csrf_token %}<input type="hidden" name="platform" value="acfun"><textarea name="cookie" aria-label="AcFun Cookie" placeholder="acPasstoken=...; ac_userId=...; ac_username=..." required></textarea><button class="secondary-button" type="submit">检查并连接</button>
     </form>
   </details>
 </section>
