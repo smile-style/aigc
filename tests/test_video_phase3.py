@@ -552,6 +552,8 @@ def test_subtitle_generation_uses_storyboard_text_and_shot_offsets():
     cues = list(track.cues.order_by("position"))
     assert track.status == SubtitleTrack.STATUS_NEEDS_REVIEW
     assert track.source_hash == "source-hash"
+    assert cues[0].source_text == "\u6797\u9ed8\uff1a\u5f00\u59cb\u5427"
+    assert cues[0].text == "\u5f00\u59cb\u5427"
     assert track.qc_status == SubtitleTrack.QC_PASSED
     assert track.qc_checked_at is not None
     assert track.qc_content_hash
@@ -805,6 +807,65 @@ def test_split_dialogue_removes_speaker_and_limits_line_length():
     assert not parts[0].startswith("\u6797\u9ed8")
     assert all(len(part) <= 18 for part in parts)
 
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "\u6797\u9ed8\uff1a\u201c\u522b\u56de\u5934\uff0c\u7ee7\u7eed\u8d70\u3002\u201d",
+            ["\u522b\u56de\u5934\uff0c\u7ee7\u7eed\u8d70\u3002"],
+        ),
+        (
+            "\u6797\u9ed8\uff08\u4f4e\u58f0\uff09\uff1a\u201c\u95e8\u5916\u6709\u4eba\u3002\u201d",
+            ["\u95e8\u5916\u6709\u4eba\u3002"],
+        ),
+        (
+            "\u3010\u6797\u9ed8\u3011\u201c\u5f00\u59cb\u5427\u201d",
+            ["\u5f00\u59cb\u5427"],
+        ),
+        (
+            "\u82cf\u6674:\"\u6797\u9ed8\uff0c\u4f60\u4e0d\u80fd\u53bb\uff01\"",
+            ["\u6797\u9ed8\uff0c\u4f60\u4e0d\u80fd\u53bb\uff01"],
+        ),
+        (
+            "\u6797\u9ed8\uff1a\u201c\u8d70\u3002\u201d \u82cf\u6674\uff1a\u201c\u7b49\u7b49\uff01\u201d",
+            ["\u8d70\u3002", "\u7b49\u7b49\uff01"],
+        ),
+        (
+            "\u65c1\u767d\uff1a\u96e8\u8d8a\u6765\u8d8a\u5927\u3002",
+            ["\u96e8\u8d8a\u6765\u8d8a\u5927\u3002"],
+        ),
+    ],
+)
+def test_split_dialogue_removes_each_speaker_and_quotes(source, expected):
+    assert split_dialogue(source) == expected
+
+
+def test_subtitle_regeneration_preserves_manually_edited_display_text():
+    _, episode, storyboard = make_episode(with_character=False)
+    shot = sync_storyboard_shots(storyboard)[0]
+    asset = VideoAsset.objects.create(
+        shot=shot,
+        version=1,
+        status=VideoAsset.STATUS_READY,
+        prompt_snapshot="prompt",
+        is_selected=True,
+    )
+    asset.video.save("manual-subtitle.mp4", ContentFile(b"video"))
+    track = SubtitleTrack.objects.create(episode=episode)
+
+    generate_subtitle_cues(track, [asset])
+    cue = track.cues.get()
+    cue.text = "\u4fdd\u7559\u201c\u539f\u6837\u201d"
+    cue.is_manually_edited = True
+    cue.needs_review = False
+    cue.save(update_fields=["text", "is_manually_edited", "needs_review", "updated_at"])
+
+    generate_subtitle_cues(track, [asset])
+
+    regenerated = track.cues.get()
+    assert regenerated.text == "\u4fdd\u7559\u201c\u539f\u6837\u201d"
+    assert regenerated.is_manually_edited is True
 
 def test_queue_export_snapshots_enabled_subtitles():
     _, episode, storyboard = make_episode(with_character=False)

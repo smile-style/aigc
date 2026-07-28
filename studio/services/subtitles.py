@@ -29,7 +29,14 @@ DEFAULT_STYLE = {
     "margin_bottom": 92,
 }
 MAX_CUE_TEXT_LENGTH = 18
-ROLE_PREFIX_RE = re.compile(r"^[^：:\n]{1,12}[：:]\s*")
+ROLE_PREFIX_RE = re.compile(
+    r"^\s*(?:"
+    r"[【\[][^】\]\n]{1,16}[】\]]\s*[：:]?"
+    r"|[A-Za-z\u4e00-\u9fff·• ]{1,16}(?:（[^）\n]{1,10}）|\([^\)\n]{1,10}\))?\s*[：:]"
+    r")\s*"
+)
+SUBTITLE_QUOTE_RE = re.compile(r"[\"“”‘’「」『』]")
+SUBTITLE_SENTENCE_RE = re.compile(r"[^。！？!?；;\n]+(?:[。！？!?；;]+[\"”’』」]?)?")
 _WHISPER_MODEL = None
 
 
@@ -206,7 +213,8 @@ def generate_subtitle_cues(track, assets, source_hash=None):
     for asset in assets:
         shot = asset.shot
         duration_ms = probe_duration_ms(asset)
-        parts = split_dialogue(shot.dialogue_or_narration)
+        segments = subtitle_dialogue_segments(shot.dialogue_or_narration)
+        parts = [segment[1] for segment in segments]
         recognized = recognize_speech_window(asset, shot.dialogue_or_narration)
         if recognized:
             speech_start, speech_end, recognized_text, confidence = recognized
@@ -218,11 +226,14 @@ def generate_subtitle_cues(track, assets, source_hash=None):
 
         ranges = distribute_cues(parts, speech_start, min(duration_ms, speech_end))
         previous_manual = manual_by_shot.get(shot.id, [])
-        for local_index, (cue_text_source, (local_start, local_end)) in enumerate(
-            zip(parts, ranges)
+        for local_index, (
+            (cue_text_source, cleaned_text),
+            (local_start, local_end),
+        ) in enumerate(
+            zip(segments, ranges)
         ):
             old = previous_manual[local_index] if local_index < len(previous_manual) else None
-            cue_text = old.text if old else cue_text_source
+            cue_text = old.text if old else cleaned_text
             reviewed = bool(old and not old.needs_review)
             rows.append(
                 SubtitleCue(
@@ -330,30 +341,44 @@ def _refresh_track_status(track):
         track.status = SubtitleTrack.STATUS_DRAFT
         track.confirmed_at = None
 
-def split_dialogue(value):
+def clean_subtitle_text(value):
+    text = ROLE_PREFIX_RE.sub("", str(value or "").strip(), count=1)
+    text = SUBTITLE_QUOTE_RE.sub("", text)
+    return text.strip(" ，,")
+
+
+def _split_cue_text(value):
+    sentence = value
+    parts = []
+    while len(sentence) > MAX_CUE_TEXT_LENGTH:
+        candidates = [
+            index + 1
+            for index, character in enumerate(sentence[: MAX_CUE_TEXT_LENGTH + 1])
+            if character in "，,、"
+        ]
+        split_at = candidates[-1] if candidates else MAX_CUE_TEXT_LENGTH
+        parts.append(sentence[:split_at].strip())
+        sentence = sentence[split_at:].strip()
+    if sentence:
+        parts.append(sentence)
+    return parts
+
+
+def subtitle_dialogue_segments(value):
     text = str(value or "").strip()
     if not text:
         return []
-    text = ROLE_PREFIX_RE.sub("", text)
-    sentences = [
-        item.strip(" ，,")
-        for item in re.findall(r"[^。！？!?；;\n]+[。！？!?；;]?", text)
-        if item.strip(" ，,")
-    ]
-    parts = []
-    for sentence in sentences:
-        while len(sentence) > MAX_CUE_TEXT_LENGTH:
-            candidates = [
-                index + 1
-                for index, character in enumerate(sentence[: MAX_CUE_TEXT_LENGTH + 1])
-                if character in "，,、"
-            ]
-            split_at = candidates[-1] if candidates else MAX_CUE_TEXT_LENGTH
-            parts.append(sentence[:split_at].strip())
-            sentence = sentence[split_at:].strip()
-        if sentence:
-            parts.append(sentence)
-    return parts
+    segments = []
+    for match in SUBTITLE_SENTENCE_RE.finditer(text):
+        source = match.group(0).strip(" ，,")
+        cleaned = clean_subtitle_text(source)
+        for part in _split_cue_text(cleaned):
+            segments.append((source, part))
+    return segments
+
+
+def split_dialogue(value):
+    return [cleaned for _, cleaned in subtitle_dialogue_segments(value)]
 
 
 def distribute_cues(parts, start_ms, end_ms):
