@@ -167,6 +167,13 @@ class BilibiliUploader:
         csrf = credentials.get("bili_jct")
         if not csrf:
             raise PublishingValidationError("登录凭据缺少 bili_jct，请重新登录。", code="missing_csrf")
+        preupload = (getattr(upload_result, "payload", {}) or {}).get("preupload") or {}
+        try:
+            cid = int(preupload.get("biz_id"))
+        except (TypeError, ValueError) as exc:
+            raise PublishingValidationError(
+                "Bilibili 上传结果缺少 cid，请重新上传视频。", code="missing_cid"
+            ) from exc
         client = BilibiliClient(credentials)
         try:
             cover_url = self._upload_cover(metadata.get("cover", ""), csrf, client)
@@ -192,7 +199,14 @@ class BilibiliUploader:
                 "up_close_reply": 0,
                 "up_close_danmu": 0,
                 "web_os": 1,
-                "videos": [{"filename": upload_result.media_id, "title": metadata["title"], "desc": ""}],
+                "videos": [
+                    {
+                        "filename": upload_result.media_id,
+                        "cid": cid,
+                        "title": metadata["title"],
+                        "desc": "",
+                    }
+                ],
                 "csrf": csrf,
             }
             try:

@@ -158,7 +158,7 @@ def test_submit_timeout_is_not_treated_as_normal_retry(monkeypatch):
 
     with pytest.raises(PublishingOutcomeUnknown):
         BilibiliUploader().submit(
-            SimpleNamespace(media_id="media-id"),
+            SimpleNamespace(media_id="media-id", payload={"preupload": {"biz_id": 42}}),
             {"title": "Title", "tid": 21, "copyright": 1, "tags": []},
             {"bili_jct": "csrf"},
         )
@@ -184,7 +184,7 @@ def test_submit_uploads_local_cover_before_creating_submission(tmp_path, monkeyp
     with override_settings(MEDIA_ROOT=tmp_path):
         cover_name = default_storage.save("covers/episode-1.jpg", ContentFile(b"jpeg-cover"))
         result = BilibiliUploader().submit(
-            SimpleNamespace(media_id="media-id"),
+            SimpleNamespace(media_id="media-id", payload={"preupload": {"biz_id": 42}}),
             {
                 "title": "Title",
                 "tid": 21,
@@ -200,3 +200,15 @@ def test_submit_uploads_local_cover_before_creating_submission(tmp_path, monkeyp
     assert cover_call[1] == BilibiliUploader.COVER_UPLOAD_URL
     assert cover_call[2]["data"]["cover"].startswith("data:image/jpeg;base64,")
     assert submit_call[2]["json"]["cover"] == "https://i.example.com/cover.jpg"
+    assert submit_call[2]["json"]["videos"][0]["cid"] == 42
+
+
+def test_submit_rejects_upload_result_without_cid():
+    with pytest.raises(PublishingValidationError) as error:
+        BilibiliUploader().submit(
+            SimpleNamespace(media_id="media-id", payload={}),
+            {"title": "Title", "tid": 21, "copyright": 1, "tags": ["动画"]},
+            {"bili_jct": "csrf"},
+        )
+
+    assert error.value.code == "missing_cid"
