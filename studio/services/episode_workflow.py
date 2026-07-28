@@ -377,7 +377,21 @@ def _handle_subtitles(run):
     episode = run.episode
     track = SubtitleTrack.objects.filter(episode=episode).first()
     if track and track.cues.exists() and not is_subtitle_stale(track):
-        return _move_to(run, EpisodeWorkflowRun.STAGE_CAPTIONED_EXPORT)
+        from studio.services.subtitle_qc import ensure_subtitle_qc
+
+        qc_result = ensure_subtitle_qc(track)
+        details = dict(run.details or {})
+        details["subtitle_qc"] = {
+            "status": track.qc_status,
+            "score": track.qc_score,
+            "reason": track.qc_reason,
+        }
+        run.details = details
+        if qc_result.passed:
+            return _move_to(run, EpisodeWorkflowRun.STAGE_CAPTIONED_EXPORT)
+        details["captioned_export_skipped"] = True
+        run.details = details
+        return _move_to(run, EpisodeWorkflowRun.STAGE_COMPLETE)
     active = episode.script.project.generation_tasks.filter(
         task_type=GenerationTask.TYPE_SUBTITLE_ALIGN,
         status__in=ACTIVE_TASK_STATUSES,

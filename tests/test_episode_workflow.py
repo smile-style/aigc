@@ -389,3 +389,114 @@ def test_video_page_disables_captioned_download_without_subtitles(client):
     assert "variant=clean" in content
     assert "&#19979;&#36733;&#26377;&#23383;&#24149;&#29256;&#26412;" in content
     assert "disabled" in content
+
+
+def test_qc_failure_blocks_only_captioned_export():
+    _, _, episode = make_episode(full_script="Script")
+    shot, _ = make_ready_shot(episode)
+    track = SubtitleTrack.objects.create(
+        episode=episode,
+        enabled=True,
+        status=SubtitleTrack.STATUS_CONFIRMED,
+        source_hash=subtitle_source_hash(episode),
+    )
+    track.cues.create(
+        shot=shot,
+        position=1,
+        source_text="Transcribed by somebody",
+        text="Transcribed by somebody",
+        start_ms=0,
+        end_ms=1200,
+        local_start_ms=0,
+        local_end_ms=1200,
+    )
+
+    clean_task, clean_created = queue_export(episode, include_subtitles=False)
+
+    assert clean_created is True
+    assert clean_task is not None
+    with pytest.raises(ValueError, match="QC|质检"):
+        queue_export(episode, include_subtitles=True)
+
+    track.refresh_from_db()
+    assert track.status == SubtitleTrack.STATUS_CONFIRMED
+    assert track.qc_status == SubtitleTrack.QC_FAILED
+    assert track.qc_reason == "rule_fail:hallucination_meta"
+    assert track.qc_checked_at is not None
+    assert track.qc_content_hash
+    assert track.qc_details["metrics"]["suspicious_phrase_count"] == 1
+
+
+def test_automatic_workflow_completes_without_captioned_export_when_qc_fails():
+    _, _, episode = make_episode(full_script="Script")
+    shot, _ = make_ready_shot(episode)
+    track = SubtitleTrack.objects.create(
+        episode=episode,
+        enabled=True,
+        status=SubtitleTrack.STATUS_CONFIRMED,
+        source_hash=subtitle_source_hash(episode),
+    )
+    track.cues.create(
+        shot=shot,
+        position=1,
+        source_text="Click",
+        text="Click",
+        start_ms=0,
+        end_ms=1200,
+        local_start_ms=0,
+        local_end_ms=1200,
+    )
+    run = EpisodeWorkflowRun.objects.create(
+        episode=episode,
+        status=EpisodeWorkflowRun.STATUS_RUNNING,
+        stage=EpisodeWorkflowRun.STAGE_SUBTITLES,
+        progress_percent=84,
+    )
+
+    run = advance_episode_workflow(run.id)
+
+    assert run.status == EpisodeWorkflowRun.STATUS_SUCCEEDED
+    assert run.stage == EpisodeWorkflowRun.STAGE_COMPLETE
+    assert run.details["captioned_export_skipped"] is True
+    assert run.details["subtitle_qc"]["status"] == SubtitleTrack.QC_FAILED
+    assert not episode.video_compositions.filter(
+        variant=VideoComposition.VARIANT_CAPTIONED
+    ).exists()
+
+def test_subtitle_offset_invalidates_qc_result():
+    from studio.services.subtitle_qc import (
+        ensure_subtitle_qc,
+        run_and_persist_subtitle_qc,
+        subtitle_qc_is_current,
+    )
+
+    _, _, episode = make_episode(full_script="Script")
+    shot, _ = make_ready_shot(episode)
+    track = SubtitleTrack.objects.create(
+        episode=episode,
+        enabled=True,
+        status=SubtitleTrack.STATUS_CONFIRMED,
+        source_hash=subtitle_source_hash(episode),
+    )
+    track.cues.create(
+        shot=shot,
+        position=1,
+        source_text="Hello",
+        text="Hello",
+        start_ms=0,
+        end_ms=1200,
+        local_start_ms=0,
+        local_end_ms=1200,
+    )
+
+    initial = run_and_persist_subtitle_qc(track, use_configured_ai=False)
+    assert initial.passed is True
+    assert subtitle_qc_is_current(track) is True
+
+    track.global_offset_ms = 3100
+    track.save(update_fields=["global_offset_ms", "updated_at"])
+
+    assert subtitle_qc_is_current(track) is False
+    updated = ensure_subtitle_qc(track)
+    assert updated.passed is False
+    assert updated.reason == "rule_fail:out_of_bounds"

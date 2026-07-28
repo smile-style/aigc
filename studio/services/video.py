@@ -333,7 +333,14 @@ def queue_export(episode, include_subtitles=None):
         subtitle_data = subtitle_snapshot(track, assets=selected)
         if not subtitle_data.get("cues"):
             include_subtitles = False
+            variant = VideoComposition.VARIANT_CLEAN
             subtitle_data = {}
+        else:
+            from studio.services.subtitle_qc import ensure_subtitle_qc
+
+            qc_result = ensure_subtitle_qc(track)
+            if not qc_result.passed:
+                raise ValueError(f"字幕质检未通过：{qc_result.reason}")
     version = (episode.video_compositions.aggregate(value=Max("version"))["value"] or 0) + 1
     composition = VideoComposition.objects.create(
         episode=episode,

@@ -552,6 +552,9 @@ def test_subtitle_generation_uses_storyboard_text_and_shot_offsets():
     cues = list(track.cues.order_by("position"))
     assert track.status == SubtitleTrack.STATUS_NEEDS_REVIEW
     assert track.source_hash == "source-hash"
+    assert track.qc_status == SubtitleTrack.QC_PASSED
+    assert track.qc_checked_at is not None
+    assert track.qc_content_hash
     assert len(cues) == 2
     assert all(cue.text for cue in cues)
     assert cues[0].start_ms < cues[0].end_ms <= 6000
@@ -879,6 +882,7 @@ def test_queue_export_treats_all_disabled_shot_subtitles_as_no_subtitles():
     composition = VideoComposition.objects.get(pk=task.target_id)
 
     assert composition.include_subtitles is False
+    assert composition.variant == VideoComposition.VARIANT_CLEAN
     assert composition.subtitle_snapshot == {}
     assert task.input_snapshot["include_subtitles"] is False
 
@@ -1203,3 +1207,61 @@ def test_video_page_lists_unknown_storyboard_characters(client):
     assert 'data-modal-target="discover-storyboard-characters"' in content
     assert 'value="New Hero"' in content
     assert "New Hero" in content
+
+
+def test_manual_subtitle_save_reruns_qc():
+    _, episode, storyboard = make_episode(with_character=False)
+    shot = sync_storyboard_shots(storyboard)[0]
+    track = SubtitleTrack.objects.create(episode=episode)
+    cue = track.cues.create(
+        shot=shot,
+        position=1,
+        source_text="Hello",
+        text="Hello",
+        start_ms=0,
+        end_ms=1500,
+        local_start_ms=0,
+        local_end_ms=1500,
+    )
+
+    save_subtitle_track(
+        track,
+        enabled=True,
+        global_offset_ms=0,
+        cues=[
+            {
+                "id": cue.id,
+                "text": "Hello",
+                "start_ms": 0,
+                "end_ms": 1500,
+                "reviewed": True,
+            }
+        ],
+        confirm_all=True,
+    )
+    track.refresh_from_db()
+    passed_hash = track.qc_content_hash
+    assert track.qc_status == SubtitleTrack.QC_PASSED
+    assert track.status == SubtitleTrack.STATUS_CONFIRMED
+
+    save_subtitle_track(
+        track,
+        enabled=True,
+        global_offset_ms=0,
+        cues=[
+            {
+                "id": cue.id,
+                "text": "Click",
+                "start_ms": 0,
+                "end_ms": 1500,
+                "reviewed": True,
+            }
+        ],
+        confirm_all=True,
+    )
+    track.refresh_from_db()
+
+    assert track.qc_status == SubtitleTrack.QC_FAILED
+    assert track.qc_reason == "rule_fail:hallucination_meta"
+    assert track.qc_content_hash != passed_hash
+    assert track.status == SubtitleTrack.STATUS_CONFIRMED

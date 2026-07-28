@@ -165,6 +165,11 @@ def process_subtitle_task(task_id):
                 "subtitle_track_id": track.id,
                 "cue_count": track.cues.count(),
                 "shot_ids": task.input_snapshot.get("shot_ids", []),
+                "subtitle_qc": {
+                    "status": track.qc_status,
+                    "score": track.qc_score,
+                    "reason": track.qc_reason,
+                },
             },
             error_message="",
             finished_at=timezone.now(),
@@ -272,6 +277,9 @@ def generate_subtitle_cues(track, assets, source_hash=None):
         track.revision += 1
         _refresh_track_status(track)
         track.save()
+    from studio.services.subtitle_qc import run_and_persist_subtitle_qc
+
+    run_and_persist_subtitle_qc(track)
     return track
 
 
@@ -539,6 +547,9 @@ def save_subtitle_track(track, *, enabled, global_offset_ms, cues, confirm_all=F
 
         _refresh_track_status(track)
         track.save()
+    from studio.services.subtitle_qc import run_and_persist_subtitle_qc
+
+    run_and_persist_subtitle_qc(track)
     return track
 
 
@@ -588,6 +599,9 @@ def save_shot_subtitle(
         track.revision += 1
         _refresh_track_status(track)
         track.save()
+    from studio.services.subtitle_qc import run_and_persist_subtitle_qc
+
+    run_and_persist_subtitle_qc(track)
     return setting
 
 
@@ -785,6 +799,9 @@ def subtitle_page_data(episode, shots):
         .first()
     )
     base_style = subtitle_style(track.style_options if track else None)
+    from studio.services.subtitle_qc import subtitle_qc_is_current
+
+    qc_current = subtitle_qc_is_current(track) if track else False
     settings = {
         setting.shot_id: setting
         for setting in ShotSubtitleSetting.objects.filter(
@@ -876,6 +893,9 @@ def subtitle_page_data(episode, shots):
             "hidden_count": 0,
             "review_count": 0,
             "is_stale": False,
+            "qc_current": False,
+            "qc_passed": False,
+            "qc_blocked": False,
         }
     return {
         "track": track,
@@ -886,10 +906,15 @@ def subtitle_page_data(episode, shots):
         "hidden_count": sum(cue.is_hidden for cue in all_cues),
         "review_count": sum(1 for cue in all_cues if cue.needs_review),
         "is_stale": any_stale,
+        "qc_current": qc_current,
+        "qc_passed": qc_current and track.qc_status == track.QC_PASSED,
+        "qc_blocked": qc_current and track.qc_status == track.QC_FAILED,
     }
 
 
 def subtitle_status_data(episode):
+    from studio.services.subtitle_qc import subtitle_qc_is_current
+
     track = SubtitleTrack.objects.filter(episode=episode).first()
     settings = list(
         ShotSubtitleSetting.objects.filter(
@@ -903,6 +928,10 @@ def subtitle_status_data(episode):
             "cue_count": 0,
             "review_count": 0,
             "is_stale": False,
+            "qc_status": SubtitleTrack.QC_PENDING,
+            "qc_score": None,
+            "qc_reason": "",
+            "qc_current": False,
             "shots": [],
         }
     return {
@@ -911,6 +940,10 @@ def subtitle_status_data(episode):
         "cue_count": track.cues.count(),
         "review_count": track.cues.filter(needs_review=True).count(),
         "is_stale": is_subtitle_stale(track),
+        "qc_status": track.qc_status,
+        "qc_score": track.qc_score,
+        "qc_reason": track.qc_reason,
+        "qc_current": subtitle_qc_is_current(track),
         "shots": [
             {
                 "shot_id": str(setting.shot.shot_id),

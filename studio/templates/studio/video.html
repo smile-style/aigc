@@ -91,6 +91,7 @@
           {% elif subtitle.track.enabled %}<strong>&#24050;&#24320;&#21551;</strong>
           {% else %}<strong>&#24050;&#20851;&#38381;</strong>{% endif %}
           {% if subtitle.track %}<span>{{ subtitle.visible_count }} &#26465;&#26174;&#31034;{% if subtitle.hidden_count %} · {{ subtitle.hidden_count }} &#26465;&#24050;&#38544;&#34255;{% endif %} · {{ subtitle.review_count }} &#26465;&#24453;&#26657;&#23545;</span>{% endif %}
+          {% if subtitle.track %}<span>&#36136;&#26816;&#65306;{% if subtitle.qc_passed %}<strong>&#36890;&#36807;</strong>{% elif subtitle.qc_current %}<strong class="is-warning">&#26410;&#36890;&#36807;</strong>{% else %}<strong class="is-warning">&#24453;&#36136;&#26816;</strong>{% endif %}{% if subtitle.track.qc_score != None %} {{ subtitle.track.qc_score|floatformat:2 }}{% endif %}</span>{% endif %}
         </p>
         <div class="export-actions export-download-actions" aria-label="&#25104;&#29255;&#19979;&#36733;">
           {% if clean_composition.status == 'ready' and clean_composition.video %}
@@ -101,7 +102,7 @@
           {% if captioned_composition.status == 'ready' and captioned_composition.video %}
             <a class="secondary-button" href="{% url 'studio:download_composition' workspace.id episode.episode_number %}?script_id={{ workspace.script_id }}&amp;variant=captioned">&#19979;&#36733;&#26377;&#23383;&#24149;&#29256;&#26412;</a>
           {% else %}
-            <button class="secondary-button" type="button" disabled title="{% if not subtitle.track or not subtitle.cues %}&#35831;&#20808;&#29983;&#25104;&#23383;&#24149;{% elif subtitle.is_stale %}&#23383;&#24149;&#24050;&#36807;&#26399;&#65292;&#35831;&#37325;&#26032;&#29983;&#25104;{% else %}&#26377;&#23383;&#24149;&#25104;&#29255;&#23578;&#26410;&#23548;&#20986;{% endif %}">&#19979;&#36733;&#26377;&#23383;&#24149;&#29256;&#26412;</button>
+            <button class="secondary-button" type="button" disabled title="{% if not subtitle.track or not subtitle.cues %}&#35831;&#20808;&#29983;&#25104;&#23383;&#24149;{% elif subtitle.is_stale %}&#23383;&#24149;&#24050;&#36807;&#26399;&#65292;&#35831;&#37325;&#26032;&#29983;&#25104;{% elif not subtitle.qc_passed %}&#23383;&#24149;&#36136;&#26816;&#26410;&#36890;&#36807;{% else %}&#26377;&#23383;&#24149;&#25104;&#29255;&#23578;&#26410;&#23548;&#20986;{% endif %}">&#19979;&#36733;&#26377;&#23383;&#24149;&#29256;&#26412;</button>
           {% endif %}
         </div>
         <div class="export-actions export-tool-actions">
@@ -117,7 +118,7 @@
           {% if captioned_composition.status != 'exporting' %}
             <form method="post" action="{% url 'studio:export_video' workspace.id episode.episode_number %}" data-submit-guard>
               {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}"><input type="hidden" name="variant" value="captioned">
-              <button class="ghost-button" type="submit" data-loading-text="&#25552;&#20132;&#23548;&#20986;&#20013;..." {% if counts.ready != counts.total or not counts.total or not subtitle.track or not subtitle.cues or subtitle.is_stale %}disabled{% endif %}>{% if captioned_composition.status == 'ready' %}&#37325;&#26032;&#23548;&#20986;&#23383;&#24149;&#29256;{% else %}&#29983;&#25104;&#23383;&#24149;&#29256;{% endif %}</button>
+              <button class="ghost-button" type="submit" data-loading-text="&#25552;&#20132;&#23548;&#20986;&#20013;..." {% if counts.ready != counts.total or not counts.total or not subtitle.track or not subtitle.cues or subtitle.is_stale or subtitle.qc_blocked %}disabled{% endif %}>{% if captioned_composition.status == 'ready' %}&#37325;&#26032;&#23548;&#20986;&#23383;&#24149;&#29256;{% else %}&#29983;&#25104;&#23383;&#24149;&#29256;{% endif %}</button>
             </form>
           {% else %}<button class="ghost-button" type="button" disabled>&#23383;&#24149;&#29256;&#23548;&#20986;&#20013;</button>{% endif %}
         </div>
@@ -151,6 +152,9 @@
 
           {% if subtitle.is_stale %}
             <div class="task-status is-error subtitle-editor-alert" role="alert"><span class="task-indicator" aria-hidden="true"></span><div><strong>&#23383;&#24149;&#38656;&#35201;&#37325;&#26032;&#23545;&#40784;</strong><p>&#38236;&#22836;&#12289;&#39034;&#24207;&#25110;&#21488;&#35789;&#24050;&#32463;&#21464;&#21270;&#12290;</p></div></div>
+          {% endif %}
+          {% if subtitle.track and subtitle.qc_current and not subtitle.qc_passed %}
+            <div class="task-status is-error subtitle-editor-alert" role="alert"><span class="task-indicator" aria-hidden="true"></span><div><strong>&#23383;&#24149;&#36136;&#26816;&#26410;&#36890;&#36807;</strong><p>{{ subtitle.track.qc_reason }}{% if subtitle.track.qc_score != None %} ({{ subtitle.track.qc_score|floatformat:2 }}){% endif %}</p></div></div>
           {% endif %}
           {% if subtitle.track.status == 'failed' %}
             <div class="task-status is-error subtitle-editor-alert" role="alert"><span class="task-indicator" aria-hidden="true"></span><div><strong>&#23383;&#24149;&#29983;&#25104;&#22833;&#36133;</strong><p>{{ subtitle.track.error_message }}</p></div></div>
