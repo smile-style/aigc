@@ -6,7 +6,7 @@
 {% block extra_scripts %}
   {% load static %}
   <script src="{% static 'studio/publishing.js' %}?v=20260728-douyin" defer></script>
-  <script src="{% static 'studio/films.js' %}?v=20260727-films-library" defer></script>
+  <script src="{% static 'studio/films.js' %}?v=20260728-douyin-package" defer></script>
 {% endblock %}
 
 {% block content %}
@@ -110,6 +110,7 @@
                     <a class="ghost-button" href="{% url 'studio:download_finished_film' episode.latest.id %}">下载成片</a>
                   </div>
                   <div class="film-publish-actions">
+                    <button class="secondary-button douyin-package-button" type="button" data-modal-target="douyin-package-{{ episode.latest.id }}">抖音发布包</button>
                     {% if publishing_accounts %}<button class="secondary-button" type="button" data-modal-target="publish-composition-{{ episode.latest.id }}">发布到平台</button>{% else %}<a class="secondary-button" href="{% url 'studio:system_settings' %}">连接发布账号</a>{% endif %}
                   </div>
                   {% if episode.latest.latest_publishing_task %}
@@ -135,6 +136,7 @@
                   {% endif %}
                 </div>
                 {% include "studio/publishing/_dialog.html" with composition=episode.latest %}
+                {% include "studio/publishing/_douyin_package_dialog.html" with composition=episode.latest %}
               </article>
             {% endfor %}
           </div>

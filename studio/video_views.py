@@ -1,4 +1,8 @@
+import shutil
+import tempfile
+import zipfile
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.db.models import Count, F
@@ -83,7 +87,9 @@ def system_settings_page(request):
         {
             "workspace": workspace,
             "slot_rows": get_simple_model_slots(),
-            "publishing_accounts": PublishingAccount.objects.all(),
+            "publishing_accounts": PublishingAccount.objects.exclude(
+                platform=PublishingAccount.PLATFORM_DOUYIN
+            ),
             "publishing_success": request.GET.get("publishing_success", ""),
             "publishing_error": request.GET.get("publishing_error", ""),
             "error": error,
@@ -97,6 +103,7 @@ def finished_films_page(request):
         VideoComposition.objects.filter(status=VideoComposition.STATUS_READY)
         .exclude(video="")
         .select_related(
+            "episode__cover",
             "episode__script__outline",
             "episode__script__project",
         )
@@ -114,9 +121,13 @@ def finished_films_page(request):
         task_map.setdefault(task.composition_id, task)
     for composition in compositions:
         composition.latest_publishing_task = task_map.get(composition.id)
+        package_metadata = _douyin_package_metadata(composition)
+        composition.douyin_title = package_metadata["title"]
+        composition.douyin_description = package_metadata["description"]
+        composition.douyin_tags = package_metadata["tags"]
     publishing_accounts = PublishingAccount.objects.filter(
         status=PublishingAccount.STATUS_CONNECTED
-    )
+    ).exclude(platform=PublishingAccount.PLATFORM_DOUYIN)
     script_ids = {item.episode.script_id for item in compositions}
     episode_totals = {
         row["script_id"]: row["total"]
@@ -298,6 +309,75 @@ def download_finished_film_view(request, composition_id):
             f"FINAL-v{composition.version:03d}.mp4"
         ),
     )
+
+
+@require_GET
+def download_douyin_package_view(request, composition_id):
+    composition = (
+        VideoComposition.objects.select_related(
+            "episode__cover",
+            "episode__script__outline",
+        )
+        .filter(pk=composition_id, status=VideoComposition.STATUS_READY)
+        .exclude(video="")
+        .first()
+    )
+    if composition is None or not composition.video:
+        raise Http404("Finished film not found")
+
+    episode = composition.episode
+    metadata = _douyin_package_metadata(composition)
+    prefix = f"EP{episode.episode_number:03d}"
+    package = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+    with zipfile.ZipFile(package, mode="w", allowZip64=True) as archive:
+        video_suffix = _safe_media_suffix(composition.video.name, ".mp4")
+        with composition.video.open("rb") as source:
+            with archive.open(
+                f"{prefix}-video{video_suffix}", mode="w", force_zip64=True
+            ) as target:
+                shutil.copyfileobj(source, target, length=1024 * 1024)
+
+        cover = getattr(episode, "cover", None)
+        if cover and cover.image:
+            cover_suffix = _safe_media_suffix(cover.image.name, ".jpg")
+            with cover.image.open("rb") as source:
+                with archive.open(f"{prefix}-cover{cover_suffix}", mode="w") as target:
+                    shutil.copyfileobj(source, target, length=1024 * 1024)
+
+        copy_text = (
+            f"标题：{metadata['title']}\n\n"
+            f"简介：\n{metadata['description']}\n\n"
+            f"标签：{metadata['tags']}\n"
+        )
+        archive.writestr(f"{prefix}-发布文案.txt", copy_text.encode("utf-8"))
+
+    package.seek(0)
+    return FileResponse(
+        package,
+        as_attachment=True,
+        content_type="application/zip",
+        filename=(
+            f"{script_storage_key(episode.script)}-"
+            f"{prefix}-douyin-package.zip"
+        ),
+    )
+
+
+def _douyin_package_metadata(composition):
+    episode = composition.episode
+    return {
+        "title": episode.title.strip() or f"第 {episode.episode_number} 集",
+        "description": episode.summary.strip(),
+        "tags": "#漫剧 #AI动画 #短剧",
+    }
+
+
+def _safe_media_suffix(name, default):
+    suffix = Path(str(name or "")).suffix.lower()
+    if suffix in {".mp4", ".mov", ".jpg", ".jpeg", ".png", ".webp"}:
+        return suffix
+    return default
+
 
 def video_page(request, workspace_id):
     return video_episode_page(request, workspace_id, 1)

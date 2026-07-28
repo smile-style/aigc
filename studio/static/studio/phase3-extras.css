@@ -687,3 +687,155 @@
   .empty-state { padding-inline: 20px; }
   .empty-state p { overflow-wrap: anywhere; }
 }
+
+/* Douyin manual publishing package */
+.film-publish-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.douyin-package-button {
+  border-color: rgba(255, 77, 103, 0.58);
+  color: #ffe4e8;
+}
+
+.douyin-package-button:hover {
+  border-color: #ff4d67;
+  background: rgba(255, 77, 103, 0.1);
+}
+
+.douyin-package-panel {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  gap: 18px;
+  width: min(760px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 20px;
+}
+
+.douyin-package-panel > header,
+.douyin-package-panel > footer,
+.douyin-copy-status {
+  grid-column: 1 / -1;
+}
+
+.douyin-package-panel > header {
+  padding-right: 42px;
+}
+
+.douyin-package-panel > header h2 {
+  margin: 5px 0;
+  font-size: 22px;
+}
+
+.douyin-package-panel > header p:last-child {
+  color: var(--muted);
+}
+
+.douyin-package-cover {
+  align-self: start;
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #030712;
+}
+
+.douyin-package-cover img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  object-fit: cover;
+}
+
+.douyin-package-cover figcaption {
+  overflow: hidden;
+  padding: 9px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.douyin-copy-fields {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.douyin-copy-fields > label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.douyin-copy-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 62px;
+  align-items: stretch;
+  gap: 7px;
+  min-width: 0;
+}
+
+.douyin-copy-row input,
+.douyin-copy-row textarea {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(8, 13, 23, 0.82);
+  color: var(--text);
+  padding: 9px 11px;
+  resize: vertical;
+}
+
+.douyin-copy-row input {
+  min-height: 40px;
+}
+
+.douyin-copy-row .ghost-button {
+  width: 62px;
+  min-height: 40px;
+  padding-inline: 6px;
+}
+
+.douyin-copy-status {
+  min-height: 18px;
+  color: var(--mint);
+  font-size: 12px;
+}
+
+.douyin-package-panel > footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 680px) {
+  .douyin-package-panel {
+    grid-template-columns: 1fr;
+    gap: 14px;
+    padding: 16px;
+  }
+
+  .douyin-package-panel > header,
+  .douyin-package-panel > footer,
+  .douyin-copy-status {
+    grid-column: 1;
+  }
+
+  .douyin-package-cover {
+    width: min(180px, 56vw);
+  }
+
+  .douyin-package-panel > footer a {
+    width: 100%;
+    white-space: normal;
+    text-align: center;
+  }
+}

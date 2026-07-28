@@ -1,0 +1,50 @@
+<div class="detail-modal douyin-package-dialog" id="douyin-package-{{ composition.id }}" role="dialog" aria-modal="true" aria-labelledby="douyin-package-title-{{ composition.id }}" hidden>
+  <div class="detail-backdrop" data-modal-close></div>
+  <section class="detail-panel douyin-package-panel">
+    <button class="modal-close" type="button" data-modal-close aria-label="关闭">&times;</button>
+    <header>
+      <p class="eyebrow">Douyin Creator Center</p>
+      <h2 id="douyin-package-title-{{ composition.id }}">抖音发布包</h2>
+      <p>第 {{ episode.number }} 集 · v{{ composition.version }} · {{ episode.title }}</p>
+    </header>
+
+    {% with cover=composition.episode.cover %}
+      {% if cover and cover.image %}
+        <figure class="douyin-package-cover">
+          <img src="{{ cover.image.url }}" alt="第 {{ episode.number }} 集封面">
+          <figcaption>{{ cover.title }}</figcaption>
+        </figure>
+      {% endif %}
+    {% endwith %}
+
+    <div class="douyin-copy-fields">
+      <label>
+        <span>标题</span>
+        <span class="douyin-copy-row">
+          <input id="douyin-title-{{ composition.id }}" type="text" value="{{ composition.douyin_title }}" readonly>
+          <button class="ghost-button small" type="button" data-copy-target="douyin-title-{{ composition.id }}">复制</button>
+        </span>
+      </label>
+      <label>
+        <span>简介</span>
+        <span class="douyin-copy-row">
+          <textarea id="douyin-description-{{ composition.id }}" rows="4" readonly>{{ composition.douyin_description }}</textarea>
+          <button class="ghost-button small" type="button" data-copy-target="douyin-description-{{ composition.id }}">复制</button>
+        </span>
+      </label>
+      <label>
+        <span>标签</span>
+        <span class="douyin-copy-row">
+          <input id="douyin-tags-{{ composition.id }}" type="text" value="{{ composition.douyin_tags }}" readonly>
+          <button class="ghost-button small" type="button" data-copy-target="douyin-tags-{{ composition.id }}">复制</button>
+        </span>
+      </label>
+    </div>
+
+    <output class="douyin-copy-status" data-copy-status aria-live="polite"></output>
+    <footer>
+      <a class="primary-button" href="{% url 'studio:download_douyin_package' composition.id %}">下载发布包</a>
+      <a class="secondary-button" href="https://creator.douyin.com/" target="_blank" rel="noopener noreferrer">打开抖音创作者中心</a>
+    </footer>
+  </section>
+</div>

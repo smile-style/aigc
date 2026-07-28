@@ -1,5 +1,7 @@
 .worktrees/
 .env
+!deploy/pre/.env
+!deploy/prod/.env
 deploy/.env
 .venv/
 venv/

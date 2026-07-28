@@ -22,6 +22,11 @@ urlpatterns = [
         video_views.download_finished_film_view,
         name="download_finished_film",
     ),
+    path(
+        "films/<int:composition_id>/douyin-package/",
+        video_views.download_douyin_package_view,
+        name="download_douyin_package",
+    ),
     path("script/", views.script_library_page, name="script_index"),
     path("script/<str:workspace_id>/", views.script_page, name="script"),
     path(
