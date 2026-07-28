@@ -582,7 +582,7 @@ def recognize_speech_alignment(asset, source_text, parts):
     expected_text = "".join(parts)
     vad_filter = os.environ.get(
         "SUBTITLE_WHISPER_VAD_FILTER",
-        "false",
+        "true",
     ).lower() in {"1", "true", "yes", "on"}
     segments, _ = _WHISPER_MODEL.transcribe(
         asset.video.path,
