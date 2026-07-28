@@ -557,18 +557,18 @@ def test_subtitle_generation_uses_storyboard_text_and_shot_offsets():
     assert track.qc_status == SubtitleTrack.QC_PASSED
     assert track.qc_checked_at is not None
     assert track.qc_content_hash
-    assert len(cues) == 2
-    assert all(cue.text for cue in cues)
+    assert len(cues) == 1
     assert cues[0].start_ms < cues[0].end_ms <= 6000
-    assert cues[1].start_ms >= 6000
     assert cues[0].local_start_ms < cues[0].local_end_ms <= 6000
-    assert cues[1].local_start_ms < cues[1].local_end_ms <= 6000
-    assert all(cue.needs_review for cue in cues)
+    assert cues[0].needs_review is True
     assert ShotSubtitleSetting.objects.filter(
-        shot__in=shots,
+        shot=shots[0],
         status=ShotSubtitleSetting.STATUS_NEEDS_REVIEW,
-    ).count() == 2
-
+    ).exists()
+    assert ShotSubtitleSetting.objects.filter(
+        shot=shots[1],
+        status=ShotSubtitleSetting.STATUS_CONFIRMED,
+    ).exists()
 
 def test_subtitle_renderers_emit_bottom_center_ass_and_srt():
     snapshot = {
@@ -833,13 +833,76 @@ def test_split_dialogue_removes_speaker_and_limits_line_length():
         ),
         (
             "\u65c1\u767d\uff1a\u96e8\u8d8a\u6765\u8d8a\u5927\u3002",
-            ["\u96e8\u8d8a\u6765\u8d8a\u5927\u3002"],
+            [],
         ),
     ],
 )
 def test_split_dialogue_removes_each_speaker_and_quotes(source, expected):
     assert split_dialogue(source) == expected
 
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "\u97f3\u6548\uff1a\u201c\u5494\u55d2\uff01\u201d\u65e0\u58f0\u8ba1\u65f6\uff1a\u201c\u4e00\u79d2\u3001\u4e24\u79d2\u3002\u201d",
+        "\u7cfb\u7edf\u63d0\u793a\uff1a\u201c\u5ba1\u6838\u901a\u8fc7\u3002\u201d",
+        "\u7ed3\u5c3e\u5b57\u5e55\uff1a\u201c\u4e3a\u4ec0\u4e48\u6ca1\u6709\u54cd\u5e94\uff1f\u201d",
+        "\u65bd\u5de5\u58f0\u8fde\u7eed\u54cd\u8d77\u3002",
+        "\u65e0\u5bf9\u767d",
+    ],
+)
+def test_split_dialogue_ignores_non_spoken_content(source):
+    assert split_dialogue(source, speaker_names=["\u79e6\u950b"]) == []
+
+
+def test_split_dialogue_keeps_people_and_drops_effects_in_mixed_content():
+    source = (
+        "\u82cf\u665a\uff1a\u201c\u6211\u8fd8\u6709\u67f4\u6cb9\u53d1\u7535\u673a\u3002\u201d"
+        "\u97f3\u6548\uff1a\u70df\u611f\u8b66\u62a5\u9aa4\u7136\u54cd\u8d77\u3002"
+        "\u79e6\u950b\uff1a\u201c\u5148\u65ad\u7535\u3002\u201d"
+        "\u8f6c\u573a\u5b57\u5e55\uff1a\u201c\u4e24\u5929\u524d\u3002\u201d"
+    )
+
+    assert split_dialogue(source, speaker_names=["\u82cf\u665a", "\u79e6\u950b"]) == [
+        "\u6211\u8fd8\u6709\u67f4\u6cb9\u53d1\u7535\u673a\u3002",
+        "\u5148\u65ad\u7535\u3002",
+    ]
+
+def test_split_dialogue_drops_unquoted_action_after_spoken_lines():
+    source = (
+        "\u5de5\u4eba\uff1a\u6700\u540e\u4e00\u6247\u95e8\u5b89\u88c5\u5b8c\u6210\u3002"
+        "\u82cf\u665a\uff1a\u6307\u7eb9\u6b63\u5e38\u3002"
+        "\u697c\u68af\u95f4\u4f20\u6765\u79e6\u950b\u9010\u7ea7\u9760\u8fd1\u7684\u811a\u6b65\u58f0\u3002"
+    )
+
+    assert split_dialogue(source, speaker_names=["\u5de5\u4eba", "\u82cf\u665a", "\u79e6\u950b"]) == [
+        "\u6700\u540e\u4e00\u6247\u95e8\u5b89\u88c5\u5b8c\u6210\u3002",
+        "\u6307\u7eb9\u6b63\u5e38\u3002",
+    ]
+
+def test_subtitle_generation_accepts_shot_without_spoken_dialogue():
+    _, episode, storyboard = make_episode(with_character=False)
+    shot = sync_storyboard_shots(storyboard)[0]
+    shot.dialogue_or_narration = "\u97f3\u6548\uff1a\u811a\u6b65\u58f0\u8d8a\u6765\u8d8a\u8fd1\u3002"
+    shot.character_names = []
+    shot.save(update_fields=["dialogue_or_narration", "character_names", "updated_at"])
+    asset = VideoAsset.objects.create(
+        shot=shot,
+        version=1,
+        status=VideoAsset.STATUS_READY,
+        prompt_snapshot="prompt",
+        is_selected=True,
+    )
+    asset.video.save("silent-subtitle.mp4", ContentFile(b"video"))
+    track = SubtitleTrack.objects.create(episode=episode)
+
+    generate_subtitle_cues(track, [asset])
+    track.refresh_from_db()
+
+    assert not track.cues.exists()
+    assert track.status == SubtitleTrack.STATUS_DRAFT
+    assert track.qc_status == SubtitleTrack.QC_PASSED
+    assert track.qc_reason == "rule_pass:no_spoken_dialogue"
 
 def test_subtitle_regeneration_preserves_manually_edited_display_text():
     _, episode, storyboard = make_episode(with_character=False)

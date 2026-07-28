@@ -37,6 +37,51 @@ ROLE_PREFIX_RE = re.compile(
 )
 SUBTITLE_QUOTE_RE = re.compile(r"[\"“”‘’「」『』]")
 SUBTITLE_SENTENCE_RE = re.compile(r"[^。！？!?；;\n]+(?:[。！？!?；;]+[\"”’』」]?)?")
+SPEAKER_TAG_RE = re.compile(
+    r"(?P<label>[A-Za-z0-9\u4e00-\u9fff·•（）() ]{1,30})[：:]\s*"
+)
+NO_DIALOGUE_RE = re.compile(
+    r"^\s*(?:无|无对白|无台词|无人说话|空镜|纯画面|环境音|音效|无声|"
+    r"none|n/?a|[-—]+)\s*[。.!！]?\s*$",
+    re.IGNORECASE,
+)
+NON_SPOKEN_SENTENCE_RE = re.compile(
+    r"^(?:画面|镜头|屏幕|楼梯间|走廊|门外|远处|背景|施工声|脚步声|敲击声|"
+    r"警报|音乐|环境音).*(?:传来|响起|出现|显示|切换|闪过|靠近|远去|连续)"
+)
+NON_SPEECH_LABEL_KEYWORDS = (
+    "旁白",
+    "音效",
+    "环境音",
+    "脚步声",
+    "敲击声",
+    "施工声",
+    "警报",
+    "计时",
+    "字幕",
+    "屏幕标识",
+    "画面",
+    "镜头",
+    "动作",
+    "系统提示",
+    "系统播报",
+    "转场",
+)
+SPEECH_LABEL_HINTS = (
+    "说",
+    "问",
+    "答",
+    "喊",
+    "自语",
+    "低声",
+    "高声",
+    "急声",
+    "语音",
+    "电话",
+    "读出",
+    "念出",
+)
+QUOTE_PAIRS = {"“": "”", '"': '"', "「": "」", "『": "』", "‘": "’"}
 _WHISPER_MODEL = None
 
 
@@ -213,7 +258,10 @@ def generate_subtitle_cues(track, assets, source_hash=None):
     for asset in assets:
         shot = asset.shot
         duration_ms = probe_duration_ms(asset)
-        segments = subtitle_dialogue_segments(shot.dialogue_or_narration)
+        segments = subtitle_dialogue_segments(
+            shot.dialogue_or_narration,
+            speaker_names=shot.character_names,
+        )
         parts = [segment[1] for segment in segments]
         recognized = recognize_speech_window(asset, shot.dialogue_or_narration)
         if recognized:
@@ -290,7 +338,7 @@ def generate_subtitle_cues(track, assets, source_hash=None):
         track.save()
     from studio.services.subtitle_qc import run_and_persist_subtitle_qc
 
-    run_and_persist_subtitle_qc(track)
+    run_and_persist_subtitle_qc(track, allow_empty=True)
     return track
 
 
@@ -364,22 +412,95 @@ def _split_cue_text(value):
     return parts
 
 
-def subtitle_dialogue_segments(value):
-    text = str(value or "").strip()
-    if not text:
-        return []
-    segments = []
-    for match in SUBTITLE_SENTENCE_RE.finditer(text):
-        source = match.group(0).strip(" ，,")
-        cleaned = clean_subtitle_text(source)
-        for part in _split_cue_text(cleaned):
+def _normalized_label(value):
+    return re.sub(r"\s+", "", str(value or "")).lower()
+
+
+def _is_non_speech_label(label):
+    normalized = _normalized_label(label)
+    return any(keyword in normalized for keyword in NON_SPEECH_LABEL_KEYWORDS)
+
+
+def _is_speech_label(label, speaker_names):
+    normalized = _normalized_label(label)
+    names = [
+        _normalized_label(name)
+        for name in (speaker_names or [])
+        if str(name).strip()
+    ]
+    if names and any(name in normalized for name in names):
+        return True
+    if any(hint in normalized for hint in SPEECH_LABEL_HINTS):
+        return True
+    return not speaker_names
+
+
+def _accepted_speaker_tags(text, speaker_names):
+    tags = []
+    for match in SPEAKER_TAG_RE.finditer(text):
+        label = match.group("label").strip()
+        if _is_non_speech_label(label) or _is_speech_label(label, speaker_names):
+            tags.append((match, label))
+    return tags
+
+
+def _quoted_turn_content(value):
+    content = str(value or "").strip()
+    if not content:
+        return ""
+    closer = QUOTE_PAIRS.get(content[0])
+    if closer:
+        closing_index = content.find(closer, 1)
+        if closing_index >= 0:
+            return content[1:closing_index]
+    return content
+
+
+def _append_dialogue_parts(segments, source, content):
+    cleaned = SUBTITLE_QUOTE_RE.sub("", content).strip(" ，,")
+    for match in SUBTITLE_SENTENCE_RE.finditer(cleaned):
+        sentence = match.group(0).strip(" ，,")
+        if (
+            NO_DIALOGUE_RE.fullmatch(sentence)
+            or NON_SPOKEN_SENTENCE_RE.search(sentence)
+        ):
+            continue
+        for part in _split_cue_text(sentence):
             segments.append((source, part))
+
+
+def subtitle_dialogue_segments(value, speaker_names=None):
+    text = str(value or "").strip()
+    if not text or NO_DIALOGUE_RE.fullmatch(text):
+        return []
+
+    tags = _accepted_speaker_tags(text, speaker_names)
+    if not tags:
+        if speaker_names is not None:
+            if not speaker_names or text[0] not in QUOTE_PAIRS:
+                return []
+        cleaned = clean_subtitle_text(text)
+        segments = []
+        _append_dialogue_parts(segments, text, cleaned)
+        return segments
+
+    segments = []
+    for index, (tag, label) in enumerate(tags):
+        end = tags[index + 1][0].start() if index + 1 < len(tags) else len(text)
+        raw_content = text[tag.end():end]
+        if _is_non_speech_label(label):
+            continue
+        content = _quoted_turn_content(raw_content)
+        source = text[tag.start():tag.end()] + raw_content
+        _append_dialogue_parts(segments, source.strip(), content)
     return segments
 
 
-def split_dialogue(value):
-    return [cleaned for _, cleaned in subtitle_dialogue_segments(value)]
-
+def split_dialogue(value, speaker_names=None):
+    return [
+        cleaned
+        for _, cleaned in subtitle_dialogue_segments(value, speaker_names=speaker_names)
+    ]
 
 def distribute_cues(parts, start_ms, end_ms):
     if not parts:

@@ -1,6 +1,7 @@
 import pytest
 from django.template.loader import render_to_string
 from django.urls import reverse
+from django.utils import timezone
 
 from studio.models import (
     Character,
@@ -459,6 +460,41 @@ def test_automatic_workflow_completes_without_captioned_export_when_qc_fails():
     assert run.stage == EpisodeWorkflowRun.STAGE_COMPLETE
     assert run.details["captioned_export_skipped"] is True
     assert run.details["subtitle_qc"]["status"] == SubtitleTrack.QC_FAILED
+    assert not episode.video_compositions.filter(
+        variant=VideoComposition.VARIANT_CAPTIONED
+    ).exists()
+
+def test_automatic_workflow_completes_when_episode_has_no_spoken_dialogue():
+    from studio.services.subtitle_qc import run_and_persist_subtitle_qc
+
+    _, _, episode = make_episode(full_script="Script")
+    make_ready_shot(episode)
+    track = SubtitleTrack.objects.create(
+        episode=episode,
+        enabled=True,
+        status=SubtitleTrack.STATUS_CONFIRMED,
+        source_hash=subtitle_source_hash(episode),
+        aligned_at=timezone.now(),
+    )
+    result = run_and_persist_subtitle_qc(
+        track,
+        use_configured_ai=False,
+        allow_empty=True,
+    )
+    run = EpisodeWorkflowRun.objects.create(
+        episode=episode,
+        status=EpisodeWorkflowRun.STATUS_RUNNING,
+        stage=EpisodeWorkflowRun.STAGE_SUBTITLES,
+        progress_percent=84,
+    )
+
+    run = advance_episode_workflow(run.id)
+
+    assert result.passed is True
+    assert result.reason == "rule_pass:no_spoken_dialogue"
+    assert run.status == EpisodeWorkflowRun.STATUS_SUCCEEDED
+    assert run.details["captioned_export_skipped"] is True
+    assert run.details["no_spoken_dialogue"] is True
     assert not episode.video_compositions.filter(
         variant=VideoComposition.VARIANT_CAPTIONED
     ).exists()

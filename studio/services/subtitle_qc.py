@@ -375,30 +375,7 @@ def subtitle_qc_is_current(track, cues=None):
     )
 
 
-def run_and_persist_subtitle_qc(track, provider=None, use_configured_ai=True):
-    cues = _track_cues_for_qc(track)
-    owned_provider = False
-    if provider is None and use_configured_ai:
-        try:
-            from studio.models import ModelAssignment, ModelConfig
-            from studio.services.model_config import assigned_model, llm_provider_for
-
-            model = assigned_model(ModelAssignment.PURPOSE_SUBTITLE_QC, ModelConfig.CAPABILITY_TEXT)
-            if model is not None:
-                provider = llm_provider_for(ModelAssignment.PURPOSE_SUBTITLE_QC)
-                owned_provider = True
-        except Exception as exc:
-            logger.warning("Subtitle QC model is unavailable; using rule result: %s", exc)
-            provider = None
-    try:
-        result = run_subtitle_qc(cues, provider=provider)
-    finally:
-        if owned_provider and provider is not None:
-            try:
-                provider.close()
-            except Exception as exc:
-                logger.warning("Could not close subtitle QC model client: %s", exc)
-
+def _persist_subtitle_qc_result(track, cues, result):
     track.qc_status = track.QC_PASSED if result.passed else track.QC_FAILED
     track.qc_score = result.score
     track.qc_rule_score = result.rule_score
@@ -423,6 +400,49 @@ def run_and_persist_subtitle_qc(track, provider=None, use_configured_ai=True):
         ]
     )
     return result
+
+
+def run_and_persist_subtitle_qc(
+    track,
+    provider=None,
+    use_configured_ai=True,
+    allow_empty=False,
+):
+    cues = _track_cues_for_qc(track)
+    if allow_empty and not cues:
+        result = SubtitleQCResult(
+            True,
+            1.0,
+            "rule_pass:no_spoken_dialogue",
+            "rule_pass",
+            1.0,
+            metrics={"visible_count": 0, "no_spoken_dialogue": True},
+        )
+        return _persist_subtitle_qc_result(track, cues, result)
+
+    owned_provider = False
+    if provider is None and use_configured_ai:
+        try:
+            from studio.models import ModelAssignment, ModelConfig
+            from studio.services.model_config import assigned_model, llm_provider_for
+
+            model = assigned_model(ModelAssignment.PURPOSE_SUBTITLE_QC, ModelConfig.CAPABILITY_TEXT)
+            if model is not None:
+                provider = llm_provider_for(ModelAssignment.PURPOSE_SUBTITLE_QC)
+                owned_provider = True
+        except Exception as exc:
+            logger.warning("Subtitle QC model is unavailable; using rule result: %s", exc)
+            provider = None
+    try:
+        result = run_subtitle_qc(cues, provider=provider)
+    finally:
+        if owned_provider and provider is not None:
+            try:
+                provider.close()
+            except Exception as exc:
+                logger.warning("Could not close subtitle QC model client: %s", exc)
+
+    return _persist_subtitle_qc_result(track, cues, result)
 
 
 def ensure_subtitle_qc(track):

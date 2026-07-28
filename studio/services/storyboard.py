@@ -57,6 +57,8 @@ def generate_storyboard(provider, episode_script, episode_number=1, pacing=None)
                     f"分镜数量必须在 {MIN_STORYBOARD_SHOTS} 到 {MAX_STORYBOARD_SHOTS} 之间。\n"
                     "storyboard_prompts 中的每个分镜都必须包含字段："
                     f"{REQUIRED_STORYBOARD_FIELD_LIST}。\n"
+                    "dialogue_or_narration 只填写人物实际说出口的台词，并用“人物名：台词”标明说话人；"
+                    "无人说话时固定填写“无对白”，不要填写旁白、音效、系统提示、画面字幕、动作或环境描述。\n"
                     "shot_number 尽量使用整数；如果输出成字符串，也必须能明确解析为顺序编号。\n"
                     "所有文本字段都必须是非空字符串，内容要具体、可直接用于图像和视频生成。\n"
                     "另外输出 character_names 字符串数组和 duration_seconds 整数；"

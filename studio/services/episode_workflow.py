@@ -392,6 +392,23 @@ def _handle_subtitles(run):
         details["captioned_export_skipped"] = True
         run.details = details
         return _move_to(run, EpisodeWorkflowRun.STAGE_COMPLETE)
+    if (
+        track
+        and track.aligned_at
+        and not track.cues.exists()
+        and not is_subtitle_stale(track)
+    ):
+        details = dict(run.details or {})
+        details["subtitle_qc"] = {
+            "status": track.qc_status,
+            "score": track.qc_score,
+            "reason": track.qc_reason,
+        }
+        details["captioned_export_skipped"] = True
+        details["no_spoken_dialogue"] = True
+        run.details = details
+        return _move_to(run, EpisodeWorkflowRun.STAGE_COMPLETE)
+
     active = episode.script.project.generation_tasks.filter(
         task_type=GenerationTask.TYPE_SUBTITLE_ALIGN,
         status__in=ACTIVE_TASK_STATUSES,
