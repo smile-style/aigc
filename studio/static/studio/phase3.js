@@ -165,4 +165,17 @@ document.addEventListener("DOMContentLoaded", () => {
     if (subtitlesBlocked) exportButton.disabled = true;
   }
 
+  document.querySelectorAll("[data-external-video-upload]").forEach((form) => {
+    const input = form.querySelector("[data-external-video-file]");
+    const label = form.querySelector("[data-external-video-name]");
+    if (!(input instanceof HTMLInputElement) || !(label instanceof HTMLElement)) return;
+    const guidance = label.textContent;
+    input.addEventListener("change", () => {
+      const file = input.files && input.files[0];
+      label.textContent = file
+        ? `${file.name} ? ${(file.size / 1024 / 1024).toFixed(1)} MB`
+        : guidance;
+    });
+  });
+
 });

@@ -224,6 +224,11 @@ urlpatterns = [
         name="export_video",
     ),
     path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/external-captioned/upload/",
+        video_views.upload_external_captioned_video_view,
+        name="upload_external_captioned_video",
+    ),
+    path(
         "video/<str:workspace_id>/episode/<int:episode_number>/shot-video/<int:video_id>/download/",
         video_views.download_shot_video_view,
         name="download_shot_video",

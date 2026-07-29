@@ -254,6 +254,13 @@ class VideoComposition(models.Model):
         (STATUS_FAILED, "Failed"),
     ]
 
+    SOURCE_GENERATED = "generated"
+    SOURCE_EXTERNAL_UPLOAD = "external_upload"
+    SOURCE_CHOICES = [
+        (SOURCE_GENERATED, "Platform generated"),
+        (SOURCE_EXTERNAL_UPLOAD, "External upload"),
+    ]
+
     episode = models.ForeignKey(
         Episode,
         on_delete=models.CASCADE,
@@ -267,7 +274,17 @@ class VideoComposition(models.Model):
         db_index=True,
     )
     status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    source = models.CharField(
+        max_length=24,
+        choices=SOURCE_CHOICES,
+        default=SOURCE_GENERATED,
+        db_index=True,
+    )
     video = models.FileField(upload_to=composition_video_upload_to, blank=True)
+    original_filename = models.CharField(max_length=255, blank=True)
+    video_duration_ms = models.PositiveIntegerField(null=True, blank=True)
+    video_width = models.PositiveIntegerField(null=True, blank=True)
+    video_height = models.PositiveIntegerField(null=True, blank=True)
     include_subtitles = models.BooleanField(default=False)
     subtitle_snapshot = models.JSONField(default=dict, blank=True)
     subtitle_file = models.FileField(upload_to="videos/subtitles/%Y/%m/%d", blank=True)

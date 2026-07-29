@@ -43,6 +43,7 @@ from studio.services.subtitles import (
 )
 from studio.services.video import (
     bind_shot_characters,
+    import_external_captioned_video,
     queue_episode_videos,
     queue_export,
     queue_shot_video,
@@ -432,6 +433,7 @@ def _render_video_episode(request, workspace_id, episode_number, script_id=None)
             "composition": data["composition"],
             "clean_composition": data["clean_composition"],
             "captioned_composition": data["captioned_composition"],
+            "composition_versions": data["composition_versions"],
             "episode_workflow": _latest_workflow_payload(episode),
             "subtitle": subtitle_page_data(episode, data["shots"]),
             "publishing_accounts": PublishingAccount.objects.filter(
@@ -716,6 +718,34 @@ def export_video_view(request, workspace_id, episode_number):
     return _video_redirect(workspace_id, episode_number, tab="assembly", script_id=script_id)
 
 
+@require_POST
+def upload_external_captioned_video_view(request, workspace_id, episode_number):
+    script_id = _request_script_id(request)
+    episode = _episode(workspace_id, episode_number, script_id=script_id)
+    try:
+        composition = import_external_captioned_video(
+            episode,
+            request.FILES.get("video"),
+        )
+    except ValueError as exc:
+        return _video_error(
+            request,
+            workspace_id,
+            episode_number,
+            str(exc),
+            tab="assembly",
+            script_id=script_id,
+            external_upload_auto_open=True,
+        )
+    return _video_redirect(
+        workspace_id,
+        episode_number,
+        tab="assembly",
+        script_id=script_id,
+        external_uploaded=composition.version,
+    )
+
+
 @require_GET
 def video_status_view(request, workspace_id, episode_number):
     script_id = _request_script_id(request)
@@ -853,6 +883,7 @@ def _video_redirect(
     script_id=None,
     subtitle=False,
     shot_subtitle=None,
+    external_uploaded=None,
 ):
     if script_id:
         url = reverse("studio:video_script_episode", args=[workspace_id, script_id, episode_number])
@@ -863,6 +894,8 @@ def _video_redirect(
         query.append("subtitle=1")
     if shot_subtitle:
         query.append(f"shot_subtitle={shot_subtitle}")
+    if external_uploaded:
+        query.append(f"external_uploaded={external_uploaded}")
     return redirect(f"{url}?{'&'.join(query)}")
 
 
@@ -876,6 +909,7 @@ def _video_error(
     subtitle_auto_open=False,
     subtitle_style_auto_open=False,
     shot_subtitle_auto_open="",
+    external_upload_auto_open=False,
 ):
     script_id = script_id or _request_script_id(request)
     repository = WorkspaceRepository()
@@ -896,6 +930,7 @@ def _video_error(
             "composition": data["composition"],
             "clean_composition": data["clean_composition"],
             "captioned_composition": data["captioned_composition"],
+            "composition_versions": data["composition_versions"],
             "episode_workflow": _latest_workflow_payload(episode),
             "subtitle": subtitle_data,
             "characters": Character.objects.filter(
@@ -905,6 +940,7 @@ def _video_error(
             "active_tab": tab,
             "subtitle_auto_open": subtitle_auto_open,
             "subtitle_style_auto_open": subtitle_style_auto_open,
+            "external_upload_auto_open": external_upload_auto_open,
             "active_nav": "video",
             "error": error,
         },

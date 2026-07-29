@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from django.core.files.base import ContentFile
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
 from studio.llm.video_provider import BailianVideoProvider
@@ -431,6 +432,128 @@ def test_ready_composition_can_be_downloaded_and_reexported(client):
     assert "&#19979;&#36733;&#26080;&#23383;&#24149;&#29256;&#26412;" in content
     assert "&#19979;&#36733;&#26377;&#23383;&#24149;&#29256;&#26412;" in content
     assert "disabled" in content
+
+
+def test_external_captioned_video_upload_creates_ready_version(client, settings, tmp_path, monkeypatch):
+    settings.MEDIA_ROOT = tmp_path
+    project, episode, _ = make_episode(with_character=False)
+    clean = VideoComposition.objects.create(
+        episode=episode,
+        version=1,
+        variant=VideoComposition.VARIANT_CLEAN,
+        status=VideoComposition.STATUS_READY,
+        video_duration_ms=10000,
+        video_width=720,
+        video_height=1280,
+    )
+    clean.video.save("clean.mp4", ContentFile(b"clean-video"))
+    monkeypatch.setattr(
+        "studio.services.video._probe_video_metadata",
+        lambda path: {
+            "duration_ms": 10400,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+            "width": 1080,
+            "height": 1920,
+        },
+    )
+
+    response = client.post(
+        reverse(
+            "studio:upload_external_captioned_video",
+            args=[project.workspace_id, episode.episode_number],
+        ),
+        {
+            "script_id": episode.script_id,
+            "video": SimpleUploadedFile(
+                "captioned-final.mp4",
+                b"external-captioned-video",
+                content_type="video/mp4",
+            ),
+        },
+    )
+
+    assert response.status_code == 302
+    assert "external_uploaded=2" in response.url
+    composition = episode.video_compositions.get(version=2)
+    assert composition.variant == VideoComposition.VARIANT_CAPTIONED
+    assert composition.source == VideoComposition.SOURCE_EXTERNAL_UPLOAD
+    assert composition.status == VideoComposition.STATUS_READY
+    assert composition.include_subtitles is True
+    assert composition.original_filename == "captioned-final.mp4"
+    assert composition.video_duration_ms == 10400
+    assert composition.video_width == 1080
+    assert composition.video_height == 1920
+    assert len(composition.content_hash) == 64
+    with composition.video.open("rb") as uploaded:
+        assert uploaded.read() == b"external-captioned-video"
+
+
+def test_external_captioned_video_upload_rejects_duration_mismatch(client, settings, tmp_path, monkeypatch):
+    settings.MEDIA_ROOT = tmp_path
+    project, episode, _ = make_episode(with_character=False)
+    clean = VideoComposition.objects.create(
+        episode=episode,
+        version=1,
+        variant=VideoComposition.VARIANT_CLEAN,
+        status=VideoComposition.STATUS_READY,
+        video_duration_ms=10000,
+    )
+    clean.video.save("clean.mp4", ContentFile(b"clean-video"))
+    monkeypatch.setattr(
+        "studio.services.video._probe_video_metadata",
+        lambda path: {
+            "duration_ms": 12000,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+            "width": 720,
+            "height": 1280,
+        },
+    )
+
+    response = client.post(
+        reverse(
+            "studio:upload_external_captioned_video",
+            args=[project.workspace_id, episode.episode_number],
+        ),
+        {
+            "script_id": episode.script_id,
+            "video": SimpleUploadedFile("captioned.mp4", b"video", content_type="video/mp4"),
+        },
+    )
+
+    assert response.status_code == 400
+    assert "???? 2.00 ?" in response.content.decode("utf-8")
+    assert not episode.video_compositions.filter(
+        source=VideoComposition.SOURCE_EXTERNAL_UPLOAD
+    ).exists()
+
+
+def test_assembly_page_shows_external_caption_upload_and_version_source(client):
+    project, episode, _ = make_episode(with_character=False)
+    composition = VideoComposition.objects.create(
+        episode=episode,
+        version=1,
+        variant=VideoComposition.VARIANT_CAPTIONED,
+        status=VideoComposition.STATUS_READY,
+        source=VideoComposition.SOURCE_EXTERNAL_UPLOAD,
+        video="videos/external-captioned.mp4",
+        include_subtitles=True,
+    )
+
+    response = client.get(
+        reverse("studio:video_episode", args=[project.workspace_id, 1]),
+        {"tab": "assembly"},
+    )
+    content = response.content.decode("utf-8")
+
+    assert reverse(
+        "studio:upload_external_captioned_video",
+        args=[project.workspace_id, episode.episode_number],
+    ) in content
+    assert "&#22806;&#37096;&#23383;&#24149;&#29256;" in content
+    assert reverse("studio:download_finished_film", args=[composition.id]) in content
+
 
 def test_assembly_page_identifies_shots_blocking_export(client):
     from studio.services.video import video_page_data

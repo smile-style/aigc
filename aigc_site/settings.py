@@ -98,3 +98,9 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 WORKSPACE_DIR = Path(os.environ.get("WORKSPACE_DIR", BASE_DIR / "workspace"))
 MEDIA_URL = "/media/"
 MEDIA_ROOT = Path(os.environ.get("DJANGO_MEDIA_ROOT", BASE_DIR / "media"))
+EXTERNAL_VIDEO_MAX_UPLOAD_BYTES = int(
+    os.environ.get("EXTERNAL_VIDEO_MAX_UPLOAD_BYTES", 2 * 1024 * 1024 * 1024)
+)
+EXTERNAL_VIDEO_DURATION_TOLERANCE_MS = int(
+    os.environ.get("EXTERNAL_VIDEO_DURATION_TOLERANCE_MS", 1000)
+)

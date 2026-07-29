@@ -4,8 +4,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
+from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import Max, Q
@@ -414,6 +416,144 @@ def process_export_task(task_id):
     return composition
 
 
+@contextmanager
+def _uploaded_video_path(uploaded_file):
+    temporary_path = getattr(uploaded_file, "temporary_file_path", None)
+    if callable(temporary_path):
+        yield Path(temporary_path())
+        return
+    suffix = Path(uploaded_file.name or "upload.mp4").suffix.lower() or ".mp4"
+    with tempfile.NamedTemporaryFile(prefix="aigc-upload-", suffix=suffix) as target:
+        for chunk in uploaded_file.chunks():
+            target.write(chunk)
+        target.flush()
+        uploaded_file.seek(0)
+        yield Path(target.name)
+
+
+def _probe_video_metadata(video_path):
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise ValueError("?????? FFprobe????????????")
+    try:
+        result = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration:stream=codec_type,codec_name,width,height",
+                "-of",
+                "json",
+                str(video_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        payload = json.loads(result.stdout)
+        duration_ms = round(float(payload.get("format", {}).get("duration")) * 1000)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, subprocess.SubprocessError) as exc:
+        raise ValueError("?????????????????????? MP4?") from exc
+    streams = payload.get("streams") or []
+    video_stream = next((item for item in streams if item.get("codec_type") == "video"), None)
+    audio_stream = next((item for item in streams if item.get("codec_type") == "audio"), None)
+    if not video_stream or duration_ms <= 0:
+        raise ValueError("???????????????")
+    return {
+        "duration_ms": duration_ms,
+        "video_codec": str(video_stream.get("codec_name") or "").lower(),
+        "audio_codec": str((audio_stream or {}).get("codec_name") or "").lower(),
+        "width": int(video_stream.get("width") or 0),
+        "height": int(video_stream.get("height") or 0),
+    }
+
+
+def _validate_external_video(metadata, clean_duration_ms):
+    if metadata["video_codec"] != "h264":
+        raise ValueError("??? H.264 ??? MP4?????????? H.264 ??????")
+    if metadata["audio_codec"] != "aac":
+        raise ValueError("?????? AAC ????????????????")
+    width = metadata["width"]
+    height = metadata["height"]
+    if not width or not height or width >= height or abs(width / height - 9 / 16) > 0.02:
+        raise ValueError("????? 9:16 ??????? 720x1280 ? 1080x1920?")
+    tolerance_ms = settings.EXTERNAL_VIDEO_DURATION_TOLERANCE_MS
+    difference_ms = abs(metadata["duration_ms"] - clean_duration_ms)
+    if difference_ms > tolerance_ms:
+        raise ValueError(
+            f"??????????? {difference_ms / 1000:.2f} ??"
+            f"????? {tolerance_ms / 1000:.2f} ??"
+        )
+
+
+def import_external_captioned_video(episode, uploaded_file):
+    if uploaded_file is None:
+        raise ValueError("????????????")
+    original_name = Path(uploaded_file.name or "").name
+    if Path(original_name).suffix.lower() != ".mp4":
+        raise ValueError("????? MP4 ???")
+    if uploaded_file.size <= 0:
+        raise ValueError("???????????????")
+    if uploaded_file.size > settings.EXTERNAL_VIDEO_MAX_UPLOAD_BYTES:
+        limit_gib = settings.EXTERNAL_VIDEO_MAX_UPLOAD_BYTES / (1024 ** 3)
+        raise ValueError(f"?????? {limit_gib:g} GiB ???")
+
+    clean = episode.video_compositions.filter(
+        variant=VideoComposition.VARIANT_CLEAN,
+        status=VideoComposition.STATUS_READY,
+    ).exclude(video="").first()
+    if clean is None:
+        raise ValueError("????????????????????")
+
+    with _uploaded_video_path(uploaded_file) as upload_path:
+        metadata = _probe_video_metadata(upload_path)
+    clean_metadata = None
+    if not clean.video_duration_ms:
+        try:
+            clean_metadata = _probe_video_metadata(clean.video.path)
+        except (NotImplementedError, ValueError) as exc:
+            raise ValueError("?????????????????????????") from exc
+    clean_duration_ms = clean.video_duration_ms or clean_metadata["duration_ms"]
+    _validate_external_video(metadata, clean_duration_ms)
+
+    if clean_metadata:
+        clean.video_duration_ms = clean_metadata["duration_ms"]
+        clean.video_width = clean_metadata["width"]
+        clean.video_height = clean_metadata["height"]
+        clean.save(update_fields=["video_duration_ms", "video_width", "video_height", "updated_at"])
+
+    uploaded_file.seek(0)
+    with transaction.atomic():
+        type(episode).objects.select_for_update().get(pk=episode.pk)
+        version = (episode.video_compositions.aggregate(value=Max("version"))["value"] or 0) + 1
+        composition = VideoComposition(
+            episode=episode,
+            version=version,
+            variant=VideoComposition.VARIANT_CAPTIONED,
+            status=VideoComposition.STATUS_READY,
+            source=VideoComposition.SOURCE_EXTERNAL_UPLOAD,
+            original_filename=original_name,
+            video_duration_ms=metadata["duration_ms"],
+            video_width=metadata["width"],
+            video_height=metadata["height"],
+            include_subtitles=True,
+            exported_at=timezone.now(),
+        )
+        composition.video.save(original_name, uploaded_file, save=False)
+        digest = hashlib.sha256()
+        composition.video.open("rb")
+        try:
+            for chunk in iter(lambda: composition.video.read(1024 * 1024), b""):
+                digest.update(chunk)
+        finally:
+            composition.video.close()
+        composition.content_hash = digest.hexdigest()
+        composition.save()
+    return composition
+
+
 def reorder_shots(episode, shot_ids):
     shots = {str(shot.shot_id): shot for shot in sync_episode_shots(episode)}
     if set(shot_ids) != set(shots):
@@ -450,6 +590,9 @@ def video_page_data(episode, sync=False):
     captioned_composition = VideoComposition.objects.filter(
         episode=episode, variant=VideoComposition.VARIANT_CAPTIONED
     ).first()
+    composition_versions = list(
+        VideoComposition.objects.filter(episode=episode).exclude(video="").order_by("-version", "-id")[:8]
+    )
     composition = captioned_composition or clean_composition
     asset_updates_available = sum(
         1
@@ -463,6 +606,7 @@ def video_page_data(episode, sync=False):
         "composition": composition,
         "clean_composition": clean_composition,
         "captioned_composition": captioned_composition,
+        "composition_versions": composition_versions,
         "asset_updates_available": asset_updates_available,
         "counts": {
             "total": len(shots),
