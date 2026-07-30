@@ -1,0 +1,198 @@
+<section class="cover-workspace" aria-labelledby="cover-workspace-title">
+  <section class="surface-panel">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Cover Master</p>
+        <h2 id="cover-workspace-title">全剧封面母版</h2>
+      </div>
+      {% if workspace.cover_template %}
+        <span class="status-pill success">母版 v{{ workspace.cover_template.version }}</span>
+      {% endif %}
+    </div>
+
+    <div class="cover-format-grid">
+      <figure class="cover-format-preview is-landscape">
+        <div class="cover-format-canvas">
+          {% if workspace.cover_template %}
+            <img src="{{ workspace.cover_template.background_url }}" alt="{{ workspace.cover_show_title }} 横版封面母版">
+            <div class="cover-master-copy">
+              <strong>{{ workspace.cover_show_title }}</strong>
+              <span>{{ workspace.cover_protagonist }}</span>
+            </div>
+          {% else %}
+            <div class="cover-preview-placeholder">4:3</div>
+          {% endif %}
+        </div>
+        <figcaption><strong>横封面</strong><span>4:3 · 1600 × 1200</span></figcaption>
+      </figure>
+
+      <figure class="cover-format-preview is-portrait">
+        <div class="cover-format-canvas">
+          {% if workspace.cover_template.portrait_background_url %}
+            <img src="{{ workspace.cover_template.portrait_background_url }}" alt="{{ workspace.cover_show_title }} 竖版封面母版">
+            <div class="cover-master-copy">
+              <strong>{{ workspace.cover_show_title }}</strong>
+              <span>{{ workspace.cover_protagonist }}</span>
+            </div>
+          {% else %}
+            <div class="cover-preview-placeholder">3:4</div>
+          {% endif %}
+        </div>
+        <figcaption><strong>竖封面</strong><span>3:4 · 1200 × 1600</span></figcaption>
+      </figure>
+
+      <figure class="cover-format-preview is-xiaohongshu">
+        <div class="cover-format-canvas">
+          {% if workspace.cover_template.xiaohongshu_background_url %}
+            <img src="{{ workspace.cover_template.xiaohongshu_background_url }}" alt="{{ workspace.cover_show_title }} 小红书封面母版">
+          {% else %}
+            <div class="cover-preview-placeholder">7:10</div>
+          {% endif %}
+        </div>
+        <figcaption><strong>小红书封面</strong><span>7:10 · 1050 × 1500</span></figcaption>
+      </figure>
+
+      <figure class="cover-format-preview is-douyin">
+        <div class="cover-format-canvas">
+          {% if workspace.cover_template.douyin_background_url %}
+            <img src="{{ workspace.cover_template.douyin_background_url }}" alt="{{ workspace.cover_show_title }} 抖音封面母版">
+          {% else %}
+            <div class="cover-preview-placeholder">2:3</div>
+          {% endif %}
+        </div>
+        <figcaption><strong>抖音封面</strong><span>2:3 · 1080 × 1620</span></figcaption>
+      </figure>
+    </div>
+
+    {% if workspace.cover_template %}
+      <div class="cover-master-downloads">
+        <a class="secondary-link" href="{% url 'studio:download_cover_master' workspace.id 'landscape' %}?script_id={{ workspace.script_id }}">下载 4:3 母版</a>
+        {% if workspace.cover_template.portrait_background_url %}
+          <a class="secondary-link" href="{% url 'studio:download_cover_master' workspace.id 'portrait' %}?script_id={{ workspace.script_id }}">下载 3:4 母版</a>
+        {% endif %}
+        {% if workspace.cover_template.xiaohongshu_background_url %}
+          <a class="secondary-link" href="{% url 'studio:download_cover_master' workspace.id 'xiaohongshu' %}?script_id={{ workspace.script_id }}">下载小红书母版</a>
+        {% endif %}
+        {% if workspace.cover_template.douyin_background_url %}
+          <a class="secondary-link" href="{% url 'studio:download_cover_master' workspace.id 'douyin' %}?script_id={{ workspace.script_id }}">下载抖音母版</a>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    <form class="cover-generator-form" method="post" action="{% url 'studio:generate_cover' workspace.id %}" data-submit-guard>
+      {% csrf_token %}
+      <input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+      <label class="field">
+        <span>封面底图 Prompt</span>
+        <textarea name="prompt" rows="6" required>{{ workspace.cover_prompt }}</textarea>
+      </label>
+      <div class="cover-generator-actions">
+        <span><strong>{{ workspace.cover_show_title }}</strong> · {{ workspace.cover_protagonist }}</span>
+        <button class="primary-button" type="submit" data-loading-text="提交生成中..." {% if workspace.cover_task.status == 'pending' or workspace.cover_task.status == 'running' or workspace.cover_task.status == 'retry_wait' %}disabled{% endif %}>
+          {% if workspace.cover_template %}重新生成四种母版{% else %}生成四种母版{% endif %}
+        </button>
+      </div>
+    </form>
+
+    {% if workspace.cover_template_versions %}
+      <div class="cover-version-section" aria-labelledby="cover-version-title">
+        <div class="cover-version-heading">
+          <h3 id="cover-version-title">母版版本</h3>
+          <span>四种母版同步切换</span>
+        </div>
+        <div class="cover-version-list">
+          {% for version in workspace.cover_template_versions %}
+            <form method="post" action="{% url 'studio:select_cover_template_version' workspace.id version.version %}" data-submit-guard>
+              {% csrf_token %}
+              <input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+              <button class="cover-version-button{% if version.is_selected %} is-selected{% endif %}" type="submit" aria-label="切换到封面母版 v{{ version.version }}" {% if version.is_selected %}aria-current="true" disabled{% endif %}>
+                <span class="cover-version-pair">
+                  <span class="cover-version-thumb is-landscape"><img src="{{ version.background_url }}" alt=""></span>
+                  <span class="cover-version-thumb is-portrait">
+                    {% if version.portrait_background_url %}<img src="{{ version.portrait_background_url }}" alt="">{% endif %}
+                  </span>
+                  <span class="cover-version-thumb is-xiaohongshu">
+                    {% if version.xiaohongshu_background_url %}<img src="{{ version.xiaohongshu_background_url }}" alt="">{% endif %}
+                  </span>
+                  <span class="cover-version-thumb is-douyin">
+                    {% if version.douyin_background_url %}<img src="{{ version.douyin_background_url }}" alt="">{% endif %}
+                  </span>
+                </span>
+                <span class="cover-version-meta">
+                  <strong>v{{ version.version }}</strong>
+                  <small>{{ version.created_at|date:"m-d H:i" }}</small>
+                </span>
+                {% if version.is_selected %}<span class="cover-version-current">当前</span>{% endif %}
+              </button>
+            </form>
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
+
+    {% with task=workspace.cover_task %}
+      {% if task.status == "pending" or task.status == "running" or task.status == "retry_wait" %}
+        <div class="task-status is-running" data-task-poller data-task-url="{% url 'studio:task_status' task.id %}" data-task-kind="cover-image" aria-live="polite">
+          <span class="task-indicator" aria-hidden="true"></span>
+          <div><strong data-task-label>正在生成四种封面母版</strong><p data-task-detail>4:3 和 3:4 会排版逐集封面，平台母版只生成一张。</p></div>
+        </div>
+      {% elif task.status == "failed" %}
+        <div class="task-status is-error" role="alert">
+          <span class="task-indicator" aria-hidden="true"></span>
+          <div><strong>封面母版生成失败</strong><p>{{ task.error_message }}</p></div>
+        </div>
+      {% endif %}
+    {% endwith %}
+  </section>
+
+  <section class="surface-panel">
+    <div class="section-head">
+      <div><p class="eyebrow">Episode Covers</p><h2>逐集封面标题</h2></div>
+      {% if workspace.cover_template %}
+        <div class="cover-section-actions">
+          <span class="status-pill">标题最多 10 字</span>
+          <a class="secondary-link cover-download-all" href="{% url 'studio:download_all_episode_covers' workspace.id %}?script_id={{ workspace.script_id }}">
+            <span aria-hidden="true">&#8595;</span>
+            下载全部
+          </a>
+        </div>
+      {% endif %}
+    </div>
+
+    {% if workspace.cover_template %}
+      <div class="cover-episode-list">
+        {% for episode in workspace.episodes %}
+          <article class="cover-episode-row">
+            <div class="cover-episode-index">{{ episode.episode|stringformat:"02d" }}</div>
+            <div class="cover-episode-previews">
+              <div class="cover-episode-thumb is-landscape">
+                {% if episode.cover_image_url %}<img src="{{ episode.cover_image_url }}" alt="第 {{ episode.episode }} 集横版封面">{% endif %}
+              </div>
+              <div class="cover-episode-thumb is-portrait">
+                {% if episode.cover_portrait_image_url %}<img src="{{ episode.cover_portrait_image_url }}" alt="第 {{ episode.episode }} 集竖版封面">{% endif %}
+              </div>
+            </div>
+            <form class="cover-title-form" method="post" action="{% url 'studio:update_episode_cover' workspace.id episode.episode %}" data-submit-guard>
+              {% csrf_token %}
+              <input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+              <label>
+                <span>第 {{ episode.episode }} 集标题</span>
+                <input type="text" name="title" value="{{ episode.cover_title }}" maxlength="10" required>
+                <small class="cover-title-meta">{{ episode.title }}</small>
+              </label>
+              <button class="secondary-button small" type="submit">更新横竖封面</button>
+            </form>
+            {% if episode.has_cover %}
+              <div class="cover-download-links">
+                <a class="secondary-link" href="{% url 'studio:download_episode_cover' workspace.id episode.episode %}?script_id={{ workspace.script_id }}&amp;variant=landscape">横版</a>
+                {% if episode.has_portrait_cover %}<a class="secondary-link" href="{% url 'studio:download_episode_cover' workspace.id episode.episode %}?script_id={{ workspace.script_id }}&amp;variant=portrait">竖版</a>{% endif %}
+              </div>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-state compact"><h2>先生成封面母版</h2><p>母版生成后，系统会自动生成全部逐集封面。</p></div>
+    {% endif %}
+  </section>
+</section>

@@ -1,4 +1,13 @@
 (() => {
+  document.querySelectorAll("form[data-confirm]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      if (!window.confirm(form.dataset.confirm || "Confirm this action?")) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    });
+  });
+
   const modal = document.getElementById("film-player");
   if (!(modal instanceof HTMLElement)) return;
 

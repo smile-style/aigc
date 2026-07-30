@@ -9,6 +9,7 @@ class Project(models.Model):
     genre = models.CharField(max_length=120)
     episode_count = models.PositiveIntegerField()
     episode_duration_minutes = models.PositiveIntegerField()
+    workflow_generate_captioned_video = models.BooleanField(default=False)
     selected_outline = models.ForeignKey(
         "Outline",
         null=True,
@@ -50,6 +51,7 @@ class Outline(models.Model):
     raw_payload = models.JSONField(default=dict)
     is_usable = models.BooleanField(default=False, db_index=True)
     usable_at = models.DateTimeField(null=True, blank=True)
+    is_removed_from_library = models.BooleanField(default=False, db_index=True)
     is_archived = models.BooleanField(default=False, db_index=True)
     script_status = models.CharField(
         max_length=20,
@@ -225,6 +227,18 @@ class CoverTemplate(models.Model):
     )
     prompt_snapshot = models.TextField()
     background = models.FileField(upload_to="covers/templates/%Y/%m/%d")
+    portrait_background = models.FileField(
+        upload_to="covers/templates/%Y/%m/%d",
+        blank=True,
+    )
+    xiaohongshu_background = models.FileField(
+        upload_to="covers/templates/%Y/%m/%d",
+        blank=True,
+    )
+    douyin_background = models.FileField(
+        upload_to="covers/templates/%Y/%m/%d",
+        blank=True,
+    )
     source_url = models.URLField(blank=True, max_length=1000)
     model = models.CharField(max_length=120)
     style_payload = models.JSONField(default=dict, blank=True)
@@ -242,6 +256,18 @@ class CoverTemplateVersion(models.Model):
     )
     prompt_snapshot = models.TextField()
     background = models.FileField(upload_to="covers/templates/%Y/%m/%d")
+    portrait_background = models.FileField(
+        upload_to="covers/templates/%Y/%m/%d",
+        blank=True,
+    )
+    xiaohongshu_background = models.FileField(
+        upload_to="covers/templates/%Y/%m/%d",
+        blank=True,
+    )
+    douyin_background = models.FileField(
+        upload_to="covers/templates/%Y/%m/%d",
+        blank=True,
+    )
     source_url = models.URLField(blank=True, max_length=1000)
     model = models.CharField(max_length=120)
     style_payload = models.JSONField(default=dict, blank=True)
@@ -271,6 +297,10 @@ class EpisodeCover(models.Model):
     title = models.CharField(max_length=20)
     title_customized = models.BooleanField(default=False)
     image = models.FileField(upload_to="covers/episodes/%Y/%m/%d")
+    portrait_image = models.FileField(
+        upload_to="covers/episodes/%Y/%m/%d",
+        blank=True,
+    )
     template_version = models.PositiveIntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

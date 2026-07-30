@@ -125,15 +125,19 @@ def test_finished_films_are_grouped_by_project_and_latest_version(client, tmp_pa
             status=VideoComposition.STATUS_DRAFT,
         )
 
-        response = client.get(reverse("studio:finished_films"))
+        default_response = client.get(reverse("studio:finished_films"))
+        response = client.get(
+            reverse("studio:finished_films"), {"project": first_outline.id}
+        )
 
     projects = {item["project_id"]: item for item in response.context["film_projects"]}
     first_episode_row = projects[first_outline.id]["episodes"][0]
     assert response.status_code == 200
-    assert set(projects) == {first_outline.id, second_outline.id}
+    assert set(projects) == {first_outline.id}
+    assert default_response.context["film_projects"][0]["project_id"] == second_outline.id
     assert first_episode_row["latest"].id == latest.id
     assert [item.id for item in first_episode_row["history"]] == [old.id]
-    assert response.context["film_count"] == 3
+    assert response.context["film_count"] == 2
 
 
 def test_finished_film_download_targets_exact_version(client, tmp_path):
@@ -231,7 +235,7 @@ def test_douyin_is_manual_package_only_in_web_ui(client):
     assert reverse("studio:download_douyin_package", args=[composition.id]) in html
     assert 'data-copy-target="douyin-title-' in html
     assert "https://creator.douyin.com/" in html
-    assert "20260728-douyin-package" in html
+    assert "20260729-history-delete" in html
     assert reverse(
         "studio:publishing_oauth_login",
         args=[PublishingAccount.PLATFORM_DOUYIN],
@@ -397,28 +401,36 @@ def test_finished_films_support_status_search_project_and_sort_filters(client):
         dedup_key="published-dedup",
     )
 
-    response = client.get(reverse("studio:finished_films"))
+    default_response = client.get(reverse("studio:finished_films"))
+    response = client.get(
+        reverse("studio:finished_films"), {"project": first_outline.id}
+    )
 
     assert response.status_code == 200
     assert response.context["film_stats"] == {
-        "ready": 3,
-        "unpublished": 2,
+        "ready": 2,
+        "unpublished": 1,
         "publishing": 0,
         "published": 1,
         "attention": 0,
     }
+    assert default_response.context["filters"]["project"] == str(second_outline.id)
     html = response.content.decode()
     assert "film-summary-grid" in html
     assert "film-play-button" in html
     assert 'id="film-player"' in html
 
     published = client.get(
-        reverse("studio:finished_films"), {"status": "published"}
+        reverse("studio:finished_films"),
+        {"project": first_outline.id, "status": "published"},
     )
     assert published.context["filtered_count"] == 1
     assert published.context["film_projects"][0]["project_id"] == first_outline.id
 
-    searched = client.get(reverse("studio:finished_films"), {"q": "Second"})
+    searched = client.get(
+        reverse("studio:finished_films"),
+        {"project": second_outline.id, "q": "Second"},
+    )
     assert searched.context["filtered_count"] == 1
     assert searched.context["film_projects"][0]["project_id"] == second_outline.id
 
@@ -435,3 +447,84 @@ def test_finished_films_support_status_search_project_and_sort_filters(client):
         item["number"]
         for item in sorted_response.context["film_projects"][0]["episodes"]
     ] == [2, 1]
+
+def test_delete_finished_film_removes_history_record_and_file(
+    client, tmp_path, django_capture_on_commit_callbacks
+):
+    with override_settings(MEDIA_ROOT=tmp_path):
+        workspace = make_workspace()
+        outline, _, episode = make_project(workspace, "delete-history", "Delete history")
+        old = VideoComposition.objects.create(
+            episode=episode,
+            version=1,
+            status=VideoComposition.STATUS_READY,
+            exported_at=timezone.now() - timedelta(hours=1),
+        )
+        old.video.save("old.mp4", ContentFile(b"old"))
+        old_path = Path(old.video.path)
+        latest = VideoComposition.objects.create(
+            episode=episode,
+            version=2,
+            status=VideoComposition.STATUS_READY,
+            exported_at=timezone.now(),
+        )
+        latest.video.save("latest.mp4", ContentFile(b"latest"))
+
+        with django_capture_on_commit_callbacks(execute=True):
+            response = client.post(
+                reverse("studio:delete_finished_film", args=[old.id])
+            )
+
+    assert response.status_code == 302
+    assert f"project={outline.id}" in response["Location"]
+    assert not VideoComposition.objects.filter(pk=old.id).exists()
+    assert not old_path.exists()
+    assert VideoComposition.objects.filter(pk=latest.id).exists()
+
+
+def test_delete_finished_film_blocks_latest_and_published_history(client, tmp_path):
+    with override_settings(MEDIA_ROOT=tmp_path):
+        workspace = make_workspace()
+        _, _, episode = make_project(workspace, "protected-history", "Protected history")
+        old = VideoComposition.objects.create(
+            episode=episode,
+            version=1,
+            status=VideoComposition.STATUS_READY,
+            video="films/old.mp4",
+            exported_at=timezone.now() - timedelta(hours=1),
+        )
+        latest = VideoComposition.objects.create(
+            episode=episode,
+            version=2,
+            status=VideoComposition.STATUS_READY,
+            video="films/latest.mp4",
+            exported_at=timezone.now(),
+        )
+        account = PublishingAccount.objects.create(
+            platform=PublishingAccount.PLATFORM_BILIBILI,
+            remote_account_id="protected-history",
+            display_name="Protected history",
+            credential_ciphertext="encrypted",
+        )
+        PublishingTask.objects.create(
+            composition=old,
+            account=account,
+            platform=account.platform,
+            content_hash="protected-history",
+            dedup_key="protected-history",
+        )
+
+        old_response = client.post(reverse("studio:delete_finished_film", args=[old.id]))
+        latest_response = client.post(reverse("studio:delete_finished_film", args=[latest.id]))
+
+    assert old_response.status_code == 302
+    assert latest_response.status_code == 302
+    assert VideoComposition.objects.filter(pk__in=[old.id, latest.id]).count() == 2
+
+def test_finished_films_renders_empty_library(client):
+    response = client.get(reverse("studio:finished_films"))
+
+    assert response.status_code == 200
+    assert response.context["film_projects"] == []
+    assert response.context["project_options"] == []
+    assert response.context["film_count"] == 0

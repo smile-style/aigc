@@ -286,7 +286,7 @@ def test_workflow_payload_reports_ordered_steps():
     assert payload["progress_percent"] == 8
     assert payload["steps"][0]["key"] == EpisodeWorkflowRun.STAGE_SCRIPT
     assert payload["steps"][0]["status"] == "running"
-    assert payload["steps"][-1]["key"] == EpisodeWorkflowRun.STAGE_CAPTIONED_EXPORT
+    assert payload["steps"][-1]["key"] == EpisodeWorkflowRun.STAGE_CLEAN_EXPORT
     assert payload["auto_retry_count"] == 0
     assert payload["auto_retry_max"] == 3
     assert payload["auto_retrying"] is False
@@ -536,3 +536,110 @@ def test_subtitle_offset_invalidates_qc_result():
     updated = ensure_subtitle_qc(track)
     assert updated.passed is False
     assert updated.reason == "rule_fail:out_of_bounds"
+def test_workflow_panel_default_expansion_follows_status():
+    _, _, episode = make_episode()
+    run, _ = create_episode_workflow(episode)
+
+    running_html = render_to_string(
+        "studio/_episode_workflow.html",
+        {"workflow": workflow_payload(run)},
+    )
+    assert "<details" in running_html
+    assert " open" in running_html.partition(">")[0]
+
+    run.status = EpisodeWorkflowRun.STATUS_SUCCEEDED
+    run.stage = EpisodeWorkflowRun.STAGE_COMPLETE
+    run.progress_percent = 100
+    run.save(update_fields=["status", "stage", "progress_percent"])
+    succeeded_html = render_to_string(
+        "studio/_episode_workflow.html",
+        {"workflow": workflow_payload(run)},
+    )
+    assert " open" not in succeeded_html.partition(">")[0]
+
+    run.status = EpisodeWorkflowRun.STATUS_FAILED
+    run.error_message = "failed"
+    run.save(update_fields=["status", "error_message"])
+    failed_html = render_to_string(
+        "studio/_episode_workflow.html",
+        {"workflow": workflow_payload(run)},
+    )
+    assert " open" in failed_html.partition(">")[0]
+
+
+def test_workflow_without_captioned_video_stops_after_clean_export():
+    project, _, episode = make_episode(full_script="Script")
+    make_ready_shot(episode)
+    clean = VideoComposition.objects.create(
+        episode=episode,
+        version=1,
+        variant=VideoComposition.VARIANT_CLEAN,
+        status=VideoComposition.STATUS_READY,
+        video="videos/clean.mp4",
+    )
+    run = EpisodeWorkflowRun.objects.create(
+        episode=episode,
+        status=EpisodeWorkflowRun.STATUS_RUNNING,
+        stage=EpisodeWorkflowRun.STAGE_CLEAN_EXPORT,
+        progress_percent=74,
+        details={"generate_captioned_video": False},
+    )
+
+    project.workflow_generate_captioned_video = True
+    project.save(update_fields=["workflow_generate_captioned_video"])
+    run = advance_episode_workflow(run.id)
+
+    assert run.status == EpisodeWorkflowRun.STATUS_SUCCEEDED
+    assert run.stage == EpisodeWorkflowRun.STAGE_COMPLETE
+    assert run.details["clean_composition_id"] == clean.id
+    assert run.details["generate_captioned_video"] is False
+    assert not SubtitleTrack.objects.filter(episode=episode).exists()
+    assert not episode.video_compositions.filter(
+        variant=VideoComposition.VARIANT_CAPTIONED
+    ).exists()
+    assert [step["key"] for step in workflow_payload(run)["steps"]][-1] == (
+        EpisodeWorkflowRun.STAGE_CLEAN_EXPORT
+    )
+
+
+def test_start_workflow_saves_caption_choice_as_project_default_and_run_snapshot(client):
+    project, script, episode = make_episode()
+
+    response = client.post(
+        reverse(
+            "studio:start_episode_workflow",
+            args=[project.workspace_id, episode.episode_number],
+        ),
+        {"script_id": script.id},
+    )
+
+    assert response.status_code == 302
+    project.refresh_from_db()
+    run = EpisodeWorkflowRun.objects.get(episode=episode)
+    assert project.workflow_generate_captioned_video is False
+    assert run.details["generate_captioned_video"] is False
+
+    run.status = EpisodeWorkflowRun.STATUS_SUCCEEDED
+    run.stage = EpisodeWorkflowRun.STAGE_COMPLETE
+    run.save(update_fields=["status", "stage"])
+    response = client.post(
+        reverse(
+            "studio:start_episode_workflow",
+            args=[project.workspace_id, episode.episode_number],
+        ),
+        {"script_id": script.id, "generate_captioned_video": "1"},
+    )
+
+    assert response.status_code == 302
+    project.refresh_from_db()
+    latest_run = EpisodeWorkflowRun.objects.filter(episode=episode).first()
+    assert project.workflow_generate_captioned_video is True
+    assert latest_run.details["generate_captioned_video"] is True
+
+
+def test_new_projects_disable_captioned_video_by_default():
+    project, _, episode = make_episode()
+    run, created = create_episode_workflow(episode)
+
+    assert created is True
+    assert run.details["generate_captioned_video"] is False

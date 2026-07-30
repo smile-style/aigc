@@ -2,10 +2,20 @@
 from django.http import HttpResponse
 from django.urls import reverse
 from django.utils import timezone
+from io import BytesIO
+from zipfile import ZipFile
 
 from studio.llm.image_provider import ImageResult
 from studio.constants import GENRES
-from studio.models import Episode, GenerationTask, Outline, Project, Script
+from studio.models import (
+    CharacterAsset,
+    Episode,
+    GenerationTask,
+    Outline,
+    Project,
+    Script,
+    VideoComposition,
+)
 from studio.repositories.workspace import WorkspaceRepository
 
 pytestmark = pytest.mark.django_db
@@ -755,6 +765,88 @@ def test_script_page_defaults_to_episode_workspace(client):
     assert 'class="character-grid"' not in content
 
 
+def test_script_page_reports_available_video_version_statuses(client):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    first_episode = Episode.objects.get(
+        script_id=workspace["script_id"],
+        episode_number=1,
+    )
+    second_episode = Episode.objects.get(
+        script_id=workspace["script_id"],
+        episode_number=2,
+    )
+    compositions = [
+        (VideoComposition.VARIANT_CLEAN, VideoComposition.SOURCE_GENERATED),
+        (
+            VideoComposition.VARIANT_CAPTIONED,
+            VideoComposition.SOURCE_EXTERNAL_UPLOAD,
+        ),
+        (VideoComposition.VARIANT_CAPTIONED, VideoComposition.SOURCE_GENERATED),
+    ]
+    for version, (variant, source) in enumerate(compositions, start=1):
+        VideoComposition.objects.create(
+            episode=first_episode,
+            version=version,
+            variant=variant,
+            source=source,
+            status=VideoComposition.STATUS_READY,
+            video=f"videos/episode-1-v{version}.mp4",
+        )
+    VideoComposition.objects.create(
+        episode=second_episode,
+        version=1,
+        variant=VideoComposition.VARIANT_CLEAN,
+        status=VideoComposition.STATUS_FAILED,
+        video="videos/failed.mp4",
+    )
+    VideoComposition.objects.create(
+        episode=second_episode,
+        version=2,
+        variant=VideoComposition.VARIANT_CAPTIONED,
+        source=VideoComposition.SOURCE_GENERATED,
+        status=VideoComposition.STATUS_READY,
+    )
+
+    episodes = {
+        item["episode"]: item
+        for item in read_workspace(workspace["id"])["episodes"]
+    }
+    assert episodes[1]["video_version_status"] == {
+        "clean": True,
+        "external_captioned": True,
+        "generated_captioned": True,
+    }
+    assert episodes[2]["video_version_status"] == {
+        "clean": False,
+        "external_captioned": False,
+        "generated_captioned": False,
+    }
+
+    response = client.get(reverse("studio:script", args=[workspace["id"]]))
+    content = response.content.decode("utf-8")
+    assert "&#26080;&#23383;&#24149;&#25104;&#29255;" in content
+    assert "&#22806;&#37096;&#19978;&#20256;&#23383;&#24149;&#25104;&#29255;" in content
+    assert "&#31995;&#32479;&#23383;&#24149;&#25104;&#29255;" in content
+
+    first_episode.video_compositions.filter(
+        source=VideoComposition.SOURCE_EXTERNAL_UPLOAD,
+    ).delete()
+
+    episodes = {
+        item["episode"]: item
+        for item in read_workspace(workspace["id"])["episodes"]
+    }
+    assert episodes[1]["video_version_status"]["external_captioned"] is False
+    response = client.get(reverse("studio:script", args=[workspace["id"]]))
+    assert (
+        "&#22806;&#37096;&#19978;&#20256;&#23383;&#24149;&#25104;&#29255;"
+        not in response.content.decode("utf-8")
+    )
+
+
 def test_script_page_opens_character_assets_from_query_string(client):
     workspace = write_workspace(
         script_plan=script_payload()["script_plan"],
@@ -890,6 +982,102 @@ def test_character_image_can_be_downloaded_from_script_page(client, settings, tm
     assert 'filename="Chen Mo-v1.png"' in download_response["Content-Disposition"]
 
 
+def test_all_character_images_download_skips_characters_without_images(
+    client, settings, tmp_path
+):
+    settings.MEDIA_ROOT = tmp_path
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    profiles = character_profiles() + [
+        {
+            "name": "Lin Yue",
+            "role": "Supporting",
+            "appearance": "Short hair",
+            "personality": "Direct",
+            "costume": "Utility jacket",
+            "image_prompt": "Supporting character sheet",
+        }
+    ]
+    repository = WorkspaceRepository()
+    repository.save_character_profiles(workspace["id"], profiles)
+    current = repository.get_workspace(workspace["id"])
+    generated = current["characters"][0]
+    repository.save_character_asset(
+        workspace["id"],
+        generated["id"],
+        ImageResult(b"chen-mo-image", ".png", "", "fake-image-model"),
+    )
+    download_url = reverse(
+        "studio:download_all_character_images", args=[workspace["id"]]
+    )
+
+    page_response = client.get(
+        f'{reverse("studio:script", args=[workspace["id"]])}?view=characters'
+    )
+    response = client.get(download_url, {"script_id": current["script_id"]})
+    archive = ZipFile(BytesIO(b"".join(response.streaming_content)))
+
+    assert page_response.status_code == 200
+    assert download_url in page_response.content.decode("utf-8")
+    assert response.status_code == 200
+    assert archive.namelist() == ["01-Chen Mo-v1.png"]
+    assert archive.read("01-Chen Mo-v1.png") == b"chen-mo-image"
+    assert all("Lin Yue" not in name for name in archive.namelist())
+
+
+def test_all_character_images_download_is_unavailable_without_images(client):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    repository = WorkspaceRepository()
+    repository.save_character_profiles(workspace["id"], character_profiles())
+    current = repository.get_workspace(workspace["id"])
+    download_url = reverse(
+        "studio:download_all_character_images", args=[workspace["id"]]
+    )
+
+    page_response = client.get(
+        f'{reverse("studio:script", args=[workspace["id"]])}?view=characters'
+    )
+    response = client.get(download_url, {"script_id": current["script_id"]})
+
+    assert page_response.status_code == 200
+    assert download_url not in page_response.content.decode("utf-8")
+    assert response.status_code == 404
+
+
+def test_character_image_download_returns_404_when_stored_file_is_missing(
+    client, settings, tmp_path
+):
+    settings.MEDIA_ROOT = tmp_path
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script=script_payload()["episode_1_script"],
+    )
+    repository = WorkspaceRepository()
+    repository.save_character_profiles(workspace["id"], character_profiles())
+    character = repository.get_workspace(workspace["id"])["characters"][0]
+    repository.save_character_asset(
+        workspace["id"],
+        character["id"],
+        ImageResult(b"temporary-image", ".png", "", "fake-image-model"),
+    )
+    asset = CharacterAsset.objects.get(character_id=character["id"])
+    asset.image.storage.delete(asset.image.name)
+
+    response = client.get(
+        reverse(
+            "studio:download_character_image",
+            args=[workspace["id"], character["id"]],
+        )
+    )
+
+    assert response.status_code == 404
+
+
 def test_character_image_worker_reapplies_persisted_visual_style(monkeypatch):
     workspace = write_workspace(
         script_plan=script_payload()["script_plan"],
@@ -946,3 +1134,67 @@ def test_script_page_shows_character_profile_failure(client):
     assert response.status_code == 200
     assert "角色设定生成失败" in content
     assert "模型网关暂时不可用（HTTP 502），请稍后重试。" in content
+
+def test_remove_usable_outline_hides_it_without_deleting_project_data(client):
+    repository = WorkspaceRepository()
+    workspace = repository.replace_current_outline_set(GENRES[0], outline_payload())
+    first_id = workspace["outlines"][0]["id"]
+    second_id = workspace["outlines"][1]["id"]
+    repository.mark_outline_usable(workspace["id"], first_id)
+    repository.mark_outline_usable(workspace["id"], second_id)
+    repository.update_workspace(workspace["id"], selected_outline_id=first_id)
+
+    project = Project.objects.get(workspace_id=workspace["id"])
+    first = Outline.objects.get(project=project, outline_id=first_id)
+    second = Outline.objects.get(project=project, outline_id=second_id)
+    script = Script.objects.create(project=project, outline=first, plan_payload=[])
+
+    response = client.post(
+        reverse("studio:remove_outline_from_library"),
+        {
+            "workspace_id": workspace["id"],
+            "outline_id": first_id,
+            "next": "script_index",
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.url == reverse("studio:script_index")
+    first.refresh_from_db()
+    project.refresh_from_db()
+    assert first.is_usable is True
+    assert first.is_removed_from_library is True
+    assert Script.objects.filter(pk=script.id).exists()
+    assert project.selected_outline_id == second.id
+    assert first_id not in {
+        item["id"] for item in repository.list_usable_outlines()["usable_outlines"]
+    }
+    assert repository.get_project_workspace(first.id)["project_id"] == first.id
+
+
+def test_mark_outline_usable_restores_removed_outline():
+    repository = WorkspaceRepository()
+    workspace = repository.replace_current_outline_set(GENRES[0], outline_payload())
+    outline_id = workspace["outlines"][0]["id"]
+    repository.mark_outline_usable(workspace["id"], outline_id)
+    repository.remove_outline_from_library(workspace["id"], outline_id)
+
+    restored = repository.mark_outline_usable(workspace["id"], outline_id)
+    outline = Outline.objects.get(outline_id=outline_id)
+
+    assert outline.is_removed_from_library is False
+    assert outline_id in {item["id"] for item in restored["usable_outlines"]}
+
+
+def test_script_library_renders_remove_outline_action(client):
+    repository = WorkspaceRepository()
+    workspace = repository.replace_current_outline_set(GENRES[0], outline_payload())
+    outline_id = workspace["outlines"][0]["id"]
+    repository.mark_outline_usable(workspace["id"], outline_id)
+
+    response = client.get(reverse("studio:script_index"))
+
+    assert response.status_code == 200
+    assert reverse("studio:remove_outline_from_library") in response.content.decode(
+        "utf-8"
+    )

@@ -96,6 +96,29 @@
   gap: 3px;
 }
 
+.episode-workflow-head {
+  cursor: pointer;
+  list-style: none;
+}
+
+.episode-workflow-head::-webkit-details-marker { display: none; }
+
+.episode-workflow-toggle {
+  width: 9px;
+  height: 9px;
+  margin-left: 4px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform 160ms ease;
+}
+
+.episode-workflow-panel[open] .episode-workflow-toggle {
+  transform: rotate(225deg);
+}
+
+.episode-workflow-body { padding-top: 2px; }
+
 .episode-workflow-head strong {
   color: var(--text);
   font-size: 14px;
@@ -171,3 +194,28 @@
 }
 
 .episode-automation-actions form { margin: 0; }
+
+.workflow-caption-option {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.workflow-caption-option input {
+  width: 17px;
+  min-height: 17px;
+  margin: 0;
+  accent-color: var(--cyan);
+}
+
+.episode-row-actions form:has(.workflow-caption-option),
+.episode-automation-actions form:has(.workflow-caption-option) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}

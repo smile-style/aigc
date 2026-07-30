@@ -412,3 +412,18 @@ def _load_font(size):
     raise ValueError(
         "找不到可用的中文封面字体，请通过 COVER_FONT_PATH 配置字体文件。"
     )
+
+# Keep the public cover service API stable while the format-specific rendering
+# lives in a focused module.
+from .cover_formats import (  # noqa: E402,F401
+    DOUYIN_GENERATION_SIZE,
+    LANDSCAPE_GENERATION_SIZE,
+    PORTRAIT_GENERATION_SIZE,
+    XIAOHONGSHU_GENERATION_SIZE,
+    cover_prompt_for_variant,
+    build_cover_prompt,
+    decorate_cover_workspace,
+    render_episode_cover,
+    save_cover_template,
+    switch_cover_template_version,
+)

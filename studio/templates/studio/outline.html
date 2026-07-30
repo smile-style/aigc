@@ -46,8 +46,12 @@
             </div>
             <div class="card-actions">
               <button class="ghost-button" type="button" data-outline-detail-target="outline-detail-{{ forloop.counter }}">查看详情</button>
-              {% if outline.is_usable %}
+              {% if outline.is_usable and not outline.is_removed_from_library %}
                 <span class="status-pill success">已可用</span>
+                <form method="post" action="{% url 'studio:remove_outline_from_library' %}" data-confirm-submit="&#30830;&#23450;&#31227;&#20986; {{ outline.title }} &#21527;&#65311;&#19981;&#20250;&#21024;&#38500;&#24050;&#26377;&#20869;&#23481;&#12290;">
+                  {% csrf_token %}<input type="hidden" name="workspace_id" value="{{ workspace.id }}"><input type="hidden" name="outline_id" value="{{ outline.id }}">
+                  <button class="danger-button compact-button" type="submit" aria-label="&#31227;&#38500;&#21487;&#29992;&#22823;&#32434; {{ outline.title }}">&#31227;&#38500;</button>
+                </form>
               {% else %}
                 <form method="post" action="{% url 'studio:mark_outline_usable' %}" data-submit-guard>
                   {% csrf_token %}
@@ -76,8 +80,12 @@
                 <div><dt>长线梗概</dt><dd>{{ outline.arc_summary }}</dd></div>
               </dl>
               <div class="modal-actions">
-                {% if outline.is_usable %}
+                {% if outline.is_usable and not outline.is_removed_from_library %}
                   <span class="status-pill success">已加入剧本加工</span>
+                  <form method="post" action="{% url 'studio:remove_outline_from_library' %}" data-confirm-submit="&#30830;&#23450;&#31227;&#20986; {{ outline.title }} &#21527;&#65311;&#19981;&#20250;&#21024;&#38500;&#24050;&#26377;&#20869;&#23481;&#12290;">
+                    {% csrf_token %}<input type="hidden" name="workspace_id" value="{{ workspace.id }}"><input type="hidden" name="outline_id" value="{{ outline.id }}">
+                    <button class="danger-button compact-button" type="submit" aria-label="&#31227;&#38500;&#21487;&#29992;&#22823;&#32434; {{ outline.title }}">&#31227;&#38500;</button>
+                  </form>
                 {% else %}
                   <form method="post" action="{% url 'studio:mark_outline_usable' %}" data-submit-guard>
                     {% csrf_token %}

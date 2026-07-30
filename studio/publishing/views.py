@@ -1,5 +1,6 @@
 from io import BytesIO
 
+from django.db import transaction
 from django.http import Http404, HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -51,29 +52,64 @@ def create_task_view(request):
         ),
         pk=request.POST.get("composition_id"),
     )
-    account = get_object_or_404(PublishingAccount, pk=request.POST.get("account_id"))
+    raw_account_ids = request.POST.getlist("account_ids")
+    if not raw_account_ids and request.POST.get("account_id"):
+        raw_account_ids = [request.POST["account_id"]]
+    try:
+        account_ids = list(dict.fromkeys(int(value) for value in raw_account_ids))
+    except (TypeError, ValueError):
+        account_ids = []
+    accounts_by_id = {
+        account.id: account
+        for account in PublishingAccount.objects.filter(pk__in=account_ids)
+    }
+    accounts = [accounts_by_id[value] for value in account_ids if value in accounts_by_id]
+    if not accounts or len(accounts) != len(account_ids):
+        message = "\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u4e2a\u53d1\u5e03\u8d26\u53f7\u3002"
+        if request.headers.get("Accept") == "application/json":
+            return JsonResponse({"ok": False, "error": message}, status=400)
+        return HttpResponseBadRequest(message)
+    platforms = [account.platform for account in accounts]
+    if len(platforms) != len(set(platforms)):
+        message = "\u6bcf\u4e2a\u5e73\u53f0\u4e00\u6b21\u53ea\u80fd\u9009\u62e9\u4e00\u4e2a\u8d26\u53f7\u3002"
+        if request.headers.get("Accept") == "application/json":
+            return JsonResponse({"ok": False, "error": message}, status=400)
+        return HttpResponseBadRequest(message)
+
     cover = getattr(composition.episode, "cover", None)
     try:
-        task, created = create_publishing_task(
-            composition,
-            account,
-            {
-                "title": request.POST.get("title"),
-                "description": request.POST.get("description"),
-                "tid": request.POST.get("tid"),
-                "tags": request.POST.get("tags"),
-                "copyright": request.POST.get("copyright"),
-                "source": request.POST.get("source"),
-                "cover": cover.image.name if cover and cover.image else "",
-            },
-            force_republish=request.POST.get("force_republish") == "1",
-        )
+        results = []
+        with transaction.atomic():
+            for account in accounts:
+                task, created = create_publishing_task(
+                    composition,
+                    account,
+                    {
+                        "title": request.POST.get("title"),
+                        "description": request.POST.get("description"),
+                        "tid": request.POST.get(f"tid_{account.platform}") or request.POST.get("tid"),
+                        "tags": request.POST.get("tags"),
+                        "copyright": request.POST.get("copyright"),
+                        "source": request.POST.get("source"),
+                        "cover": cover.image.name if cover and cover.image else "",
+                    },
+                    force_republish=request.POST.get("force_republish") == "1",
+                )
+                results.append((task, created))
     except PublishingError as exc:
         if request.headers.get("Accept") == "application/json":
             return JsonResponse({"ok": False, "error": str(exc), "details": exc.details}, status=400)
         return HttpResponseBadRequest(str(exc))
     if request.headers.get("Accept") == "application/json":
-        return JsonResponse({"ok": True, "created": created, "task": serialize_task(task)})
+        serialized = [serialize_task(task) for task, _ in results]
+        return JsonResponse(
+            {
+                "ok": True,
+                "created": all(created for _, created in results),
+                "task": serialized[0],
+                "tasks": serialized,
+            }
+        )
     return redirect("studio:publishing_tasks")
 
 

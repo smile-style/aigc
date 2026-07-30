@@ -14,3 +14,4 @@ db.sqlite3
 workspace/*.json
 logs/*.log
 .tmp/
+deploy/**/backups/

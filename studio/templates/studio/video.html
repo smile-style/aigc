@@ -147,6 +147,11 @@
                 <div><strong>v{{ version.version }}</strong><span>{% if version.source == 'external_upload' %}&#22806;&#37096;&#23383;&#24149;&#29256;{% elif version.variant == 'captioned' %}&#24179;&#21488;&#23383;&#24149;&#29256;{% else %}&#26080;&#23383;&#24149;&#29256;{% endif %}</span>{% if composition.id == version.id %}<small>&#24403;&#21069;</small>{% endif %}</div>
                 <time datetime="{{ version.exported_at|date:'c' }}">{{ version.exported_at|date:"m-d H:i" }}</time>
                 <a class="ghost-button small" href="{% url 'studio:download_finished_film' version.id %}">&#19979;&#36733;</a>
+                {% if composition.id != version.id and not version.publishing_tasks.exists %}
+                  <form class="composition-version-delete" method="post" action="{% url 'studio:delete_finished_film' version.id %}" data-confirm-submit="&#30830;&#23450;&#21024;&#38500;&#36825;&#20010;&#21382;&#21490;&#25104;&#29255;&#29256;&#26412;&#21527;&#65311;&#27492;&#25805;&#20316;&#20250;&#21516;&#26102;&#21024;&#38500;&#30913;&#30424;&#25991;&#20214;&#12290;">
+                    {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button class="danger-link" type="submit" aria-label="&#21024;&#38500; v{{ version.version }} &#21382;&#21490;&#29256;&#26412;">&#21024;&#38500;</button>
+                  </form>
+                {% endif %}
               </div>
             {% endfor %}
           </div>

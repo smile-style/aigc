@@ -14,9 +14,93 @@ document.addEventListener("DOMContentLoaded", () => {
     const sourceInput = sourceField?.querySelector("input");
     const error = form.querySelector("[data-publish-error]");
     const submit = form.querySelector("button[type='submit']");
+    const platformCards = [];
+
+    if (account instanceof HTMLSelectElement && partition instanceof HTMLSelectElement) {
+      const accountLabel = account.closest("label");
+      const partitionLabel = partition.closest("label");
+      const grid = form.querySelector(".publish-form-grid");
+      const platformGrid = document.createElement("div");
+      platformGrid.className = "publish-platform-grid field-wide";
+
+      [
+        { key: "bilibili", label: "Bilibili", partitionLabel: "Bilibili \u5206\u533a" },
+        { key: "acfun", label: "AcFun", partitionLabel: "AcFun \u5206\u533a" },
+      ].forEach((definition) => {
+        const sourceOptions = [...account.options].filter(
+          (option) => option.dataset.platform === definition.key
+        );
+        if (!sourceOptions.length) return;
+
+        const card = document.createElement("fieldset");
+        card.className = "publish-platform-card";
+        const toggleLabel = document.createElement("label");
+        toggleLabel.className = "publish-platform-toggle";
+        const toggle = document.createElement("input");
+        toggle.type = "checkbox";
+        const toggleText = document.createElement("span");
+        toggleText.textContent = definition.label;
+        toggleLabel.append(toggle, toggleText);
+
+        const accountField = document.createElement("label");
+        accountField.className = "publish-platform-field";
+        const accountCaption = document.createElement("span");
+        accountCaption.textContent = "\u53d1\u5e03\u8d26\u53f7";
+        const accountSelect = document.createElement("select");
+        accountSelect.name = "account_ids";
+        accountSelect.disabled = true;
+        accountSelect.append(new Option("\u8bf7\u9009\u62e9\u8d26\u53f7", ""));
+        sourceOptions.forEach((option) => accountSelect.append(option.cloneNode(true)));
+        accountField.append(accountCaption, accountSelect);
+
+        const partitionFieldNode = document.createElement("label");
+        partitionFieldNode.className = "publish-platform-field";
+        const partitionCaption = document.createElement("span");
+        partitionCaption.textContent = definition.partitionLabel;
+        const partitionSelect = document.createElement("select");
+        partitionSelect.name = `tid_${definition.key}`;
+        partitionSelect.disabled = true;
+        [...partition.options]
+          .filter((option) => option.dataset.platform === definition.key)
+          .forEach((option) => partitionSelect.append(option.cloneNode(true)));
+        partitionFieldNode.append(partitionCaption, partitionSelect);
+
+        toggle.addEventListener("change", () => {
+          accountSelect.disabled = !toggle.checked;
+          accountSelect.required = toggle.checked;
+          partitionSelect.disabled = !toggle.checked;
+          partitionSelect.required = toggle.checked;
+          card.classList.toggle("is-selected", toggle.checked);
+          updatePlatform();
+        });
+        card.append(toggleLabel, accountField, partitionFieldNode);
+        platformGrid.append(card);
+        platformCards.push({ toggle, accountSelect, partitionSelect });
+      });
+      if (platformCards.length && grid) {
+        grid.insertBefore(platformGrid, grid.firstChild);
+        if (accountLabel) accountLabel.hidden = true;
+        if (partitionLabel) partitionLabel.hidden = true;
+        account.disabled = true;
+        account.required = false;
+        partition.disabled = true;
+        partition.required = false;
+        if (platformLabel) platformLabel.textContent = "\u591a\u5e73\u53f0\u53d1\u5e03";
+      }
+    }
 
     const updateTitleCount = () => { if (counter && title) counter.textContent = String(title.value.length); };
     const updatePlatform = () => {
+      if (platformCards.length) {
+        const limits = platformCards
+          .filter((card) => card.toggle.checked)
+          .map((card) => Number(card.accountSelect.options[1]?.dataset.titleLimit || 80));
+        const limit = limits.length ? Math.min(...limits) : 80;
+        if (title) title.maxLength = limit;
+        if (titleLimit) titleLimit.textContent = String(limit);
+        updateTitleCount();
+        return;
+      }
       const selected = account?.selectedOptions[0];
       const platform = selected?.dataset.platform || "";
       const limit = Number(selected?.dataset.titleLimit || 80);
@@ -56,6 +140,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (platformCards.length && !platformCards.some((card) => card.toggle.checked)) {
+        if (error) {
+          error.textContent = "\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u4e2a\u53d1\u5e03\u5e73\u53f0\u3002";
+          error.hidden = false;
+        }
+        return;
+      }
       if (!form.reportValidity()) return;
       if (error) error.hidden = true;
       if (submit) { submit.disabled = true; submit.textContent = "正在检查..."; }

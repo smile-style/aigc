@@ -29,6 +29,7 @@ MIN_AUTOMATIC_CHARACTER_SHOTS = 6
 AUTO_RETRY_COUNT_KEY = "auto_retry_count"
 AUTO_RETRY_MESSAGE_KEY = "auto_retry_message"
 AUTO_RETRY_EXHAUSTED_KEY = "auto_retry_exhausted"
+GENERATE_CAPTIONED_VIDEO_KEY = "generate_captioned_video"
 
 ACTIVE_RUN_STATUSES = {
     EpisodeWorkflowRun.STATUS_QUEUED,
@@ -66,16 +67,28 @@ STAGE_LABELS = {
 STAGES = list(STAGE_PROGRESS)
 
 
-def create_episode_workflow(episode):
+def create_episode_workflow(episode, generate_captioned_video=None):
     with transaction.atomic():
-        episode = Episode.objects.select_for_update().get(pk=episode.pk)
+        episode = (
+            Episode.objects.select_for_update()
+            .select_related("script__project")
+            .get(pk=episode.pk)
+        )
+        project = episode.script.project
+        if generate_captioned_video is not None:
+            generate_captioned_video = bool(generate_captioned_video)
+            if project.workflow_generate_captioned_video != generate_captioned_video:
+                project.workflow_generate_captioned_video = generate_captioned_video
+                project.save(update_fields=["workflow_generate_captioned_video", "updated_at"])
         active = episode.workflow_runs.filter(status__in=ACTIVE_RUN_STATUSES).first()
         if active:
             return active, False
+        generate_captioned_video = project.workflow_generate_captioned_video
         run = EpisodeWorkflowRun.objects.create(
             episode=episode,
             status=EpisodeWorkflowRun.STATUS_RUNNING,
             stage=EpisodeWorkflowRun.STAGE_SCRIPT,
+            details={GENERATE_CAPTIONED_VIDEO_KEY: generate_captioned_video},
             progress_percent=STAGE_PROGRESS[EpisodeWorkflowRun.STAGE_SCRIPT],
             started_at=timezone.now(),
         )
@@ -186,9 +199,10 @@ def workflow_payload(run):
     auto_retry_count = int(details.get(AUTO_RETRY_COUNT_KEY) or 0)
     auto_retry_message = str(details.get(AUTO_RETRY_MESSAGE_KEY) or "")
     auto_retrying = run.status in ACTIVE_RUN_STATUSES and auto_retry_count > 0
-    current_index = STAGES.index(run.stage)
+    workflow_stages = _workflow_stages(run)
+    current_index = workflow_stages.index(run.stage)
     steps = []
-    for index, stage in enumerate(STAGES[:-1]):
+    for index, stage in enumerate(workflow_stages[:-1]):
         if run.status == EpisodeWorkflowRun.STATUS_SUCCEEDED or index < current_index:
             status = "succeeded"
         elif index == current_index:
@@ -364,13 +378,32 @@ def _handle_videos(run):
 
 
 def _handle_clean_export(run):
+    next_stage = (
+        EpisodeWorkflowRun.STAGE_SUBTITLES
+        if _generate_captioned_video(run)
+        else EpisodeWorkflowRun.STAGE_COMPLETE
+    )
     return _handle_export(
         run,
         VideoComposition.VARIANT_CLEAN,
         False,
-        EpisodeWorkflowRun.STAGE_SUBTITLES,
+        next_stage,
         78,
     )
+
+
+def _generate_captioned_video(run):
+    return bool((run.details or {}).get(GENERATE_CAPTIONED_VIDEO_KEY, True))
+
+
+def _workflow_stages(run):
+    if _generate_captioned_video(run):
+        return STAGES
+    return [
+        stage
+        for stage in STAGES
+        if stage not in {EpisodeWorkflowRun.STAGE_SUBTITLES, EpisodeWorkflowRun.STAGE_CAPTIONED_EXPORT}
+    ]
 
 
 def _handle_subtitles(run):

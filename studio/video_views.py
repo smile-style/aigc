@@ -3,11 +3,15 @@ import tempfile
 import zipfile
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from urllib.parse import urlencode
 
+from django.db import transaction
+from django.db.models import Count, F, Max
+from django.db.models.deletion import ProtectedError
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
-from django.db.models import Count, F
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_GET, require_POST
 
 from studio.models import (
@@ -100,9 +104,39 @@ def system_settings_page(request):
     )
 
 def finished_films_page(request):
-    compositions = list(
+    composition_base = (
         VideoComposition.objects.filter(status=VideoComposition.STATUS_READY)
         .exclude(video="")
+    )
+    project_options = list(
+        composition_base.values(
+            "episode__script__outline_id",
+            "episode__script__outline__title",
+        )
+        .annotate(
+            latest_activity=Max("updated_at"),
+            latest_composition_id=Max("id"),
+        )
+        .order_by("-latest_activity", "-latest_composition_id", "episode__script__outline_id")
+    )
+    selected_project = request.GET.get("project", "").strip()
+    valid_project_ids = {
+        str(row["episode__script__outline_id"]) for row in project_options
+    }
+    if selected_project not in valid_project_ids:
+        selected_project = (
+            str(project_options[0]["episode__script__outline_id"])
+            if project_options
+            else ""
+        )
+
+    selected_compositions = (
+        composition_base.filter(episode__script__outline_id=selected_project)
+        if selected_project
+        else composition_base.none()
+    )
+    compositions = list(
+        selected_compositions
         .select_related(
             "episode__cover",
             "episode__script__outline",
@@ -119,9 +153,12 @@ def finished_films_page(request):
     for task in PublishingTask.objects.filter(
         composition_id__in=[item.id for item in compositions]
     ).select_related("account").order_by("-created_at", "-id"):
-        task_map.setdefault(task.composition_id, task)
+        by_platform = task_map.setdefault(task.composition_id, {})
+        by_platform.setdefault(task.platform, task)
     for composition in compositions:
-        composition.latest_publishing_task = task_map.get(composition.id)
+        latest_tasks = list(task_map.get(composition.id, {}).values())
+        composition.latest_publishing_tasks = latest_tasks
+        composition.latest_publishing_task = latest_tasks[0] if latest_tasks else None
         package_metadata = _douyin_package_metadata(composition)
         composition.douyin_title = package_metadata["title"]
         composition.douyin_description = package_metadata["description"]
@@ -190,26 +227,29 @@ def finished_films_page(request):
     }
     for project in projects.values():
         for episode_item in project["episodes"].values():
-            task = episode_item["latest"].latest_publishing_task
-            if task and task.status == PublishingTask.STATUS_PUBLISHED:
+            tasks = episode_item["latest"].latest_publishing_tasks
+            statuses = {task.status for task in tasks}
+            if statuses and statuses == {PublishingTask.STATUS_PUBLISHED}:
                 state = "published"
-            elif task and task.status in publishing_groups["publishing"]:
+            elif statuses & publishing_groups["publishing"]:
                 state = "publishing"
-            elif task and task.status in publishing_groups["attention"]:
+            elif statuses & publishing_groups["attention"]:
                 state = "attention"
             else:
                 state = "unpublished"
             episode_item["publishing_state"] = state
             episode_item["publishing_state_label"] = state_labels[state]
 
-    all_projects = list(projects.values())
     project_options = [
-        {"id": project["project_id"], "title": project["title"]}
-        for project in all_projects
+        {
+            "id": row["episode__script__outline_id"],
+            "title": row["episode__script__outline__title"],
+        }
+        for row in project_options
     ]
     all_episode_items = [
         episode
-        for project in all_projects
+        for project in projects.values()
         for episode in project["episodes"].values()
     ]
     film_stats = {
@@ -221,7 +261,6 @@ def finished_films_page(request):
     }
 
     query = request.GET.get("q", "").strip()[:80]
-    selected_project = request.GET.get("project", "").strip()
     selected_status = request.GET.get("status", "").strip()
     selected_sort = request.GET.get("sort", "recent").strip()
     if selected_status not in {"", *state_labels}:
@@ -281,10 +320,74 @@ def finished_films_page(request):
                 "sort": selected_sort,
             },
             "publishing_accounts": publishing_accounts,
+            "film_notice": request.GET.get("notice", ""),
+            "film_error": request.GET.get("error", ""),
             "publishing_task_id": request.GET.get("publishing_task", ""),
             "active_nav": "films",
         },
     )
+
+
+@require_POST
+def delete_finished_film_view(request, composition_id):
+    composition = (
+        VideoComposition.objects.select_related("episode__script__outline")
+        .filter(pk=composition_id, status=VideoComposition.STATUS_READY)
+        .exclude(video="")
+        .first()
+    )
+    if composition is None:
+        raise Http404("Finished film not found")
+
+    project_id = composition.episode.script.outline_id
+    redirect_url = reverse("studio:finished_films")
+    next_url = request.POST.get("next", "")
+    if not url_has_allowed_host_and_scheme(
+        next_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        next_url = ""
+
+    def delete_redirect(query):
+        return redirect(next_url or f"{redirect_url}?{query}")
+
+    latest_id = (
+        VideoComposition.objects.filter(
+            episode=composition.episode,
+            status=VideoComposition.STATUS_READY,
+        )
+        .exclude(video="")
+        .order_by("-version", "-id")
+        .values_list("id", flat=True)
+        .first()
+    )
+    if composition.id == latest_id:
+        query = urlencode(
+            {"project": project_id, "error": "\u5f53\u524d\u6700\u65b0\u7248\u672c\u4e0d\u80fd\u5220\u9664\u3002"}
+        )
+        return delete_redirect(query)
+    if composition.publishing_tasks.exists():
+        query = urlencode(
+            {"project": project_id, "error": "\u8be5\u7248\u672c\u5b58\u5728\u53d1\u5e03\u8bb0\u5f55\uff0c\u4e0d\u80fd\u5220\u9664\u3002"}
+        )
+        return delete_redirect(query)
+
+    storage = composition.video.storage
+    file_name = composition.video.name
+    try:
+        with transaction.atomic():
+            composition.delete()
+            transaction.on_commit(lambda: storage.delete(file_name))
+    except ProtectedError:
+        query = urlencode(
+            {"project": project_id, "error": "\u8be5\u7248\u672c\u6b63\u5728\u88ab\u5176\u4ed6\u8bb0\u5f55\u4f7f\u7528\uff0c\u4e0d\u80fd\u5220\u9664\u3002"}
+        )
+        return delete_redirect(query)
+    query = urlencode(
+        {"project": project_id, "notice": "\u5386\u53f2\u7248\u672c\u5df2\u5220\u9664\u3002"}
+    )
+    return delete_redirect(query)
 
 
 @require_GET

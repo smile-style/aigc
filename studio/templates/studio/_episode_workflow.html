@@ -1,16 +1,19 @@
-<section class="episode-workflow-panel is-{{ workflow.status }}"
+<details class="episode-workflow-panel is-{{ workflow.status }}"
          data-episode-workflow
          data-workflow-url="{% url 'studio:episode_workflow_status' workflow.id %}"
          data-workflow-status="{{ workflow.status }}"
+         {% if workflow.status != 'succeeded' %}open{% endif %}
          aria-live="polite"
          aria-label="&#26412;&#38598;&#33258;&#21160;&#29983;&#20135;&#36827;&#24230;">
-  <div class="episode-workflow-head">
+  <summary class="episode-workflow-head">
     <div>
       <span class="episode-workflow-kicker">&#19968;&#38190;&#29983;&#25104;&#25104;&#29255;</span>
       <strong data-workflow-label>{{ workflow.stage_label }}</strong>
     </div>
     <output data-workflow-percent>{{ workflow.progress_percent }}%</output>
-  </div>
+    <span class="episode-workflow-toggle" aria-hidden="true"></span>
+  </summary>
+  <div class="episode-workflow-body">
   <progress max="100" value="{{ workflow.progress_percent }}" data-workflow-progress>{{ workflow.progress_percent }}%</progress>
   <ol class="episode-workflow-steps">
     {% for step in workflow.steps %}
@@ -40,4 +43,5 @@
       <a class="primary-button small" href="{% url 'studio:video_script_episode' workflow.workspace_id workflow.script_id workflow.episode_number %}?tab=assembly">&#26597;&#30475;&#25104;&#29255;</a>
     {% endif %}
   </div>
-</section>
+  </div>
+</details>
