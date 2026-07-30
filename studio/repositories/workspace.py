@@ -1,10 +1,11 @@
+import re
 import uuid
 from pathlib import Path
 
 from django.core.files.base import ContentFile
 
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Prefetch
 from django.utils import timezone
 
 from studio.constants import (
@@ -14,7 +15,17 @@ from studio.constants import (
     GENRES,
     PACING_PROFILE_VERSION,
 )
-from studio.models import Character, CharacterAsset, Episode, GenerationTask, Outline, Project, Script, StoryboardPrompt
+from studio.models import (
+    Character,
+    CharacterAsset,
+    Episode,
+    GenerationTask,
+    Outline,
+    Project,
+    Script,
+    StoryboardPrompt,
+    VideoComposition,
+)
 
 CURRENT_WORKSPACE_ID = "current"
 
@@ -760,12 +771,58 @@ class WorkspaceRepository:
         )
         if asset is None or not asset.image:
             raise FileNotFoundError(f"Character image not found: {character_id}")
+        try:
+            return self._character_asset_download(asset)
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            raise FileNotFoundError(
+                f"Character image not found: {character_id}"
+            ) from exc
 
-        suffix = Path(asset.image.name).suffix
+    def get_latest_character_assets(self, workspace_id, script_id):
+        try:
+            script = Script.objects.get(
+                pk=script_id,
+                project__workspace_id=workspace_id,
+            )
+        except Script.DoesNotExist as exc:
+            raise FileNotFoundError(f"Script not found: {script_id}") from exc
+
+        characters = (
+            Character.objects.filter(script=script, is_deleted=False)
+            .prefetch_related("assets")
+            .order_by("position", "id")
+        )
+        downloads = []
+        for position, character in enumerate(characters, start=1):
+            assets = list(character.assets.all())
+            asset = assets[0] if assets else None
+            if asset is None or not asset.image:
+                continue
+            try:
+                downloads.append(
+                    self._character_asset_download(
+                        asset,
+                        prefix=f"{position:02d}-",
+                    )
+                )
+            except (FileNotFoundError, OSError, ValueError):
+                continue
+        return downloads
+
+    @staticmethod
+    def _character_asset_download(asset, prefix=""):
+        suffix = Path(asset.image.name).suffix.lower() or ".png"
+        safe_name = re.sub(
+            r'[\\/:*?"<>|\x00-\x1f]+',
+            "_",
+            str(asset.character.name or ""),
+        ).strip(". ")
+        if not safe_name:
+            safe_name = f"character-{asset.character_id}"
         asset.image.open("rb")
         return {
             "file": asset.image,
-            "filename": f"{asset.character.name}-v{asset.version}{suffix}",
+            "filename": f"{prefix}{safe_name}-v{asset.version}{suffix}",
         }
 
     def mark_outline_usable(self, workspace_id, outline_id):
@@ -779,12 +836,48 @@ class WorkspaceRepository:
                 raise FileNotFoundError(f"Outline not found: {outline_id}") from exc
 
             outline.is_usable = True
+            outline.is_removed_from_library = False
             if outline.usable_at is None:
                 outline.usable_at = timezone.now()
-            outline.save(update_fields=["is_usable", "usable_at"])
+            outline.save(
+                update_fields=["is_usable", "is_removed_from_library", "usable_at"]
+            )
             workspace_id = outline.project.workspace_id
 
         return self.get_workspace(workspace_id)
+
+    def remove_outline_from_library(self, workspace_id, outline_id):
+        with transaction.atomic():
+            try:
+                outline = (
+                    Outline.objects.select_for_update()
+                    .select_related("project")
+                    .get(
+                        project__workspace_id=workspace_id,
+                        outline_id=outline_id,
+                        is_usable=True,
+                    )
+                )
+            except Outline.DoesNotExist as exc:
+                raise FileNotFoundError(f"Usable outline not found: {outline_id}") from exc
+
+            outline.is_removed_from_library = True
+            outline.save(update_fields=["is_removed_from_library"])
+            project = outline.project
+            if project.selected_outline_id == outline.id:
+                replacement = (
+                    project.outlines.filter(
+                        is_usable=True,
+                        is_removed_from_library=False,
+                    )
+                    .exclude(pk=outline.pk)
+                    .order_by("-usable_at", "-id")
+                    .first()
+                )
+                project.selected_outline = replacement
+                project.save(update_fields=["selected_outline", "updated_at"])
+
+        return outline
 
     def outline_exists(self, workspace_id, outline_id):
         return Outline.objects.filter(
@@ -798,7 +891,10 @@ class WorkspaceRepository:
         except Project.DoesNotExist as exc:
             raise FileNotFoundError(f"Workspace not found: {workspace_id}") from exc
         outlines = (
-            project.outlines.filter(is_usable=True)
+            project.outlines.filter(
+                is_usable=True,
+                is_removed_from_library=False,
+            )
             .select_related("script")
             .order_by("-usable_at", "-id")
         )
@@ -851,14 +947,34 @@ class WorkspaceRepository:
 
     def _workspace_to_dict(self, project, script_override=None, outline_override=None):
         active_outlines = project.outlines.filter(is_archived=False).order_by("position", "id")
-        usable_outlines = project.outlines.filter(is_usable=True).order_by("-usable_at", "-id")
+        usable_outlines = project.outlines.filter(
+            is_usable=True,
+            is_removed_from_library=False,
+        ).order_by("-usable_at", "-id")
         selected_outline = outline_override or (
             script_override.outline if script_override else project.selected_outline
         )
         script = script_override
         if script is None and selected_outline is not None:
             script = getattr(selected_outline, "script", None)
-        episodes = list(script.episodes.select_related("storyboard_prompt").order_by("episode_number")) if script else []
+        ready_compositions = VideoComposition.objects.filter(
+            status=VideoComposition.STATUS_READY,
+        ).exclude(video="")
+        episodes = (
+            list(
+                script.episodes.select_related("storyboard_prompt")
+                .prefetch_related(
+                    Prefetch(
+                        "video_compositions",
+                        queryset=ready_compositions,
+                        to_attr="ready_video_compositions",
+                    )
+                )
+                .order_by("episode_number")
+            )
+            if script
+            else []
+        )
         characters = list(script.characters.prefetch_related("assets")) if script else []
         characters = [character for character in characters if not character.is_deleted]
         script_choices = list(
@@ -874,6 +990,7 @@ class WorkspaceRepository:
             "genre": project.genre,
             "episode_count": project.episode_count,
             "episode_duration_minutes": project.episode_duration_minutes,
+            "workflow_generate_captioned_video": project.workflow_generate_captioned_video,
             "outlines": [self._outline_to_dict(outline) for outline in active_outlines],
             "usable_outlines": [self._outline_to_dict(outline) for outline in usable_outlines],
             "episode_duration_label": EPISODE_DURATION_LABEL,
@@ -942,6 +1059,7 @@ class WorkspaceRepository:
                 "position": outline.position,
                 "is_usable": outline.is_usable,
                 "usable_at": self._format_datetime(outline.usable_at) if outline.usable_at else "",
+                "is_removed_from_library": outline.is_removed_from_library,
                 "is_archived": outline.is_archived,
                 "has_script": self._outline_has_script(outline),
                 "script_status": outline.script_status,
@@ -1060,6 +1178,29 @@ class WorkspaceRepository:
 
     def _episode_to_dict(self, episode):
         storyboard = getattr(episode, "storyboard_prompt", None)
+        ready_compositions = getattr(episode, "ready_video_compositions", None)
+        if ready_compositions is None:
+            ready_compositions = list(
+                episode.video_compositions.filter(
+                    status=VideoComposition.STATUS_READY,
+                ).exclude(video="")
+            )
+        video_version_status = {
+            "clean": any(
+                composition.variant == VideoComposition.VARIANT_CLEAN
+                for composition in ready_compositions
+            ),
+            "external_captioned": any(
+                composition.variant == VideoComposition.VARIANT_CAPTIONED
+                and composition.source == VideoComposition.SOURCE_EXTERNAL_UPLOAD
+                for composition in ready_compositions
+            ),
+            "generated_captioned": any(
+                composition.variant == VideoComposition.VARIANT_CAPTIONED
+                and composition.source == VideoComposition.SOURCE_GENERATED
+                for composition in ready_compositions
+            ),
+        }
         return {
             "episode": episode.episode_number,
             "title": episode.title,
@@ -1079,6 +1220,7 @@ class WorkspaceRepository:
             "pacing_payload": episode.pacing_payload,
             "has_storyboard": storyboard is not None,
             "storyboard_count": len(storyboard.prompts_payload) if storyboard else 0,
+            "video_version_status": video_version_status,
             "script_started_at": (
                 self._format_datetime(episode.script_started_at)
                 if episode.script_started_at

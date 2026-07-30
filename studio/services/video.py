@@ -4,8 +4,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
+from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import Max, Q
@@ -25,7 +27,13 @@ from studio.models import (
     VideoComposition,
 )
 from studio.services.model_config import assigned_model, ensure_default_video_models, video_provider_for
-from studio.services.subtitles import is_subtitle_stale, render_ass, render_srt, subtitle_snapshot
+from studio.services.subtitles import (
+    is_subtitle_stale,
+    render_ass,
+    render_srt,
+    retime_subtitle_snapshot,
+    subtitle_snapshot,
+)
 
 
 ACTIVE_VIDEO_STATUSES = {
@@ -333,7 +341,14 @@ def queue_export(episode, include_subtitles=None):
         subtitle_data = subtitle_snapshot(track, assets=selected)
         if not subtitle_data.get("cues"):
             include_subtitles = False
+            variant = VideoComposition.VARIANT_CLEAN
             subtitle_data = {}
+        else:
+            from studio.services.subtitle_qc import ensure_subtitle_qc
+
+            qc_result = ensure_subtitle_qc(track)
+            if not qc_result.passed:
+                raise ValueError(f"字幕质检未通过：{qc_result.reason}")
     version = (episode.video_compositions.aggregate(value=Max("version"))["value"] or 0) + 1
     composition = VideoComposition.objects.create(
         episode=episode,
@@ -367,7 +382,11 @@ def process_export_task(task_id):
         asset_map = {asset.id: asset for asset in assets}
         ordered = [asset_map[asset_id] for asset_id in task.input_snapshot["video_asset_ids"]]
         subtitle_data = task.input_snapshot.get("subtitle_snapshot") or {}
-        content = _ffmpeg_concat(ordered, subtitle_snapshot=subtitle_data)
+        content, subtitle_data = _ffmpeg_concat(
+            ordered,
+            subtitle_snapshot=subtitle_data,
+            return_subtitle_snapshot=True,
+        )
         composition.video.save("result.mp4", ContentFile(content), save=False)
         if composition.include_subtitles and subtitle_data:
             composition.subtitle_file.save(
@@ -375,17 +394,163 @@ def process_export_task(task_id):
                 ContentFile(render_srt(subtitle_data).encode("utf-8")),
                 save=False,
             )
+        composition.subtitle_snapshot = subtitle_data
         composition.content_hash = hashlib.sha256(content).hexdigest()
         composition.status = VideoComposition.STATUS_READY
         composition.error_message = ""
         composition.exported_at = timezone.now()
         composition.save()
-        _finish_task(task, {"composition_id": composition.id, "video_url": composition.video.url})
+        _finish_task(
+            task,
+            {
+                "composition_id": composition.id,
+                "video_url": composition.video.url,
+                "subtitle_timeline": subtitle_data.get("timeline", {}),
+            },
+        )
     except Exception as exc:
         composition.status = VideoComposition.STATUS_FAILED
         composition.error_message = str(exc)
         composition.save(update_fields=["status", "error_message", "updated_at"])
         _fail_task(task, exc)
+    return composition
+
+
+@contextmanager
+def _uploaded_video_path(uploaded_file):
+    temporary_path = getattr(uploaded_file, "temporary_file_path", None)
+    if callable(temporary_path):
+        yield Path(temporary_path())
+        return
+    suffix = Path(uploaded_file.name or "upload.mp4").suffix.lower() or ".mp4"
+    with tempfile.NamedTemporaryFile(prefix="aigc-upload-", suffix=suffix) as target:
+        for chunk in uploaded_file.chunks():
+            target.write(chunk)
+        target.flush()
+        uploaded_file.seek(0)
+        yield Path(target.name)
+
+
+def _probe_video_metadata(video_path):
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise ValueError("?????? FFprobe????????????")
+    try:
+        result = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration:stream=codec_type,codec_name,width,height",
+                "-of",
+                "json",
+                str(video_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        payload = json.loads(result.stdout)
+        duration_ms = round(float(payload.get("format", {}).get("duration")) * 1000)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, subprocess.SubprocessError) as exc:
+        raise ValueError("?????????????????????? MP4?") from exc
+    streams = payload.get("streams") or []
+    video_stream = next((item for item in streams if item.get("codec_type") == "video"), None)
+    audio_stream = next((item for item in streams if item.get("codec_type") == "audio"), None)
+    if not video_stream or duration_ms <= 0:
+        raise ValueError("???????????????")
+    return {
+        "duration_ms": duration_ms,
+        "video_codec": str(video_stream.get("codec_name") or "").lower(),
+        "audio_codec": str((audio_stream or {}).get("codec_name") or "").lower(),
+        "width": int(video_stream.get("width") or 0),
+        "height": int(video_stream.get("height") or 0),
+    }
+
+
+def _validate_external_video(metadata, clean_duration_ms):
+    if metadata["video_codec"] != "h264":
+        raise ValueError("??? H.264 ??? MP4?????????? H.264 ??????")
+    if metadata["audio_codec"] != "aac":
+        raise ValueError("?????? AAC ????????????????")
+    width = metadata["width"]
+    height = metadata["height"]
+    if not width or not height or width >= height or abs(width / height - 9 / 16) > 0.02:
+        raise ValueError("????? 9:16 ??????? 720x1280 ? 1080x1920?")
+    tolerance_ms = settings.EXTERNAL_VIDEO_DURATION_TOLERANCE_MS
+    difference_ms = abs(metadata["duration_ms"] - clean_duration_ms)
+    if difference_ms > tolerance_ms:
+        raise ValueError(
+            f"??????????? {difference_ms / 1000:.2f} ??"
+            f"????? {tolerance_ms / 1000:.2f} ??"
+        )
+
+
+def import_external_captioned_video(episode, uploaded_file):
+    if uploaded_file is None:
+        raise ValueError("????????????")
+    original_name = Path(uploaded_file.name or "").name
+    if Path(original_name).suffix.lower() != ".mp4":
+        raise ValueError("????? MP4 ???")
+    if uploaded_file.size <= 0:
+        raise ValueError("???????????????")
+    if uploaded_file.size > settings.EXTERNAL_VIDEO_MAX_UPLOAD_BYTES:
+        limit_gib = settings.EXTERNAL_VIDEO_MAX_UPLOAD_BYTES / (1024 ** 3)
+        raise ValueError(f"?????? {limit_gib:g} GiB ???")
+
+    clean = episode.video_compositions.filter(
+        variant=VideoComposition.VARIANT_CLEAN,
+        status=VideoComposition.STATUS_READY,
+    ).exclude(video="").first()
+    if clean is None:
+        raise ValueError("????????????????????")
+
+    with _uploaded_video_path(uploaded_file) as upload_path:
+        metadata = _probe_video_metadata(upload_path)
+    clean_metadata = None
+    if not clean.video_duration_ms:
+        try:
+            clean_metadata = _probe_video_metadata(clean.video.path)
+        except (NotImplementedError, ValueError) as exc:
+            raise ValueError("?????????????????????????") from exc
+    clean_duration_ms = clean.video_duration_ms or clean_metadata["duration_ms"]
+    _validate_external_video(metadata, clean_duration_ms)
+
+    if clean_metadata:
+        clean.video_duration_ms = clean_metadata["duration_ms"]
+        clean.video_width = clean_metadata["width"]
+        clean.video_height = clean_metadata["height"]
+        clean.save(update_fields=["video_duration_ms", "video_width", "video_height", "updated_at"])
+
+    uploaded_file.seek(0)
+    with transaction.atomic():
+        type(episode).objects.select_for_update().get(pk=episode.pk)
+        version = (episode.video_compositions.aggregate(value=Max("version"))["value"] or 0) + 1
+        composition = VideoComposition(
+            episode=episode,
+            version=version,
+            variant=VideoComposition.VARIANT_CAPTIONED,
+            status=VideoComposition.STATUS_READY,
+            source=VideoComposition.SOURCE_EXTERNAL_UPLOAD,
+            original_filename=original_name,
+            video_duration_ms=metadata["duration_ms"],
+            video_width=metadata["width"],
+            video_height=metadata["height"],
+            include_subtitles=True,
+            exported_at=timezone.now(),
+        )
+        composition.video.save(original_name, uploaded_file, save=False)
+        digest = hashlib.sha256()
+        composition.video.open("rb")
+        try:
+            for chunk in iter(lambda: composition.video.read(1024 * 1024), b""):
+                digest.update(chunk)
+        finally:
+            composition.video.close()
+        composition.content_hash = digest.hexdigest()
+        composition.save()
     return composition
 
 
@@ -425,6 +590,9 @@ def video_page_data(episode, sync=False):
     captioned_composition = VideoComposition.objects.filter(
         episode=episode, variant=VideoComposition.VARIANT_CAPTIONED
     ).first()
+    composition_versions = list(
+        VideoComposition.objects.filter(episode=episode).exclude(video="").order_by("-version", "-id")[:8]
+    )
     composition = captioned_composition or clean_composition
     asset_updates_available = sum(
         1
@@ -438,6 +606,7 @@ def video_page_data(episode, sync=False):
         "composition": composition,
         "clean_composition": clean_composition,
         "captioned_composition": captioned_composition,
+        "composition_versions": composition_versions,
         "asset_updates_available": asset_updates_available,
         "counts": {
             "total": len(shots),
@@ -558,7 +727,12 @@ def _fail_task(task, error):
     )
 
 
-def _ffmpeg_concat(assets, subtitle_snapshot=None):
+def _ffmpeg_concat(
+    assets,
+    subtitle_snapshot=None,
+    *,
+    return_subtitle_snapshot=False,
+):
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("未找到 FFmpeg，请先安装 FFmpeg 后再导出。")
@@ -568,6 +742,7 @@ def _ffmpeg_concat(assets, subtitle_snapshot=None):
     with tempfile.TemporaryDirectory(prefix="aigc-video-") as temp_dir:
         temp = Path(temp_dir)
         normalized = []
+        normalized_durations_ms = []
         for index, asset in enumerate(assets, start=1):
             output = temp / f"normalized-{index:03d}.mp4"
             video_filter = (
@@ -596,6 +771,10 @@ def _ffmpeg_concat(assets, subtitle_snapshot=None):
             )
             _run_ffmpeg(command, cwd=temp)
             normalized.append(output)
+            if subtitle_snapshot and subtitle_snapshot.get("shots"):
+                normalized_durations_ms.append(
+                    _probe_video_duration_ms(ffprobe, output)
+                )
         concat_file = temp / "concat.txt"
         concat_file.write_text("".join(f"file '{path.as_posix()}'\n" for path in normalized), encoding="utf-8")
         clean_result = temp / "episode-clean.mp4"
@@ -607,10 +786,16 @@ def _ffmpeg_concat(assets, subtitle_snapshot=None):
             ],
             cwd=temp,
         )
+        effective_subtitles = subtitle_snapshot or {}
+        if effective_subtitles.get("shots"):
+            effective_subtitles = retime_subtitle_snapshot(
+                effective_subtitles,
+                normalized_durations_ms,
+            )
         result = clean_result
-        if subtitle_snapshot and subtitle_snapshot.get("cues"):
+        if effective_subtitles.get("cues"):
             ass_path = temp / "subtitles.ass"
-            ass_path.write_text(render_ass(subtitle_snapshot), encoding="utf-8")
+            ass_path.write_text(render_ass(effective_subtitles), encoding="utf-8")
             result = temp / "episode.mp4"
             _run_ffmpeg(
                 [
@@ -623,7 +808,33 @@ def _ffmpeg_concat(assets, subtitle_snapshot=None):
                 ],
                 cwd=temp,
             )
-        return result.read_bytes()
+        content = result.read_bytes()
+        if return_subtitle_snapshot:
+            return content, effective_subtitles
+        return content
+
+
+def _probe_video_duration_ms(ffprobe, video_path):
+    result = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(video_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    try:
+        return max(100, round(float(result.stdout.strip()) * 1000))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"无法读取标准化视频时长：{video_path}") from exc
 
 
 def _has_audio_stream(ffprobe, video_path):

@@ -5,8 +5,8 @@
 
 {% block extra_scripts %}
   {% load static %}
-  <script src="{% static 'studio/publishing.js' %}?v=20260724-publishing" defer></script>
-  <script src="{% static 'studio/films.js' %}?v=20260727-films-library" defer></script>
+  <script src="{% static 'studio/publishing.js' %}?v=20260729-multi-platform" defer></script>
+  <script src="{% static 'studio/films.js' %}?v=20260729-history-delete" defer></script>
 {% endblock %}
 
 {% block content %}
@@ -21,6 +21,8 @@
       <strong>{{ film_count }}</strong><span>个版本</span>
     </div>
   </header>
+  {% if film_notice %}<div class="alert success-alert" role="status">{{ film_notice }}</div>{% endif %}
+  {% if film_error %}<div class="alert error-alert" role="alert">{{ film_error }}</div>{% endif %}
   <section class="film-summary-grid" aria-label="Film library status">
     <div><span>&#24050;&#25104;&#29255;</span><strong>{{ film_stats.ready }}</strong></div>
     <div><span>&#24453;&#21457;&#24067;</span><strong>{{ film_stats.unpublished }}</strong></div>
@@ -37,7 +39,6 @@
     <label>
       <span class="sr-only">&#39033;&#30446;</span>
       <select name="project">
-        <option value="">&#20840;&#37096;&#39033;&#30446;</option>
         {% for option in project_options %}<option value="{{ option.id }}" {% if filters.project == option.id|stringformat:"s" %}selected{% endif %}>{{ option.title }}</option>{% endfor %}
       </select>
     </label>
@@ -110,12 +111,13 @@
                     <a class="ghost-button" href="{% url 'studio:download_finished_film' episode.latest.id %}">下载成片</a>
                   </div>
                   <div class="film-publish-actions">
-                    {% if publishing_accounts %}<button class="secondary-button" type="button" data-modal-target="publish-composition-{{ episode.latest.id }}">发布到 Bilibili</button>{% else %}<a class="secondary-button" href="{% url 'studio:system_settings' %}">连接发布账号</a>{% endif %}
+                    <button class="secondary-button douyin-package-button" type="button" data-modal-target="douyin-package-{{ episode.latest.id }}">抖音发布包</button>
+                    {% if publishing_accounts %}<button class="secondary-button" type="button" data-modal-target="publish-composition-{{ episode.latest.id }}">发布到平台</button>{% else %}<a class="secondary-button" href="{% url 'studio:system_settings' %}">连接发布账号</a>{% endif %}
                   </div>
                   {% if episode.latest.latest_publishing_task %}
                     {% with task=episode.latest.latest_publishing_task %}
                       <div class="film-publish-state" data-publishing-task="{{ task.id }}" data-status="{{ task.status }}">
-                        <div><span data-task-stage>{{ task.get_stage_display }}</span><strong data-task-status>{{ task.get_status_display }}</strong></div>
+                        <div><span><b>{{ task.get_platform_display }}</b> &middot; <span data-task-stage>{{ task.get_stage_display }}</span></span><strong data-task-status>{{ task.get_status_display }}</strong></div>
                         <progress max="100" value="{{ task.progress_percent }}" data-task-progress></progress>
                         <span data-task-percent>{{ task.progress_percent }}%</span>
                         <small data-task-error>{{ task.error_message }}</small>
@@ -123,18 +125,32 @@
                       </div>
                     {% endwith %}
                   {% endif %}
+                  {% for task in episode.latest.latest_publishing_tasks|slice:"1:" %}
+                    <div class="film-publish-state" data-publishing-task="{{ task.id }}" data-status="{{ task.status }}">
+                      <div><span><b>{{ task.get_platform_display }}</b> &middot; <span data-task-stage>{{ task.get_stage_display }}</span></span><strong data-task-status>{{ task.get_status_display }}</strong></div>
+                      <progress max="100" value="{{ task.progress_percent }}" data-task-progress></progress>
+                      <span data-task-percent>{{ task.progress_percent }}%</span>
+                      <small data-task-error>{{ task.error_message }}</small>
+                      {% if task.remote_url %}<a href="{{ task.remote_url }}" target="_blank" rel="noopener">Open</a>{% endif %}
+                    </div>
+                  {% endfor %}
+
                   {% if episode.history %}
                     <details class="film-history">
                       <summary>历史版本 {{ episode.history|length }}</summary>
                       <div class="film-history-list">
                         {% for version in episode.history %}
                           <div><span>v{{ version.version }} · {{ version.exported_at|date:"Y-m-d H:i" }}</span><a href="{% url 'studio:download_finished_film' version.id %}">下载</a></div>
+                          <form class="film-history-delete" method="post" action="{% url 'studio:delete_finished_film' version.id %}" data-confirm="&#30830;&#23450;&#21024;&#38500;&#36825;&#20010;&#21382;&#21490;&#25104;&#29255;&#29256;&#26412;&#21527;&#65311;&#27492;&#25805;&#20316;&#20250;&#21516;&#26102;&#21024;&#38500;&#30913;&#30424;&#25991;&#20214;&#12290;">
+                            {% csrf_token %}<button class="danger-link" type="submit" aria-label="&#21024;&#38500; v{{ version.version }} &#21382;&#21490;&#29256;&#26412;">&#21024;&#38500;</button>
+                          </form>
                         {% endfor %}
                       </div>
                     </details>
                   {% endif %}
                 </div>
                 {% include "studio/publishing/_dialog.html" with composition=episode.latest %}
+                {% include "studio/publishing/_douyin_package_dialog.html" with composition=episode.latest %}
               </article>
             {% endfor %}
           </div>

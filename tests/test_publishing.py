@@ -246,7 +246,7 @@ def test_publishing_pages_and_status_api(client, tmp_path, monkeypatch):
     settings = client.get(reverse("studio:system_settings"))
 
     assert films.status_code == 200
-    assert "发布到 Bilibili" in films.content.decode("utf-8")
+    assert "发布到平台" in films.content.decode("utf-8")
     assert tasks.status_code == 200
     assert "平台投稿进度" in tasks.content.decode("utf-8")
     assert status.json()["tasks"][0]["status"] == "queued"
@@ -274,3 +274,42 @@ def test_create_task_view_returns_existing_duplicate(client, tmp_path, monkeypat
     assert first.json()["created"] is True
     assert second.json()["created"] is False
     assert PublishingTask.objects.count() == 1
+
+def test_create_task_view_creates_independent_tasks_for_two_platforms(
+    client, tmp_path, monkeypatch
+):
+    _, composition = make_composition(tmp_path)
+    bilibili = make_account()
+    acfun = PublishingAccount.objects.create(
+        platform=PublishingAccount.PLATFORM_ACFUN,
+        remote_account_id="acfun-account",
+        display_name="AcFun account",
+        credential_ciphertext=encode_credentials({"cookie": "acfun-session"}),
+    )
+    monkeypatch.setattr(
+        "studio.publishing.service.get_platform",
+        lambda name: permissive_platform(),
+    )
+    payload = {
+        "composition_id": composition.id,
+        "account_ids": [str(bilibili.id), str(acfun.id)],
+        "tid_bilibili": "21",
+        "tid_acfun": "190",
+        **metadata(),
+    }
+
+    response = client.post(
+        reverse("studio:publishing_task_create"),
+        payload,
+        HTTP_ACCEPT="application/json",
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()["tasks"]) == 2
+    assert {
+        (task.platform, task.account_id, str(task.metadata_snapshot["tid"]))
+        for task in PublishingTask.objects.order_by("platform")
+    } == {
+        (PublishingAccount.PLATFORM_BILIBILI, bilibili.id, "21"),
+        (PublishingAccount.PLATFORM_ACFUN, acfun.id, "190"),
+    }

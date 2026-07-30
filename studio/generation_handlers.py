@@ -5,7 +5,11 @@ from studio.services.characters import (
     generate_character_profiles,
 )
 from studio.services.covers import (
-    COVER_GENERATION_SIZE,
+    DOUYIN_GENERATION_SIZE,
+    LANDSCAPE_GENERATION_SIZE,
+    PORTRAIT_GENERATION_SIZE,
+    XIAOHONGSHU_GENERATION_SIZE,
+    cover_prompt_for_variant,
     save_cover_template,
 )
 from studio.services.model_config import image_provider_for, llm_provider_for
@@ -202,14 +206,40 @@ def handle_cover_generation(task):
         project=task.project,
     )
     prompt = snapshot["prompt"]
-    result = image_provider_for().generate_image(
-        prompt,
-        size=COVER_GENERATION_SIZE,
+    provider = image_provider_for()
+    landscape_result = provider.generate_image(
+        cover_prompt_for_variant(prompt, "landscape"),
+        size=LANDSCAPE_GENERATION_SIZE,
     )
-    template = save_cover_template(script, result, prompt)
+    portrait_result = provider.generate_image(
+        cover_prompt_for_variant(prompt, "portrait"),
+        size=PORTRAIT_GENERATION_SIZE,
+    )
+    xiaohongshu_result = provider.generate_image(
+        cover_prompt_for_variant(prompt, "xiaohongshu"),
+        size=XIAOHONGSHU_GENERATION_SIZE,
+    )
+    douyin_result = provider.generate_image(
+        cover_prompt_for_variant(prompt, "douyin"),
+        size=DOUYIN_GENERATION_SIZE,
+    )
+    template = save_cover_template(
+        script,
+        landscape_result,
+        portrait_result,
+        prompt_snapshot=prompt,
+        xiaohongshu_result=xiaohongshu_result,
+        douyin_result=douyin_result,
+    )
     return {
         "script_id": script.id,
         "cover_template_id": template.id,
+        "cover_formats": [
+            "landscape_4_3",
+            "portrait_3_4",
+            "xiaohongshu_7_10_master",
+            "douyin_2_3_master",
+        ],
         "cover_version": template.version,
     }
 

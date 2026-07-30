@@ -1,5 +1,7 @@
 .worktrees/
 .env
+!deploy/pre/.env
+!deploy/prod/.env
 deploy/.env
 .venv/
 venv/
@@ -12,3 +14,4 @@ db.sqlite3
 workspace/*.json
 logs/*.log
 .tmp/
+deploy/**/backups/

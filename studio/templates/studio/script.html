@@ -79,13 +79,17 @@
     </a>
   </nav>
 
-  {% if script_view == "covers" %}{% include "studio/_covers.html" %}{% endif %}
+  {% if script_view == "covers" %}{% include "studio/_covers_dual.html" %}{% endif %}
 
   {% if script_view == "characters" %}
 
   <section class="surface-panel">
     <div class="section-head">
       <div><p class="eyebrow">Character Bible</p><h2>人物角色资产</h2></div>
+      <div class="character-section-actions">
+      {% if character_image_count %}
+        <a class="secondary-link" href="{% url 'studio:download_all_character_images' workspace.id %}?script_id={{ workspace.script_id }}">下载全部角色图片</a>
+      {% endif %}
       {% if workspace.episodes %}
         <form method="post" action="{% url 'studio:generate_characters' workspace.id %}" data-submit-guard>
           {% csrf_token %}
@@ -104,6 +108,7 @@
           <button class="secondary-button" type="submit" data-loading-text="提交中...">{% if workspace.characters %}重新生成角色设定{% else %}生成角色设定{% endif %}</button>
         </form>
       {% endif %}
+      </div>
     </div>
 
     {% with task=workspace.character_profile_task %}
@@ -187,6 +192,9 @@
             <div class="episode-state">
               {% if episode.has_script %}<span class="status-pill success">剧本已完成</span>{% elif episode.script_status == "generating" %}<span class="status-pill info">剧本生成中</span>{% else %}<span class="status-pill muted">待生成剧本</span>{% endif %}
               {% if episode.has_storyboard %}<span class="status-pill success">{{ episode.storyboard_count }} 个分镜</span>{% endif %}
+              {% if episode.video_version_status.clean %}<span class="status-pill muted">&#26080;&#23383;&#24149;&#25104;&#29255;</span>{% endif %}
+              {% if episode.video_version_status.external_captioned %}<span class="status-pill info">&#22806;&#37096;&#19978;&#20256;&#23383;&#24149;&#25104;&#29255;</span>{% endif %}
+              {% if episode.video_version_status.generated_captioned %}<span class="status-pill success">&#31995;&#32479;&#23383;&#24149;&#25104;&#29255;</span>{% endif %}
             </div>
             <div class="episode-row-actions">
               {% if episode.workflow.status == 'queued' or episode.workflow.status == 'running' %}
@@ -200,6 +208,7 @@
               {% else %}
                 <form method="post" action="{% url 'studio:start_episode_workflow' workspace.id episode.episode %}" data-submit-guard>
                   {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+                  <label class="workflow-caption-option"><input type="checkbox" name="generate_captioned_video" value="1" {% if workspace.workflow_generate_captioned_video %}checked{% endif %}>&#29983;&#25104;&#23383;&#24149;&#29256;</label>
                   <button class="primary-button small" type="submit" data-loading-text="&#27491;&#22312;&#21551;&#21160;...">&#19968;&#38190;&#29983;&#25104;&#25104;&#29255;</button>
                 </form>
               {% endif %}
@@ -254,6 +263,7 @@
                   {% else %}
                     <form method="post" action="{% url 'studio:start_episode_workflow' workspace.id episode.episode %}" data-submit-guard>
                       {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+                      <label class="workflow-caption-option"><input type="checkbox" name="generate_captioned_video" value="1" {% if workspace.workflow_generate_captioned_video %}checked{% endif %}>&#29983;&#25104;&#23383;&#24149;&#29256;</label>
                       <button class="primary-button" type="submit" data-loading-text="&#27491;&#22312;&#21551;&#21160;...">&#19968;&#38190;&#29983;&#25104;&#25104;&#29255;</button>
                     </form>
                   {% endif %}

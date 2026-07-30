@@ -20,7 +20,10 @@ def start_episode_workflow_view(request, workspace_id, episode_number):
         episode_number,
         request.POST.get("script_id"),
     )
-    run, _ = create_episode_workflow(episode)
+    run, _ = create_episode_workflow(
+        episode,
+        generate_captioned_video="generate_captioned_video" in request.POST,
+    )
     return redirect(
         _episode_script_url(episode)
         + "?workflow="

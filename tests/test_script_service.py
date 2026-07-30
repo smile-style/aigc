@@ -222,6 +222,25 @@ def test_validate_script_payload_accepts_int_episode_number():
     assert payload["script_plan"][0]["episode"] == 1
 
 
+@pytest.mark.parametrize(("start_second", "end_second"), [(1, 3), (0, 5), (4, 7)])
+def test_validate_script_payload_normalizes_model_crisis_open_timing(
+    start_second,
+    end_second,
+):
+    payload = make_payload()
+    payload["episode_1_pacing"]["beats"][0]["start_second"] = start_second
+    payload["episode_1_pacing"]["beats"][0]["end_second"] = end_second
+    payload["episode_1_pacing"]["beats"][1]["start_second"] = end_second
+
+    result = validate_script_payload(payload)
+
+    crisis, goal = result["episode_1_pacing"]["beats"][:2]
+    assert crisis["start_second"] == 0
+    assert crisis["end_second"] == 3
+    assert goal["start_second"] == 3
+
+
+
 def test_validate_script_payload_rejects_wrong_episode_number():
     script_plan = [make_episode(i) for i in range(1, 61)]
     script_plan[0]["episode"] = 99

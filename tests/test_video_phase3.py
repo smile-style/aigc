@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from django.core.files.base import ContentFile
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
 from studio.llm.video_provider import BailianVideoProvider
@@ -30,8 +31,10 @@ from studio.services.model_config import ensure_default_video_models, normalize_
 from studio.services.subtitles import (
     generate_subtitle_cues,
     process_subtitle_task,
+    recognize_speech_alignment,
     render_ass,
     render_srt,
+    retime_subtitle_snapshot,
     save_shot_subtitle,
     save_subtitle_style,
     save_subtitle_track,
@@ -430,6 +433,128 @@ def test_ready_composition_can_be_downloaded_and_reexported(client):
     assert "&#19979;&#36733;&#26377;&#23383;&#24149;&#29256;&#26412;" in content
     assert "disabled" in content
 
+
+def test_external_captioned_video_upload_creates_ready_version(client, settings, tmp_path, monkeypatch):
+    settings.MEDIA_ROOT = tmp_path
+    project, episode, _ = make_episode(with_character=False)
+    clean = VideoComposition.objects.create(
+        episode=episode,
+        version=1,
+        variant=VideoComposition.VARIANT_CLEAN,
+        status=VideoComposition.STATUS_READY,
+        video_duration_ms=10000,
+        video_width=720,
+        video_height=1280,
+    )
+    clean.video.save("clean.mp4", ContentFile(b"clean-video"))
+    monkeypatch.setattr(
+        "studio.services.video._probe_video_metadata",
+        lambda path: {
+            "duration_ms": 10400,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+            "width": 1080,
+            "height": 1920,
+        },
+    )
+
+    response = client.post(
+        reverse(
+            "studio:upload_external_captioned_video",
+            args=[project.workspace_id, episode.episode_number],
+        ),
+        {
+            "script_id": episode.script_id,
+            "video": SimpleUploadedFile(
+                "captioned-final.mp4",
+                b"external-captioned-video",
+                content_type="video/mp4",
+            ),
+        },
+    )
+
+    assert response.status_code == 302
+    assert "external_uploaded=2" in response.url
+    composition = episode.video_compositions.get(version=2)
+    assert composition.variant == VideoComposition.VARIANT_CAPTIONED
+    assert composition.source == VideoComposition.SOURCE_EXTERNAL_UPLOAD
+    assert composition.status == VideoComposition.STATUS_READY
+    assert composition.include_subtitles is True
+    assert composition.original_filename == "captioned-final.mp4"
+    assert composition.video_duration_ms == 10400
+    assert composition.video_width == 1080
+    assert composition.video_height == 1920
+    assert len(composition.content_hash) == 64
+    with composition.video.open("rb") as uploaded:
+        assert uploaded.read() == b"external-captioned-video"
+
+
+def test_external_captioned_video_upload_rejects_duration_mismatch(client, settings, tmp_path, monkeypatch):
+    settings.MEDIA_ROOT = tmp_path
+    project, episode, _ = make_episode(with_character=False)
+    clean = VideoComposition.objects.create(
+        episode=episode,
+        version=1,
+        variant=VideoComposition.VARIANT_CLEAN,
+        status=VideoComposition.STATUS_READY,
+        video_duration_ms=10000,
+    )
+    clean.video.save("clean.mp4", ContentFile(b"clean-video"))
+    monkeypatch.setattr(
+        "studio.services.video._probe_video_metadata",
+        lambda path: {
+            "duration_ms": 12000,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+            "width": 720,
+            "height": 1280,
+        },
+    )
+
+    response = client.post(
+        reverse(
+            "studio:upload_external_captioned_video",
+            args=[project.workspace_id, episode.episode_number],
+        ),
+        {
+            "script_id": episode.script_id,
+            "video": SimpleUploadedFile("captioned.mp4", b"video", content_type="video/mp4"),
+        },
+    )
+
+    assert response.status_code == 400
+    assert "???? 2.00 ?" in response.content.decode("utf-8")
+    assert not episode.video_compositions.filter(
+        source=VideoComposition.SOURCE_EXTERNAL_UPLOAD
+    ).exists()
+
+
+def test_assembly_page_shows_external_caption_upload_and_version_source(client):
+    project, episode, _ = make_episode(with_character=False)
+    composition = VideoComposition.objects.create(
+        episode=episode,
+        version=1,
+        variant=VideoComposition.VARIANT_CAPTIONED,
+        status=VideoComposition.STATUS_READY,
+        source=VideoComposition.SOURCE_EXTERNAL_UPLOAD,
+        video="videos/external-captioned.mp4",
+        include_subtitles=True,
+    )
+
+    response = client.get(
+        reverse("studio:video_episode", args=[project.workspace_id, 1]),
+        {"tab": "assembly"},
+    )
+    content = response.content.decode("utf-8")
+
+    assert reverse(
+        "studio:upload_external_captioned_video",
+        args=[project.workspace_id, episode.episode_number],
+    ) in content
+    assert "&#22806;&#37096;&#23383;&#24149;&#29256;" in content
+    assert reverse("studio:download_finished_film", args=[composition.id]) in content
+
+
 def test_assembly_page_identifies_shots_blocking_export(client):
     from studio.services.video import video_page_data
 
@@ -552,18 +677,23 @@ def test_subtitle_generation_uses_storyboard_text_and_shot_offsets():
     cues = list(track.cues.order_by("position"))
     assert track.status == SubtitleTrack.STATUS_NEEDS_REVIEW
     assert track.source_hash == "source-hash"
-    assert len(cues) == 2
-    assert all(cue.text for cue in cues)
+    assert cues[0].source_text == "\u6797\u9ed8\uff1a\u5f00\u59cb\u5427"
+    assert cues[0].text == "\u5f00\u59cb\u5427"
+    assert track.qc_status == SubtitleTrack.QC_PASSED
+    assert track.qc_checked_at is not None
+    assert track.qc_content_hash
+    assert len(cues) == 1
     assert cues[0].start_ms < cues[0].end_ms <= 6000
-    assert cues[1].start_ms >= 6000
     assert cues[0].local_start_ms < cues[0].local_end_ms <= 6000
-    assert cues[1].local_start_ms < cues[1].local_end_ms <= 6000
-    assert all(cue.needs_review for cue in cues)
+    assert cues[0].needs_review is True
     assert ShotSubtitleSetting.objects.filter(
-        shot__in=shots,
+        shot=shots[0],
         status=ShotSubtitleSetting.STATUS_NEEDS_REVIEW,
-    ).count() == 2
-
+    ).exists()
+    assert ShotSubtitleSetting.objects.filter(
+        shot=shots[1],
+        status=ShotSubtitleSetting.STATUS_CONFIRMED,
+    ).exists()
 
 def test_subtitle_renderers_emit_bottom_center_ass_and_srt():
     snapshot = {
@@ -732,6 +862,195 @@ def test_subtitle_snapshot_follows_reordered_shots():
     assert after["cues"][1]["start_ms"] == shots[1].duration_seconds * 1000 + 100
 
 
+def test_recognize_speech_alignment_uses_word_timestamps(monkeypatch, tmp_path):
+    from studio.services import subtitles
+
+    words = [
+        SimpleNamespace(word="快", start=0.20, end=0.30),
+        SimpleNamespace(word="走", start=0.31, end=0.42),
+        SimpleNamespace(word="等", start=1.00, end=1.10),
+        SimpleNamespace(word="等", start=1.11, end=1.24),
+    ]
+    segment = SimpleNamespace(text="快走等等", start=0.20, end=1.24, words=words)
+    fake_model = SimpleNamespace(
+        transcribe=lambda *args, **kwargs: ([segment], SimpleNamespace())
+    )
+    monkeypatch.setenv("SUBTITLE_ASR_BACKEND", "faster_whisper")
+    monkeypatch.setattr(subtitles, "_WHISPER_MODEL", fake_model)
+    video_path = tmp_path / "speech.mp4"
+    video_path.write_bytes(b"video")
+    asset = SimpleNamespace(video=SimpleNamespace(path=str(video_path)))
+
+    alignment = recognize_speech_alignment(asset, "快走。等等。", ["快走", "等等"])
+
+    assert alignment[0] == [(200, 420), (1000, 1240)]
+    assert alignment[1] == "快走等等"
+    assert alignment[2] == 1.0
+
+
+def test_recognize_speech_alignment_hides_unmatched_parts(monkeypatch, tmp_path):
+    from studio.services import subtitles
+
+    words = [SimpleNamespace(word="secondline", start=1.0, end=2.0)]
+    segment = SimpleNamespace(text="second line", start=1.0, end=2.0, words=words)
+    fake_model = SimpleNamespace(
+        transcribe=lambda *args, **kwargs: ([segment], SimpleNamespace())
+    )
+    monkeypatch.setenv("SUBTITLE_ASR_BACKEND", "faster_whisper")
+    monkeypatch.setattr(subtitles, "_WHISPER_MODEL", fake_model)
+    video_path = tmp_path / "partial-speech.mp4"
+    video_path.write_bytes(b"video")
+    asset = SimpleNamespace(video=SimpleNamespace(path=str(video_path)))
+
+    alignment = recognize_speech_alignment(
+        asset,
+        "missing second line",
+        ["missing", "second line"],
+    )
+
+    assert alignment[0] == [None, (1000, 2000)]
+
+
+def test_recognize_speech_alignment_splits_one_word_without_overlap(
+    monkeypatch,
+    tmp_path,
+):
+    from studio.services import subtitles
+
+    words = [SimpleNamespace(word="abcd", start=0.2, end=1.2)]
+    segment = SimpleNamespace(text="abcd", start=0.2, end=1.2, words=words)
+    fake_model = SimpleNamespace(
+        transcribe=lambda *args, **kwargs: ([segment], SimpleNamespace())
+    )
+    monkeypatch.setenv("SUBTITLE_ASR_BACKEND", "faster_whisper")
+    monkeypatch.setattr(subtitles, "_WHISPER_MODEL", fake_model)
+    video_path = tmp_path / "single-word.mp4"
+    video_path.write_bytes(b"video")
+    asset = SimpleNamespace(video=SimpleNamespace(path=str(video_path)))
+
+    alignment = recognize_speech_alignment(asset, "abcd", ["ab", "cd"])
+
+    assert alignment[0] == [(200, 700), (700, 1200)]
+
+
+def test_split_dialogue_drops_punctuation_only_tail():
+    assert split_dialogue(f"Speaker: {'a' * 18}.") == ["a" * 18]
+
+
+def test_generate_subtitles_hides_unmatched_cues_and_updates_progress(monkeypatch):
+    project, episode, storyboard = make_episode(with_character=False)
+    shot = sync_storyboard_shots(storyboard)[0]
+    shot.dialogue_or_narration = "Speaker: missing. Speaker: second line."
+    shot.save(update_fields=["dialogue_or_narration", "updated_at"])
+    asset = VideoAsset.objects.create(
+        shot=shot,
+        version=1,
+        status=VideoAsset.STATUS_READY,
+        prompt_snapshot="prompt",
+        is_selected=True,
+    )
+    asset.video.save("partial-subtitle.mp4", ContentFile(b"not-a-real-video"))
+    track = SubtitleTrack.objects.create(episode=episode)
+    task = GenerationTask.objects.create(
+        project=project,
+        task_type=GenerationTask.TYPE_SUBTITLE_ALIGN,
+        target_id=str(track.id),
+    )
+    monkeypatch.setattr(
+        "studio.services.subtitles.recognize_speech_alignment",
+        lambda *args, **kwargs: ([None, (1000, 2000)], "second line", 0.8),
+    )
+
+    generate_subtitle_cues(track, [asset], task_id=task.id)
+
+    cues = list(track.cues.order_by("position"))
+    task.refresh_from_db()
+    assert [cue.text for cue in cues] == ["", "second line."]
+    assert cues[0].needs_review is True
+    assert track.qc_reason == "rule_fail:unmatched_speech"
+    assert cues[1].local_start_ms == 1000
+    assert cues[1].local_end_ms == 2000
+    assert (task.progress_current, task.progress_total, task.progress_percent) == (
+        1,
+        1,
+        100,
+    )
+
+def test_retime_subtitle_snapshot_uses_normalized_clip_durations():
+    snapshot = {
+        "style": {},
+        "global_offset_ms": 0,
+        "shots": [
+            {"shot_id": "shot-1", "duration_ms": 5000},
+            {"shot_id": "shot-2", "duration_ms": 5000},
+        ],
+        "cues": [
+            {
+                "position": 1,
+                "shot_id": "shot-2",
+                "text": "第二镜头",
+                "start_ms": 5100,
+                "end_ms": 5900,
+                "local_start_ms": 100,
+                "local_end_ms": 900,
+                "shot_offset_ms": 0,
+                "style": {},
+            }
+        ],
+    }
+
+    retimed = retime_subtitle_snapshot(
+        snapshot,
+        [5200, 4800],
+        max_timeline_drift_ms=500,
+    )
+
+    assert retimed["cues"][0]["start_ms"] == 5300
+    assert retimed["cues"][0]["end_ms"] == 6100
+    assert retimed["timeline"]["normalized_duration_ms"] == 10000
+    assert retimed["timeline"]["max_drift_ms"] == 200
+
+
+def test_retime_subtitle_snapshot_rejects_excessive_timeline_drift():
+    snapshot = {
+        "style": {},
+        "shots": [
+            {"shot_id": "shot-1", "duration_ms": 5000},
+            {"shot_id": "shot-2", "duration_ms": 5000},
+        ],
+        "cues": [],
+    }
+
+    with pytest.raises(ValueError, match="累计偏差 1000ms"):
+        retime_subtitle_snapshot(
+            snapshot,
+            [6000, 4000],
+            max_timeline_drift_ms=500,
+        )
+
+
+def test_retime_subtitle_snapshot_rejects_cue_outside_shot(monkeypatch):
+    monkeypatch.setenv("SUBTITLE_CUE_BOUNDARY_TOLERANCE_MS", "300")
+    snapshot = {
+        "style": {},
+        "shots": [{"shot_id": "shot-1", "duration_ms": 5000}],
+        "cues": [
+            {
+                "position": 1,
+                "shot_id": "shot-1",
+                "text": "late caption",
+                "start_ms": 4800,
+                "end_ms": 5500,
+                "local_start_ms": 4800,
+                "local_end_ms": 5500,
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="超出所属镜头 500ms"):
+        retime_subtitle_snapshot(snapshot, [5000])
+
+
 def test_shot_subtitle_setting_uses_track_style_and_controls_visibility():
     _, episode, storyboard = make_episode(with_character=False)
     shots = sync_storyboard_shots(storyboard)
@@ -802,6 +1121,128 @@ def test_split_dialogue_removes_speaker_and_limits_line_length():
     assert not parts[0].startswith("\u6797\u9ed8")
     assert all(len(part) <= 18 for part in parts)
 
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "\u6797\u9ed8\uff1a\u201c\u522b\u56de\u5934\uff0c\u7ee7\u7eed\u8d70\u3002\u201d",
+            ["\u522b\u56de\u5934\uff0c\u7ee7\u7eed\u8d70\u3002"],
+        ),
+        (
+            "\u6797\u9ed8\uff08\u4f4e\u58f0\uff09\uff1a\u201c\u95e8\u5916\u6709\u4eba\u3002\u201d",
+            ["\u95e8\u5916\u6709\u4eba\u3002"],
+        ),
+        (
+            "\u3010\u6797\u9ed8\u3011\u201c\u5f00\u59cb\u5427\u201d",
+            ["\u5f00\u59cb\u5427"],
+        ),
+        (
+            "\u82cf\u6674:\"\u6797\u9ed8\uff0c\u4f60\u4e0d\u80fd\u53bb\uff01\"",
+            ["\u6797\u9ed8\uff0c\u4f60\u4e0d\u80fd\u53bb\uff01"],
+        ),
+        (
+            "\u6797\u9ed8\uff1a\u201c\u8d70\u3002\u201d \u82cf\u6674\uff1a\u201c\u7b49\u7b49\uff01\u201d",
+            ["\u8d70\u3002", "\u7b49\u7b49\uff01"],
+        ),
+        (
+            "\u65c1\u767d\uff1a\u96e8\u8d8a\u6765\u8d8a\u5927\u3002",
+            [],
+        ),
+    ],
+)
+def test_split_dialogue_removes_each_speaker_and_quotes(source, expected):
+    assert split_dialogue(source) == expected
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "\u97f3\u6548\uff1a\u201c\u5494\u55d2\uff01\u201d\u65e0\u58f0\u8ba1\u65f6\uff1a\u201c\u4e00\u79d2\u3001\u4e24\u79d2\u3002\u201d",
+        "\u7cfb\u7edf\u63d0\u793a\uff1a\u201c\u5ba1\u6838\u901a\u8fc7\u3002\u201d",
+        "\u7ed3\u5c3e\u5b57\u5e55\uff1a\u201c\u4e3a\u4ec0\u4e48\u6ca1\u6709\u54cd\u5e94\uff1f\u201d",
+        "\u65bd\u5de5\u58f0\u8fde\u7eed\u54cd\u8d77\u3002",
+        "\u65e0\u5bf9\u767d",
+    ],
+)
+def test_split_dialogue_ignores_non_spoken_content(source):
+    assert split_dialogue(source, speaker_names=["\u79e6\u950b"]) == []
+
+
+def test_split_dialogue_keeps_people_and_drops_effects_in_mixed_content():
+    source = (
+        "\u82cf\u665a\uff1a\u201c\u6211\u8fd8\u6709\u67f4\u6cb9\u53d1\u7535\u673a\u3002\u201d"
+        "\u97f3\u6548\uff1a\u70df\u611f\u8b66\u62a5\u9aa4\u7136\u54cd\u8d77\u3002"
+        "\u79e6\u950b\uff1a\u201c\u5148\u65ad\u7535\u3002\u201d"
+        "\u8f6c\u573a\u5b57\u5e55\uff1a\u201c\u4e24\u5929\u524d\u3002\u201d"
+    )
+
+    assert split_dialogue(source, speaker_names=["\u82cf\u665a", "\u79e6\u950b"]) == [
+        "\u6211\u8fd8\u6709\u67f4\u6cb9\u53d1\u7535\u673a\u3002",
+        "\u5148\u65ad\u7535\u3002",
+    ]
+
+def test_split_dialogue_drops_unquoted_action_after_spoken_lines():
+    source = (
+        "\u5de5\u4eba\uff1a\u6700\u540e\u4e00\u6247\u95e8\u5b89\u88c5\u5b8c\u6210\u3002"
+        "\u82cf\u665a\uff1a\u6307\u7eb9\u6b63\u5e38\u3002"
+        "\u697c\u68af\u95f4\u4f20\u6765\u79e6\u950b\u9010\u7ea7\u9760\u8fd1\u7684\u811a\u6b65\u58f0\u3002"
+    )
+
+    assert split_dialogue(source, speaker_names=["\u5de5\u4eba", "\u82cf\u665a", "\u79e6\u950b"]) == [
+        "\u6700\u540e\u4e00\u6247\u95e8\u5b89\u88c5\u5b8c\u6210\u3002",
+        "\u6307\u7eb9\u6b63\u5e38\u3002",
+    ]
+
+def test_subtitle_generation_accepts_shot_without_spoken_dialogue():
+    _, episode, storyboard = make_episode(with_character=False)
+    shot = sync_storyboard_shots(storyboard)[0]
+    shot.dialogue_or_narration = "\u97f3\u6548\uff1a\u811a\u6b65\u58f0\u8d8a\u6765\u8d8a\u8fd1\u3002"
+    shot.character_names = []
+    shot.save(update_fields=["dialogue_or_narration", "character_names", "updated_at"])
+    asset = VideoAsset.objects.create(
+        shot=shot,
+        version=1,
+        status=VideoAsset.STATUS_READY,
+        prompt_snapshot="prompt",
+        is_selected=True,
+    )
+    asset.video.save("silent-subtitle.mp4", ContentFile(b"video"))
+    track = SubtitleTrack.objects.create(episode=episode)
+
+    generate_subtitle_cues(track, [asset])
+    track.refresh_from_db()
+
+    assert not track.cues.exists()
+    assert track.status == SubtitleTrack.STATUS_DRAFT
+    assert track.qc_status == SubtitleTrack.QC_PASSED
+    assert track.qc_reason == "rule_pass:no_spoken_dialogue"
+
+def test_subtitle_regeneration_preserves_manually_edited_display_text():
+    _, episode, storyboard = make_episode(with_character=False)
+    shot = sync_storyboard_shots(storyboard)[0]
+    asset = VideoAsset.objects.create(
+        shot=shot,
+        version=1,
+        status=VideoAsset.STATUS_READY,
+        prompt_snapshot="prompt",
+        is_selected=True,
+    )
+    asset.video.save("manual-subtitle.mp4", ContentFile(b"video"))
+    track = SubtitleTrack.objects.create(episode=episode)
+
+    generate_subtitle_cues(track, [asset])
+    cue = track.cues.get()
+    cue.text = "\u4fdd\u7559\u201c\u539f\u6837\u201d"
+    cue.is_manually_edited = True
+    cue.needs_review = False
+    cue.save(update_fields=["text", "is_manually_edited", "needs_review", "updated_at"])
+
+    generate_subtitle_cues(track, [asset])
+
+    regenerated = track.cues.get()
+    assert regenerated.text == "\u4fdd\u7559\u201c\u539f\u6837\u201d"
+    assert regenerated.is_manually_edited is True
 
 def test_queue_export_snapshots_enabled_subtitles():
     _, episode, storyboard = make_episode(with_character=False)
@@ -879,6 +1320,7 @@ def test_queue_export_treats_all_disabled_shot_subtitles_as_no_subtitles():
     composition = VideoComposition.objects.get(pk=task.target_id)
 
     assert composition.include_subtitles is False
+    assert composition.variant == VideoComposition.VARIANT_CLEAN
     assert composition.subtitle_snapshot == {}
     assert task.input_snapshot["include_subtitles"] is False
 
@@ -911,6 +1353,63 @@ def test_ffmpeg_export_burns_ass_when_subtitles_are_enabled(tmp_path, monkeypatc
     burn_command = next(command for command in commands if "ass=subtitles.ass" in command)
     assert content == b"exported-video"
     assert burn_command[burn_command.index("-c:a") + 1] == "copy"
+
+
+def test_ffmpeg_export_retimes_subtitles_from_normalized_clips(tmp_path, monkeypatch):
+    assets = []
+    for index in range(1, 3):
+        source = tmp_path / f"shot-{index}.mp4"
+        source.write_bytes(b"source")
+        assets.append(
+            SimpleNamespace(
+                video=SimpleNamespace(path=str(source)),
+                shot=SimpleNamespace(shot_id=f"shot-{index}", duration_seconds=5),
+            )
+        )
+
+    monkeypatch.setattr("studio.services.video.shutil.which", lambda name: name)
+
+    def fake_run(command, **kwargs):
+        if command[0] == "ffprobe":
+            if "stream=index" in command:
+                return SimpleNamespace(stdout="")
+            duration = "5.2\n" if "normalized-001" in command[-1] else "4.8\n"
+            return SimpleNamespace(stdout=duration)
+        Path(command[-1]).write_bytes(b"exported-video")
+        return SimpleNamespace(stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("studio.services.video.subprocess.run", fake_run)
+    snapshot = {
+        "style": {},
+        "global_offset_ms": 0,
+        "shots": [
+            {"shot_id": "shot-1", "duration_ms": 5000},
+            {"shot_id": "shot-2", "duration_ms": 5000},
+        ],
+        "cues": [
+            {
+                "position": 1,
+                "shot_id": "shot-2",
+                "text": "caption",
+                "start_ms": 5100,
+                "end_ms": 5900,
+                "local_start_ms": 100,
+                "local_end_ms": 900,
+                "shot_offset_ms": 0,
+                "style": {},
+            }
+        ],
+    }
+
+    content, effective = _ffmpeg_concat(
+        assets,
+        subtitle_snapshot=snapshot,
+        return_subtitle_snapshot=True,
+    )
+
+    assert content == b"exported-video"
+    assert effective["cues"][0]["start_ms"] == 5300
+    assert effective["timeline"]["max_drift_ms"] == 200
 
 
 def test_subtitle_generate_save_and_download_views(client):
@@ -1203,3 +1702,61 @@ def test_video_page_lists_unknown_storyboard_characters(client):
     assert 'data-modal-target="discover-storyboard-characters"' in content
     assert 'value="New Hero"' in content
     assert "New Hero" in content
+
+
+def test_manual_subtitle_save_reruns_qc():
+    _, episode, storyboard = make_episode(with_character=False)
+    shot = sync_storyboard_shots(storyboard)[0]
+    track = SubtitleTrack.objects.create(episode=episode)
+    cue = track.cues.create(
+        shot=shot,
+        position=1,
+        source_text="Hello",
+        text="Hello",
+        start_ms=0,
+        end_ms=1500,
+        local_start_ms=0,
+        local_end_ms=1500,
+    )
+
+    save_subtitle_track(
+        track,
+        enabled=True,
+        global_offset_ms=0,
+        cues=[
+            {
+                "id": cue.id,
+                "text": "Hello",
+                "start_ms": 0,
+                "end_ms": 1500,
+                "reviewed": True,
+            }
+        ],
+        confirm_all=True,
+    )
+    track.refresh_from_db()
+    passed_hash = track.qc_content_hash
+    assert track.qc_status == SubtitleTrack.QC_PASSED
+    assert track.status == SubtitleTrack.STATUS_CONFIRMED
+
+    save_subtitle_track(
+        track,
+        enabled=True,
+        global_offset_ms=0,
+        cues=[
+            {
+                "id": cue.id,
+                "text": "Click",
+                "start_ms": 0,
+                "end_ms": 1500,
+                "reviewed": True,
+            }
+        ],
+        confirm_all=True,
+    )
+    track.refresh_from_db()
+
+    assert track.qc_status == SubtitleTrack.QC_FAILED
+    assert track.qc_reason == "rule_fail:hallucination_meta"
+    assert track.qc_content_hash != passed_hash
+    assert track.status == SubtitleTrack.STATUS_CONFIRMED

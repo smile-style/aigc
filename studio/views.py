@@ -1,4 +1,6 @@
 import logging
+from io import BytesIO
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from django.db import close_old_connections
 from django.http import FileResponse, Http404, JsonResponse
@@ -81,6 +83,19 @@ def mark_outline_usable_view(request):
         except FileNotFoundError:
             workspace = None
         return _render_outline(request, workspace=workspace, error=str(exc))
+    return redirect("studio:outline")
+
+
+@require_POST
+def remove_outline_from_library_view(request):
+    workspace_id = request.POST.get("workspace_id", CURRENT_WORKSPACE_ID)
+    outline_id = request.POST.get("outline_id", "")
+    try:
+        WorkspaceRepository().remove_outline_from_library(workspace_id, outline_id)
+    except FileNotFoundError as exc:
+        raise Http404(str(exc)) from exc
+    if request.POST.get("next") == "script_index":
+        return redirect("studio:script_index")
     return redirect("studio:outline")
 
 
@@ -290,6 +305,43 @@ def download_character_image_view(request, workspace_id, character_id):
         asset["file"],
         as_attachment=True,
         filename=asset["filename"],
+    )
+
+
+@require_GET
+def download_all_character_images_view(request, workspace_id):
+    script_id = int(request.GET.get("script_id") or 0) or None
+    try:
+        downloads = WorkspaceRepository().get_latest_character_assets(
+            workspace_id,
+            script_id,
+        )
+    except FileNotFoundError as exc:
+        raise Http404(str(exc)) from exc
+    if not downloads:
+        raise Http404("当前剧本没有可下载的角色图片。")
+
+    archive = BytesIO()
+    written = 0
+    with ZipFile(archive, "w", compression=ZIP_DEFLATED) as bundle:
+        for download in downloads:
+            field = download["file"]
+            try:
+                bundle.writestr(download["filename"], field.read())
+                written += 1
+            except (FileNotFoundError, OSError, ValueError):
+                continue
+            finally:
+                field.close()
+    if not written:
+        raise Http404("当前剧本没有可下载的角色图片。")
+
+    archive.seek(0)
+    return FileResponse(
+        archive,
+        as_attachment=True,
+        filename=f"script-{script_id:06d}-character-assets.zip",
+        content_type="application/zip",
     )
 
 
@@ -728,6 +780,9 @@ def _render_script(
             "selected_outline": _selected_outline(workspace or {}),
             "selected_episode": selected_episode,
             "script_view": active_view,
+            "character_image_count": sum(
+                bool(item.get("image_url")) for item in workspace.get("characters", [])
+            ),
             "error": error,
             "active_nav": "script",
         },

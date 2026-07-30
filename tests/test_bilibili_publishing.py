@@ -121,6 +121,21 @@ def test_upos_upload_reports_progress_and_returns_media_id(monkeypatch):
     assert progress == [(5, 12), (10, 12), (12, 12)]
     assert len([call for call in calls if call[0] == "PUT"]) == 3
     assert "secret-upload-auth" not in str(result.payload)
+    preupload_call = next(call for call in calls if call[1] == BilibiliUploader.PREUPLOAD_URL)
+    assert preupload_call[2]["params"]["profile"] == "ugcfx/bup"
+    assert preupload_call[2]["params"]["upcdn"] == "bda2"
+    init_call = next(call for call in calls if call[0] == "POST" and "uploads" in call[2].get("params", {}))
+    assert init_call[2]["params"] == {
+        "uploads": "",
+        "output": "json",
+        "profile": "ugcfx/bup",
+        "filesize": 12,
+        "partsize": 5,
+        "biz_id": 12,
+    }
+    complete_call = calls[-1]
+    assert complete_call[2]["params"]["profile"] == "ugcfx/bup"
+
 
 
 def test_submit_timeout_is_not_treated_as_normal_retry(monkeypatch):
@@ -143,7 +158,7 @@ def test_submit_timeout_is_not_treated_as_normal_retry(monkeypatch):
 
     with pytest.raises(PublishingOutcomeUnknown):
         BilibiliUploader().submit(
-            SimpleNamespace(media_id="media-id"),
+            SimpleNamespace(media_id="media-id", payload={"preupload": {"biz_id": 42}}),
             {"title": "Title", "tid": 21, "copyright": 1, "tags": []},
             {"bili_jct": "csrf"},
         )
@@ -151,10 +166,14 @@ def test_submit_timeout_is_not_treated_as_normal_retry(monkeypatch):
 
 def test_submit_uploads_local_cover_before_creating_submission(tmp_path, monkeypatch):
     calls = []
+    device_cookies_ensured = []
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
             pass
+
+        def ensure_device_cookies(self):
+            device_cookies_ensured.append(True)
 
         def checked_data(self, method, url, **kwargs):
             calls.append((method, url, kwargs))
@@ -169,7 +188,7 @@ def test_submit_uploads_local_cover_before_creating_submission(tmp_path, monkeyp
     with override_settings(MEDIA_ROOT=tmp_path):
         cover_name = default_storage.save("covers/episode-1.jpg", ContentFile(b"jpeg-cover"))
         result = BilibiliUploader().submit(
-            SimpleNamespace(media_id="media-id"),
+            SimpleNamespace(media_id="media-id", payload={"preupload": {"biz_id": 42}}),
             {
                 "title": "Title",
                 "tid": 21,
@@ -181,7 +200,45 @@ def test_submit_uploads_local_cover_before_creating_submission(tmp_path, monkeyp
         )
 
     assert result.remote_video_id == "BV1COVER"
+    assert device_cookies_ensured == [True]
     cover_call, submit_call = calls
     assert cover_call[1] == BilibiliUploader.COVER_UPLOAD_URL
     assert cover_call[2]["data"]["cover"].startswith("data:image/jpeg;base64,")
     assert submit_call[2]["json"]["cover"] == "https://i.example.com/cover.jpg"
+    submit_payload = submit_call[2]["json"]
+    assert submit_payload["desc_format_id"] == 0
+    assert "adorder_type" not in submit_payload
+    assert "watermark" not in submit_payload
+    assert "csrf" not in submit_payload
+    assert submit_payload["videos"] == [
+        {
+            "filename": "media-id",
+            "title": "Title",
+            "desc": "",
+        }
+    ]
+
+
+def test_submit_does_not_require_upload_cid(monkeypatch):
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def ensure_device_cookies(self):
+            pass
+
+        def checked_data(self, *args, **kwargs):
+            return {"bvid": "BV1CURRENT"}, {"code": 0, "data": {"bvid": "BV1CURRENT"}}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("studio.publishing.platforms.bilibili.upload.BilibiliClient", FakeClient)
+
+    result = BilibiliUploader().submit(
+        SimpleNamespace(media_id="media-id", payload={}),
+        {"title": "Title", "tid": 21, "copyright": 1, "tags": ["动画"]},
+        {"bili_jct": "csrf"},
+    )
+
+    assert result.remote_video_id == "BV1CURRENT"

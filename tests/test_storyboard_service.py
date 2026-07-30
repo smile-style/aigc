@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 
 from studio.constants import (
     EPISODE_DURATION_TARGET_SECONDS,
@@ -65,6 +65,8 @@ def test_generate_storyboard_returns_valid_shots():
         assert field in prompt
     assert "image_prompt" in prompt
     assert "video_prompt" in prompt
+    assert "无人说话时固定填写“无对白”" in prompt
+    assert "不要填写旁白、音效、系统提示、画面字幕、动作或环境描述" in prompt
     assert "60 到 300 秒" in prompt
     assert "自然总时长 120 秒" in prompt
     assert "4 到 15" in prompt

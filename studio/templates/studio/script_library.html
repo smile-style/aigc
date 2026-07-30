@@ -55,6 +55,10 @@
                   <div class="table-actions">
                     <button class="ghost-button" type="button" data-outline-detail-target="usable-outline-detail-{{ forloop.counter }}">查看</button>
                     <a class="secondary-button" href="{% url 'studio:project_workbench' outline.project_id %}">打开项目</a>
+                    <form method="post" action="{% url 'studio:remove_outline_from_library' %}" data-confirm-submit="&#30830;&#23450;&#31227;&#20986; {{ outline.title }} &#21527;&#65311;&#19981;&#20250;&#21024;&#38500;&#24050;&#26377;&#20869;&#23481;&#12290;">
+                      {% csrf_token %}<input type="hidden" name="workspace_id" value="{{ workspace.id }}"><input type="hidden" name="outline_id" value="{{ outline.id }}"><input type="hidden" name="next" value="script_index">
+                      <button class="danger-button compact-button" type="submit" aria-label="&#31227;&#38500;&#21487;&#29992;&#22823;&#32434; {{ outline.title }}">&#31227;&#38500;</button>
+                    </form>
                   </div>
 
                   <div class="detail-modal" id="usable-outline-detail-{{ forloop.counter }}" hidden>

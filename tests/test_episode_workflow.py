@@ -1,6 +1,7 @@
 import pytest
 from django.template.loader import render_to_string
 from django.urls import reverse
+from django.utils import timezone
 
 from studio.models import (
     Character,
@@ -285,7 +286,7 @@ def test_workflow_payload_reports_ordered_steps():
     assert payload["progress_percent"] == 8
     assert payload["steps"][0]["key"] == EpisodeWorkflowRun.STAGE_SCRIPT
     assert payload["steps"][0]["status"] == "running"
-    assert payload["steps"][-1]["key"] == EpisodeWorkflowRun.STAGE_CAPTIONED_EXPORT
+    assert payload["steps"][-1]["key"] == EpisodeWorkflowRun.STAGE_CLEAN_EXPORT
     assert payload["auto_retry_count"] == 0
     assert payload["auto_retry_max"] == 3
     assert payload["auto_retrying"] is False
@@ -389,3 +390,256 @@ def test_video_page_disables_captioned_download_without_subtitles(client):
     assert "variant=clean" in content
     assert "&#19979;&#36733;&#26377;&#23383;&#24149;&#29256;&#26412;" in content
     assert "disabled" in content
+
+
+def test_qc_failure_blocks_only_captioned_export():
+    _, _, episode = make_episode(full_script="Script")
+    shot, _ = make_ready_shot(episode)
+    track = SubtitleTrack.objects.create(
+        episode=episode,
+        enabled=True,
+        status=SubtitleTrack.STATUS_CONFIRMED,
+        source_hash=subtitle_source_hash(episode),
+    )
+    track.cues.create(
+        shot=shot,
+        position=1,
+        source_text="Transcribed by somebody",
+        text="Transcribed by somebody",
+        start_ms=0,
+        end_ms=1200,
+        local_start_ms=0,
+        local_end_ms=1200,
+    )
+
+    clean_task, clean_created = queue_export(episode, include_subtitles=False)
+
+    assert clean_created is True
+    assert clean_task is not None
+    with pytest.raises(ValueError, match="QC|质检"):
+        queue_export(episode, include_subtitles=True)
+
+    track.refresh_from_db()
+    assert track.status == SubtitleTrack.STATUS_CONFIRMED
+    assert track.qc_status == SubtitleTrack.QC_FAILED
+    assert track.qc_reason == "rule_fail:hallucination_meta"
+    assert track.qc_checked_at is not None
+    assert track.qc_content_hash
+    assert track.qc_details["metrics"]["suspicious_phrase_count"] == 1
+
+
+def test_automatic_workflow_completes_without_captioned_export_when_qc_fails():
+    _, _, episode = make_episode(full_script="Script")
+    shot, _ = make_ready_shot(episode)
+    track = SubtitleTrack.objects.create(
+        episode=episode,
+        enabled=True,
+        status=SubtitleTrack.STATUS_CONFIRMED,
+        source_hash=subtitle_source_hash(episode),
+    )
+    track.cues.create(
+        shot=shot,
+        position=1,
+        source_text="Click",
+        text="Click",
+        start_ms=0,
+        end_ms=1200,
+        local_start_ms=0,
+        local_end_ms=1200,
+    )
+    run = EpisodeWorkflowRun.objects.create(
+        episode=episode,
+        status=EpisodeWorkflowRun.STATUS_RUNNING,
+        stage=EpisodeWorkflowRun.STAGE_SUBTITLES,
+        progress_percent=84,
+    )
+
+    run = advance_episode_workflow(run.id)
+
+    assert run.status == EpisodeWorkflowRun.STATUS_SUCCEEDED
+    assert run.stage == EpisodeWorkflowRun.STAGE_COMPLETE
+    assert run.details["captioned_export_skipped"] is True
+    assert run.details["subtitle_qc"]["status"] == SubtitleTrack.QC_FAILED
+    assert not episode.video_compositions.filter(
+        variant=VideoComposition.VARIANT_CAPTIONED
+    ).exists()
+
+def test_automatic_workflow_completes_when_episode_has_no_spoken_dialogue():
+    from studio.services.subtitle_qc import run_and_persist_subtitle_qc
+
+    _, _, episode = make_episode(full_script="Script")
+    make_ready_shot(episode)
+    track = SubtitleTrack.objects.create(
+        episode=episode,
+        enabled=True,
+        status=SubtitleTrack.STATUS_CONFIRMED,
+        source_hash=subtitle_source_hash(episode),
+        aligned_at=timezone.now(),
+    )
+    result = run_and_persist_subtitle_qc(
+        track,
+        use_configured_ai=False,
+        allow_empty=True,
+    )
+    run = EpisodeWorkflowRun.objects.create(
+        episode=episode,
+        status=EpisodeWorkflowRun.STATUS_RUNNING,
+        stage=EpisodeWorkflowRun.STAGE_SUBTITLES,
+        progress_percent=84,
+    )
+
+    run = advance_episode_workflow(run.id)
+
+    assert result.passed is True
+    assert result.reason == "rule_pass:no_spoken_dialogue"
+    assert run.status == EpisodeWorkflowRun.STATUS_SUCCEEDED
+    assert run.details["captioned_export_skipped"] is True
+    assert run.details["no_spoken_dialogue"] is True
+    assert not episode.video_compositions.filter(
+        variant=VideoComposition.VARIANT_CAPTIONED
+    ).exists()
+
+def test_subtitle_offset_invalidates_qc_result():
+    from studio.services.subtitle_qc import (
+        ensure_subtitle_qc,
+        run_and_persist_subtitle_qc,
+        subtitle_qc_is_current,
+    )
+
+    _, _, episode = make_episode(full_script="Script")
+    shot, _ = make_ready_shot(episode)
+    track = SubtitleTrack.objects.create(
+        episode=episode,
+        enabled=True,
+        status=SubtitleTrack.STATUS_CONFIRMED,
+        source_hash=subtitle_source_hash(episode),
+    )
+    track.cues.create(
+        shot=shot,
+        position=1,
+        source_text="Hello",
+        text="Hello",
+        start_ms=0,
+        end_ms=1200,
+        local_start_ms=0,
+        local_end_ms=1200,
+    )
+
+    initial = run_and_persist_subtitle_qc(track, use_configured_ai=False)
+    assert initial.passed is True
+    assert subtitle_qc_is_current(track) is True
+
+    track.global_offset_ms = 3100
+    track.save(update_fields=["global_offset_ms", "updated_at"])
+
+    assert subtitle_qc_is_current(track) is False
+    updated = ensure_subtitle_qc(track)
+    assert updated.passed is False
+    assert updated.reason == "rule_fail:out_of_bounds"
+def test_workflow_panel_default_expansion_follows_status():
+    _, _, episode = make_episode()
+    run, _ = create_episode_workflow(episode)
+
+    running_html = render_to_string(
+        "studio/_episode_workflow.html",
+        {"workflow": workflow_payload(run)},
+    )
+    assert "<details" in running_html
+    assert " open" in running_html.partition(">")[0]
+
+    run.status = EpisodeWorkflowRun.STATUS_SUCCEEDED
+    run.stage = EpisodeWorkflowRun.STAGE_COMPLETE
+    run.progress_percent = 100
+    run.save(update_fields=["status", "stage", "progress_percent"])
+    succeeded_html = render_to_string(
+        "studio/_episode_workflow.html",
+        {"workflow": workflow_payload(run)},
+    )
+    assert " open" not in succeeded_html.partition(">")[0]
+
+    run.status = EpisodeWorkflowRun.STATUS_FAILED
+    run.error_message = "failed"
+    run.save(update_fields=["status", "error_message"])
+    failed_html = render_to_string(
+        "studio/_episode_workflow.html",
+        {"workflow": workflow_payload(run)},
+    )
+    assert " open" in failed_html.partition(">")[0]
+
+
+def test_workflow_without_captioned_video_stops_after_clean_export():
+    project, _, episode = make_episode(full_script="Script")
+    make_ready_shot(episode)
+    clean = VideoComposition.objects.create(
+        episode=episode,
+        version=1,
+        variant=VideoComposition.VARIANT_CLEAN,
+        status=VideoComposition.STATUS_READY,
+        video="videos/clean.mp4",
+    )
+    run = EpisodeWorkflowRun.objects.create(
+        episode=episode,
+        status=EpisodeWorkflowRun.STATUS_RUNNING,
+        stage=EpisodeWorkflowRun.STAGE_CLEAN_EXPORT,
+        progress_percent=74,
+        details={"generate_captioned_video": False},
+    )
+
+    project.workflow_generate_captioned_video = True
+    project.save(update_fields=["workflow_generate_captioned_video"])
+    run = advance_episode_workflow(run.id)
+
+    assert run.status == EpisodeWorkflowRun.STATUS_SUCCEEDED
+    assert run.stage == EpisodeWorkflowRun.STAGE_COMPLETE
+    assert run.details["clean_composition_id"] == clean.id
+    assert run.details["generate_captioned_video"] is False
+    assert not SubtitleTrack.objects.filter(episode=episode).exists()
+    assert not episode.video_compositions.filter(
+        variant=VideoComposition.VARIANT_CAPTIONED
+    ).exists()
+    assert [step["key"] for step in workflow_payload(run)["steps"]][-1] == (
+        EpisodeWorkflowRun.STAGE_CLEAN_EXPORT
+    )
+
+
+def test_start_workflow_saves_caption_choice_as_project_default_and_run_snapshot(client):
+    project, script, episode = make_episode()
+
+    response = client.post(
+        reverse(
+            "studio:start_episode_workflow",
+            args=[project.workspace_id, episode.episode_number],
+        ),
+        {"script_id": script.id},
+    )
+
+    assert response.status_code == 302
+    project.refresh_from_db()
+    run = EpisodeWorkflowRun.objects.get(episode=episode)
+    assert project.workflow_generate_captioned_video is False
+    assert run.details["generate_captioned_video"] is False
+
+    run.status = EpisodeWorkflowRun.STATUS_SUCCEEDED
+    run.stage = EpisodeWorkflowRun.STAGE_COMPLETE
+    run.save(update_fields=["status", "stage"])
+    response = client.post(
+        reverse(
+            "studio:start_episode_workflow",
+            args=[project.workspace_id, episode.episode_number],
+        ),
+        {"script_id": script.id, "generate_captioned_video": "1"},
+    )
+
+    assert response.status_code == 302
+    project.refresh_from_db()
+    latest_run = EpisodeWorkflowRun.objects.filter(episode=episode).first()
+    assert project.workflow_generate_captioned_video is True
+    assert latest_run.details["generate_captioned_video"] is True
+
+
+def test_new_projects_disable_captioned_video_by_default():
+    project, _, episode = make_episode()
+    run, created = create_episode_workflow(episode)
+
+    assert created is True
+    assert run.details["generate_captioned_video"] is False

@@ -116,6 +116,7 @@ class ModelAssignment(models.Model):
     PURPOSE_EPISODE_SCRIPT = "episode_script"
     PURPOSE_CHARACTER_PROFILE = "character_profile"
     PURPOSE_STORYBOARD = "storyboard"
+    PURPOSE_SUBTITLE_QC = "subtitle_qc"
     PURPOSE_CHARACTER_IMAGE = "character_image"
     PURPOSE_SHOT_VIDEO = "shot_video"
     PURPOSE_SHOT_VIDEO_FALLBACK = "shot_video_fallback"
@@ -126,6 +127,7 @@ class ModelAssignment(models.Model):
         (PURPOSE_EPISODE_SCRIPT, "分集剧本"),
         (PURPOSE_CHARACTER_PROFILE, "角色设定"),
         (PURPOSE_STORYBOARD, "分镜生成"),
+        (PURPOSE_SUBTITLE_QC, "字幕质检"),
         (PURPOSE_CHARACTER_IMAGE, "角色图片"),
         (PURPOSE_SHOT_VIDEO, "分镜视频主模型"),
         (PURPOSE_SHOT_VIDEO_FALLBACK, "分镜视频备用模型"),
@@ -252,6 +254,13 @@ class VideoComposition(models.Model):
         (STATUS_FAILED, "Failed"),
     ]
 
+    SOURCE_GENERATED = "generated"
+    SOURCE_EXTERNAL_UPLOAD = "external_upload"
+    SOURCE_CHOICES = [
+        (SOURCE_GENERATED, "Platform generated"),
+        (SOURCE_EXTERNAL_UPLOAD, "External upload"),
+    ]
+
     episode = models.ForeignKey(
         Episode,
         on_delete=models.CASCADE,
@@ -265,7 +274,17 @@ class VideoComposition(models.Model):
         db_index=True,
     )
     status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    source = models.CharField(
+        max_length=24,
+        choices=SOURCE_CHOICES,
+        default=SOURCE_GENERATED,
+        db_index=True,
+    )
     video = models.FileField(upload_to=composition_video_upload_to, blank=True)
+    original_filename = models.CharField(max_length=255, blank=True)
+    video_duration_ms = models.PositiveIntegerField(null=True, blank=True)
+    video_width = models.PositiveIntegerField(null=True, blank=True)
+    video_height = models.PositiveIntegerField(null=True, blank=True)
     include_subtitles = models.BooleanField(default=False)
     subtitle_snapshot = models.JSONField(default=dict, blank=True)
     subtitle_file = models.FileField(upload_to="videos/subtitles/%Y/%m/%d", blank=True)
@@ -289,6 +308,15 @@ class VideoComposition(models.Model):
 
 
 class SubtitleTrack(models.Model):
+    QC_PENDING = "pending"
+    QC_PASSED = "passed"
+    QC_FAILED = "failed"
+    QC_STATUS_CHOICES = [
+        (QC_PENDING, "Pending"),
+        (QC_PASSED, "Passed"),
+        (QC_FAILED, "Failed"),
+    ]
+
     STATUS_DRAFT = "draft"
     STATUS_ALIGNING = "aligning"
     STATUS_NEEDS_REVIEW = "needs_review"
@@ -314,6 +342,15 @@ class SubtitleTrack(models.Model):
     global_offset_ms = models.IntegerField(default=0)
     revision = models.PositiveIntegerField(default=1)
     error_message = models.TextField(blank=True)
+    qc_status = models.CharField(max_length=16, choices=QC_STATUS_CHOICES, default=QC_PENDING, db_index=True)
+    qc_score = models.FloatField(null=True, blank=True)
+    qc_rule_score = models.FloatField(null=True, blank=True)
+    qc_ai_score = models.FloatField(null=True, blank=True)
+    qc_reason = models.CharField(max_length=160, blank=True)
+    qc_details = models.JSONField(default=dict, blank=True)
+    qc_checked_at = models.DateTimeField(null=True, blank=True)
+    qc_content_hash = models.CharField(max_length=64, blank=True, db_index=True)
+    qc_revision = models.PositiveIntegerField(default=0)
     aligned_at = models.DateTimeField(null=True, blank=True)
     confirmed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

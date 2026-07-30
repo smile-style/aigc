@@ -69,5 +69,48 @@ docker compose up -d
 Pre-release defaults to port `8081`. Compose derives different project names
 from the `prod` and `pre` directory names.
 
+## Optional MySQL database
+
+SQLite remains the default. To use the bundled MySQL service, create its data
+directory, set strong database passwords in the environment's `.env`, and
+enable the Compose profile and Django database engine:
+
+```bash
+mkdir -p /data/aigc_data/pre/mysql/data
+# Or for production: mkdir -p /data/aigc_data/prod/mysql/data
+```
+
+```dotenv
+DB_ENGINE=mysql
+COMPOSE_PROFILES=mysql
+MYSQL_DATABASE=AIGC_STUDIO
+MYSQL_USER=aigc_studio
+MYSQL_PASSWORD=replace-with-a-strong-database-password
+MYSQL_ROOT_PASSWORD=replace-with-a-strong-root-password
+```
+
+Then run the normal `docker compose config`, `pull`, and `up -d` commands from
+the matching runtime directory. MySQL is only reachable on the Compose network;
+port `3306` is not exposed on the host.
+
+Existing SQLite data is not migrated automatically. Do not switch `DB_ENGINE`
+to `mysql` in pre-release or production until that data has been backed up and
+migrated to MySQL.
+
 Run `down` with the matching Compose file. Never delete or overwrite
 `db.sqlite3`, `media/`, or `workspace/` without a verified backup.
+## Speech-aligned subtitles
+
+Runtime Compose files enable `faster-whisper` with the CPU `small` model and
+`int8` compute by default. The first subtitle alignment downloads the model to
+`/app/workspace/.cache/huggingface`; this path is persisted by the workspace
+volume, so later jobs and container restarts reuse the same model files.
+
+`SUBTITLE_MAX_TIMELINE_DRIFT_MS` controls the maximum cumulative difference
+between source clips and normalized 25fps clips. Captioned export fails with a
+diagnostic message when that limit is exceeded. Per-cue overflow is controlled
+by `SUBTITLE_CUE_BOUNDARY_TOLERANCE_MS`.
+
+`SUBTITLE_WHISPER_VAD_FILTER=true` filters non-speech regions before recognition. `SUBTITLE_ASR_PART_MIN_CONFIDENCE` controls the
+minimum per-caption text match; unmatched script lines are hidden and sent for
+manual review instead of receiving fabricated timestamps.

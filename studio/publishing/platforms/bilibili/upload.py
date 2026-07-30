@@ -1,6 +1,8 @@
 import base64
 import math
 import mimetypes
+import json
+import time
 from pathlib import PurePosixPath
 
 from django.core.files.storage import default_storage
@@ -16,13 +18,22 @@ class BilibiliUploader:
     COVER_UPLOAD_URL = "https://member.bilibili.com/x/vu/web/cover/up"
     SUBMIT_URL = "https://member.bilibili.com/x/vu/web/add/v3"
     VIEW_URL = "https://api.bilibili.com/x/web-interface/view"
+    LINE = {
+        "os": "upos",
+        "upcdn": "bda2",
+        "probe_version": 20221109,
+    }
+    PROFILE = "ugcfx/bup"
 
     def upload_media(self, composition, credentials, progress_callback):
         source = composition.video
         source.open("rb")
         try:
             total = source.size
-            preupload = self._preupload(credentials, PurePosixPath(source.name).name, total)
+            client = BilibiliClient(credentials)
+            if hasattr(client, "ensure_device_cookies"):
+                client.ensure_device_cookies()
+            preupload = self._preupload(client, PurePosixPath(source.name).name, total)
             endpoint = str(preupload.get("endpoint") or "")
             upos_uri = str(preupload.get("upos_uri") or "")
             auth = preupload.get("auth")
@@ -31,14 +42,27 @@ class BilibiliUploader:
             if endpoint.startswith("//"):
                 endpoint = f"https:{endpoint}"
             upload_url = f"{endpoint.rstrip('/')}/{upos_uri.removeprefix('upos://')}"
-            headers = {"X-Upos-Auth": auth}
-            client = BilibiliClient(credentials)
+            headers = {"X-Upos-Auth": auth, "Referer": "https://www.bilibili.com/"}
             try:
-                _, init_payload = client.request_json("POST", upload_url, params={"uploads": "", "output": "json"}, headers=headers)
+                chunk_size = max(1, int(preupload.get("chunk_size") or 10 * 1024 * 1024))
+                init_params = {
+                    "uploads": "",
+                    "output": "json",
+                    "profile": self.PROFILE,
+                    "filesize": total,
+                    "partsize": chunk_size,
+                    "biz_id": preupload.get("biz_id", ""),
+                }
+                _, init_payload = client.request_json(
+                    "POST", upload_url, params=init_params, headers=headers
+                )
+                if init_payload.get("OK") not in {None, 1}:
+                    raise PublishingRetryableError(
+                        init_payload.get("message") or "Bilibili 初始化分片上传失败。"
+                    )
                 upload_id = init_payload.get("upload_id") or (init_payload.get("data") or {}).get("upload_id")
                 if not upload_id:
                     raise PublishingRetryableError("Bilibili 未返回 upload_id。")
-                chunk_size = max(1, int(preupload.get("chunk_size") or 10 * 1024 * 1024))
                 chunks = max(1, math.ceil(total / chunk_size))
                 parts = []
                 uploaded = 0
@@ -54,8 +78,9 @@ class BilibiliUploader:
                         "end": uploaded + len(content),
                         "total": total,
                     }
-                    response, _ = client.request_json("PUT", upload_url, params=params, headers=headers, content=content)
-                    parts.append({"partNumber": index + 1, "eTag": response.headers.get("ETag", "etag")})
+                    response = self._upload_chunk(client, upload_url, params, headers, content)
+                    etag = str(response.headers.get("ETag") or "etag").strip('"')
+                    parts.append({"partNumber": index + 1, "eTag": etag})
                     uploaded += len(content)
                     progress_callback(uploaded, total)
                 complete_params = {
@@ -63,28 +88,41 @@ class BilibiliUploader:
                     "uploadId": upload_id,
                     "biz_id": preupload.get("biz_id", ""),
                     "output": "json",
-                    "profile": "ugcupos/bup",
+                    "profile": self.PROFILE,
                 }
                 _, complete_payload = client.request_json(
                     "POST", upload_url, params=complete_params, headers=headers, json={"parts": parts}
                 )
+                if complete_payload.get("OK") != 1:
+                    raise PublishingRetryableError(
+                        complete_payload.get("message") or "Bilibili 合并视频分片失败。"
+                    )
             finally:
                 client.close()
-            media_id = PurePosixPath(upos_uri).stem
+            complete_key = str(complete_payload.get("key") or "").removeprefix("/")
+            media_id = PurePosixPath(complete_key or upos_uri).stem
             return UploadResult(media_id=media_id, payload={"preupload": self._safe_preupload(preupload), "complete": complete_payload})
         finally:
             source.close()
+            if "client" in locals():
+                client.close()
 
-    def _preupload(self, credentials, filename, size):
-        client = BilibiliClient(credentials)
-        try:
-            _, payload = client.request_json(
-                "GET",
-                self.PREUPLOAD_URL,
-                params={"name": filename, "size": size, "r": "upos", "profile": "ugcupos/bup", "ssl": 0, "version": "2.14.0"},
-            )
-        finally:
-            client.close()
+    def _preupload(self, client, filename, size):
+        _, payload = client.request_json(
+            "GET",
+            self.PREUPLOAD_URL,
+            params={
+                "name": filename,
+                "size": size,
+                "r": self.LINE["os"],
+                "profile": self.PROFILE,
+                "ssl": 0,
+                "version": "2.14.0",
+                "build": "2100400",
+                "upcdn": self.LINE["upcdn"],
+                "probe_version": self.LINE["probe_version"],
+            },
+        )
         if payload.get("OK") not in {None, 1}:
             platform_code = payload.get("code")
             platform_message = payload.get("message") or payload.get("info")
@@ -102,12 +140,37 @@ class BilibiliUploader:
             raise PublishingRetryableError(payload.get("message") or "Bilibili 创建上传会话失败。")
         return payload
 
+    def _upload_chunk(self, client, url, params, headers, content):
+        last_error = None
+        for attempt in range(3):
+            if attempt:
+                time.sleep(2 ** (attempt - 1))
+            try:
+                if hasattr(client, "request"):
+                    response = client.request(
+                        "PUT", url, params=params, headers=headers, content=content
+                    )
+                    text = response.text
+                else:
+                    response, payload = client.request_json(
+                        "PUT", url, params=params, headers=headers, content=content
+                    )
+                    text = "" if payload.get("OK") == 1 else json.dumps(payload)
+                if text not in {"", "MULTIPART_PUT_SUCCESS"}:
+                    raise PublishingRetryableError("Bilibili 分片上传响应异常。")
+                return response
+            except PublishingRetryableError as exc:
+                last_error = exc
+        raise last_error or PublishingRetryableError("Bilibili 分片上传失败。")
+
     def submit(self, upload_result, metadata, credentials):
         csrf = credentials.get("bili_jct")
         if not csrf:
             raise PublishingValidationError("登录凭据缺少 bili_jct，请重新登录。", code="missing_csrf")
         client = BilibiliClient(credentials)
         try:
+            if hasattr(client, "ensure_device_cookies"):
+                client.ensure_device_cookies()
             cover_url = self._upload_cover(metadata.get("cover", ""), csrf, client)
             payload = {
                 "copyright": metadata["copyright"],
@@ -120,10 +183,22 @@ class BilibiliUploader:
                 "dynamic": metadata.get("dynamic", ""),
                 "tag": ",".join(metadata.get("tags") or []),
                 "subtitle": {"open": 0, "lan": ""},
-                "videos": [{"filename": upload_result.media_id, "title": metadata["title"], "desc": ""}],
+                "interactive": 0,
+                "no_reprint": 0,
+                "dolby": 0,
+                "lossless_music": 0,
+                "videos": [
+                    {
+                        "filename": upload_result.media_id,
+                        "title": metadata["title"],
+                        "desc": "",
+                    }
+                ],
             }
             try:
-                data, raw = client.checked_data("POST", self.SUBMIT_URL, params={"csrf": csrf}, json=payload)
+                data, raw = client.checked_data(
+                    "POST", self.SUBMIT_URL, params={"csrf": csrf, "t": int(time.time() * 1000)}, json=payload
+                )
             except PublishingRetryableError as exc:
                 raise PublishingOutcomeUnknown() from exc
         finally:

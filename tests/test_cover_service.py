@@ -8,11 +8,13 @@ from PIL import Image
 from studio.models import Episode, Outline, Project, Script
 from studio.services.covers import (
     build_cover_prompt,
+    cover_prompt_for_variant,
     decorate_cover_workspace,
     default_episode_cover_title,
     normalize_cover_title,
     render_episode_cover,
     save_cover_template,
+    switch_cover_template_version,
 )
 
 
@@ -122,7 +124,10 @@ def test_build_cover_prompt_reserves_title_area_and_forbids_text():
 
     assert script.outline.title in prompt
     assert script.outline.protagonist in prompt
-    assert "16:10" in prompt
+    assert "横竖版" in prompt
+    assert "同一位主角" in prompt
+    assert "4:3" in cover_prompt_for_variant(prompt, "landscape")
+    assert "3:4" in cover_prompt_for_variant(prompt, "portrait")
     assert "无文字" in prompt
     assert "标题区域" in prompt
 
@@ -146,10 +151,17 @@ def test_save_cover_template_renders_all_episode_covers(tmp_path):
         covers[0].image.open("rb")
         try:
             rendered = Image.open(covers[0].image)
-            assert rendered.size == (1600, 1000)
+            assert rendered.size == (1600, 1200)
             assert rendered.format == "JPEG"
         finally:
             covers[0].image.close()
+        covers[0].portrait_image.open("rb")
+        try:
+            rendered_portrait = Image.open(covers[0].portrait_image)
+            assert rendered_portrait.size == (1200, 1600)
+            assert rendered_portrait.format == "JPEG"
+        finally:
+            covers[0].portrait_image.close()
 
 
 @pytest.mark.django_db
@@ -193,3 +205,100 @@ def test_automatic_cover_title_follows_updated_episode_title(tmp_path):
         decorate_cover_workspace(workspace)
 
         assert workspace["episodes"][0]["cover_title"] == "重生末日前三十天"
+
+
+@pytest.mark.django_db
+def test_cover_template_versions_can_switch_without_losing_custom_titles(tmp_path):
+    script = create_script_with_episodes()
+    with override_settings(MEDIA_ROOT=tmp_path):
+        template = save_cover_template(script, make_image_result(), "prompt one")
+        episode = script.episodes.get(episode_number=1)
+        render_episode_cover(
+            template,
+            episode,
+            "钱没到账灾难先来",
+            title_customized=True,
+        )
+        first_background = template.background.name
+        first_portrait_background = template.portrait_background.name
+
+        template = save_cover_template(script, make_image_result(), "prompt two")
+        second_background = template.background.name
+        template = switch_cover_template_version(template, 1)
+
+        cover = episode.cover
+        cover.refresh_from_db()
+        assert template.version == 1
+        assert template.background.name == first_background
+        assert template.portrait_background.name == first_portrait_background
+        assert cover.title == "钱没到账灾难先来"
+        assert cover.title_customized is True
+        assert cover.template_version == 1
+
+        template = save_cover_template(script, make_image_result(), "prompt three")
+        assert template.version == 3
+        assert list(template.versions.values_list("version", flat=True)) == [3, 2, 1]
+        assert (tmp_path / first_background).exists()
+        assert (tmp_path / first_portrait_background).exists()
+        assert (tmp_path / second_background).exists()
+
+
+@pytest.mark.django_db
+def test_cover_workspace_lists_versions_and_selected_version(tmp_path):
+    script = create_script_with_episodes()
+    with override_settings(MEDIA_ROOT=tmp_path):
+        template = save_cover_template(script, make_image_result(), "prompt one")
+        template = save_cover_template(script, make_image_result(), "prompt two")
+        switch_cover_template_version(template, 1)
+        workspace = {"script_id": script.id, "episodes": []}
+
+        decorate_cover_workspace(workspace)
+
+        versions = workspace["cover_template_versions"]
+        assert [item["version"] for item in versions] == [2, 1]
+        assert [item["is_selected"] for item in versions] == [False, True]
+        assert all(item["portrait_background_url"] for item in versions)
+        assert workspace["cover_template"]["portrait_background_url"]
+
+
+def test_platform_cover_prompts_have_exact_aspect_ratios():
+    assert "7:10" in cover_prompt_for_variant("base prompt", "xiaohongshu")
+    assert "2:3" in cover_prompt_for_variant("base prompt", "douyin")
+
+
+@pytest.mark.django_db
+def test_save_cover_template_creates_platform_masters_only(tmp_path):
+    script = create_script_with_episodes()
+    with override_settings(MEDIA_ROOT=tmp_path):
+        template = save_cover_template(
+            script,
+            make_image_result(),
+            make_image_result(),
+            prompt_snapshot="platform cover prompt",
+            xiaohongshu_result=make_image_result(),
+            douyin_result=make_image_result(),
+        )
+
+        template.xiaohongshu_background.open("rb")
+        try:
+            xiaohongshu = Image.open(template.xiaohongshu_background)
+            assert xiaohongshu.size == (1050, 1500)
+            assert xiaohongshu.format == "PNG"
+        finally:
+            template.xiaohongshu_background.close()
+
+        template.douyin_background.open("rb")
+        try:
+            douyin = Image.open(template.douyin_background)
+            assert douyin.size == (1080, 1620)
+            assert douyin.format == "PNG"
+        finally:
+            template.douyin_background.close()
+
+        covers = list(template.episode_covers.all())
+        assert len(covers) == 2
+        assert all(cover.image and cover.portrait_image for cover in covers)
+        workspace = {"script_id": script.id, "episodes": []}
+        decorate_cover_workspace(workspace)
+        assert workspace["cover_template"]["xiaohongshu_background_url"]
+        assert workspace["cover_template"]["douyin_background_url"]

@@ -1,9 +1,17 @@
+import shutil
+import tempfile
+import zipfile
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from urllib.parse import urlencode
 
+from django.db import transaction
+from django.db.models import Count, F, Max
+from django.db.models.deletion import ProtectedError
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
-from django.db.models import Count, F
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_GET, require_POST
 
 from studio.models import (
@@ -39,6 +47,7 @@ from studio.services.subtitles import (
 )
 from studio.services.video import (
     bind_shot_characters,
+    import_external_captioned_video,
     queue_episode_videos,
     queue_export,
     queue_shot_video,
@@ -83,7 +92,9 @@ def system_settings_page(request):
         {
             "workspace": workspace,
             "slot_rows": get_simple_model_slots(),
-            "publishing_accounts": PublishingAccount.objects.all(),
+            "publishing_accounts": PublishingAccount.objects.exclude(
+                platform=PublishingAccount.PLATFORM_DOUYIN
+            ),
             "publishing_success": request.GET.get("publishing_success", ""),
             "publishing_error": request.GET.get("publishing_error", ""),
             "error": error,
@@ -93,10 +104,41 @@ def system_settings_page(request):
     )
 
 def finished_films_page(request):
-    compositions = list(
+    composition_base = (
         VideoComposition.objects.filter(status=VideoComposition.STATUS_READY)
         .exclude(video="")
+    )
+    project_options = list(
+        composition_base.values(
+            "episode__script__outline_id",
+            "episode__script__outline__title",
+        )
+        .annotate(
+            latest_activity=Max("updated_at"),
+            latest_composition_id=Max("id"),
+        )
+        .order_by("-latest_activity", "-latest_composition_id", "episode__script__outline_id")
+    )
+    selected_project = request.GET.get("project", "").strip()
+    valid_project_ids = {
+        str(row["episode__script__outline_id"]) for row in project_options
+    }
+    if selected_project not in valid_project_ids:
+        selected_project = (
+            str(project_options[0]["episode__script__outline_id"])
+            if project_options
+            else ""
+        )
+
+    selected_compositions = (
+        composition_base.filter(episode__script__outline_id=selected_project)
+        if selected_project
+        else composition_base.none()
+    )
+    compositions = list(
+        selected_compositions
         .select_related(
+            "episode__cover",
             "episode__script__outline",
             "episode__script__project",
         )
@@ -111,12 +153,19 @@ def finished_films_page(request):
     for task in PublishingTask.objects.filter(
         composition_id__in=[item.id for item in compositions]
     ).select_related("account").order_by("-created_at", "-id"):
-        task_map.setdefault(task.composition_id, task)
+        by_platform = task_map.setdefault(task.composition_id, {})
+        by_platform.setdefault(task.platform, task)
     for composition in compositions:
-        composition.latest_publishing_task = task_map.get(composition.id)
+        latest_tasks = list(task_map.get(composition.id, {}).values())
+        composition.latest_publishing_tasks = latest_tasks
+        composition.latest_publishing_task = latest_tasks[0] if latest_tasks else None
+        package_metadata = _douyin_package_metadata(composition)
+        composition.douyin_title = package_metadata["title"]
+        composition.douyin_description = package_metadata["description"]
+        composition.douyin_tags = package_metadata["tags"]
     publishing_accounts = PublishingAccount.objects.filter(
         status=PublishingAccount.STATUS_CONNECTED
-    )
+    ).exclude(platform=PublishingAccount.PLATFORM_DOUYIN)
     script_ids = {item.episode.script_id for item in compositions}
     episode_totals = {
         row["script_id"]: row["total"]
@@ -178,26 +227,29 @@ def finished_films_page(request):
     }
     for project in projects.values():
         for episode_item in project["episodes"].values():
-            task = episode_item["latest"].latest_publishing_task
-            if task and task.status == PublishingTask.STATUS_PUBLISHED:
+            tasks = episode_item["latest"].latest_publishing_tasks
+            statuses = {task.status for task in tasks}
+            if statuses and statuses == {PublishingTask.STATUS_PUBLISHED}:
                 state = "published"
-            elif task and task.status in publishing_groups["publishing"]:
+            elif statuses & publishing_groups["publishing"]:
                 state = "publishing"
-            elif task and task.status in publishing_groups["attention"]:
+            elif statuses & publishing_groups["attention"]:
                 state = "attention"
             else:
                 state = "unpublished"
             episode_item["publishing_state"] = state
             episode_item["publishing_state_label"] = state_labels[state]
 
-    all_projects = list(projects.values())
     project_options = [
-        {"id": project["project_id"], "title": project["title"]}
-        for project in all_projects
+        {
+            "id": row["episode__script__outline_id"],
+            "title": row["episode__script__outline__title"],
+        }
+        for row in project_options
     ]
     all_episode_items = [
         episode
-        for project in all_projects
+        for project in projects.values()
         for episode in project["episodes"].values()
     ]
     film_stats = {
@@ -209,7 +261,6 @@ def finished_films_page(request):
     }
 
     query = request.GET.get("q", "").strip()[:80]
-    selected_project = request.GET.get("project", "").strip()
     selected_status = request.GET.get("status", "").strip()
     selected_sort = request.GET.get("sort", "recent").strip()
     if selected_status not in {"", *state_labels}:
@@ -269,10 +320,74 @@ def finished_films_page(request):
                 "sort": selected_sort,
             },
             "publishing_accounts": publishing_accounts,
+            "film_notice": request.GET.get("notice", ""),
+            "film_error": request.GET.get("error", ""),
             "publishing_task_id": request.GET.get("publishing_task", ""),
             "active_nav": "films",
         },
     )
+
+
+@require_POST
+def delete_finished_film_view(request, composition_id):
+    composition = (
+        VideoComposition.objects.select_related("episode__script__outline")
+        .filter(pk=composition_id, status=VideoComposition.STATUS_READY)
+        .exclude(video="")
+        .first()
+    )
+    if composition is None:
+        raise Http404("Finished film not found")
+
+    project_id = composition.episode.script.outline_id
+    redirect_url = reverse("studio:finished_films")
+    next_url = request.POST.get("next", "")
+    if not url_has_allowed_host_and_scheme(
+        next_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        next_url = ""
+
+    def delete_redirect(query):
+        return redirect(next_url or f"{redirect_url}?{query}")
+
+    latest_id = (
+        VideoComposition.objects.filter(
+            episode=composition.episode,
+            status=VideoComposition.STATUS_READY,
+        )
+        .exclude(video="")
+        .order_by("-version", "-id")
+        .values_list("id", flat=True)
+        .first()
+    )
+    if composition.id == latest_id:
+        query = urlencode(
+            {"project": project_id, "error": "\u5f53\u524d\u6700\u65b0\u7248\u672c\u4e0d\u80fd\u5220\u9664\u3002"}
+        )
+        return delete_redirect(query)
+    if composition.publishing_tasks.exists():
+        query = urlencode(
+            {"project": project_id, "error": "\u8be5\u7248\u672c\u5b58\u5728\u53d1\u5e03\u8bb0\u5f55\uff0c\u4e0d\u80fd\u5220\u9664\u3002"}
+        )
+        return delete_redirect(query)
+
+    storage = composition.video.storage
+    file_name = composition.video.name
+    try:
+        with transaction.atomic():
+            composition.delete()
+            transaction.on_commit(lambda: storage.delete(file_name))
+    except ProtectedError:
+        query = urlencode(
+            {"project": project_id, "error": "\u8be5\u7248\u672c\u6b63\u5728\u88ab\u5176\u4ed6\u8bb0\u5f55\u4f7f\u7528\uff0c\u4e0d\u80fd\u5220\u9664\u3002"}
+        )
+        return delete_redirect(query)
+    query = urlencode(
+        {"project": project_id, "notice": "\u5386\u53f2\u7248\u672c\u5df2\u5220\u9664\u3002"}
+    )
+    return delete_redirect(query)
 
 
 @require_GET
@@ -298,6 +413,75 @@ def download_finished_film_view(request, composition_id):
             f"FINAL-v{composition.version:03d}.mp4"
         ),
     )
+
+
+@require_GET
+def download_douyin_package_view(request, composition_id):
+    composition = (
+        VideoComposition.objects.select_related(
+            "episode__cover",
+            "episode__script__outline",
+        )
+        .filter(pk=composition_id, status=VideoComposition.STATUS_READY)
+        .exclude(video="")
+        .first()
+    )
+    if composition is None or not composition.video:
+        raise Http404("Finished film not found")
+
+    episode = composition.episode
+    metadata = _douyin_package_metadata(composition)
+    prefix = f"EP{episode.episode_number:03d}"
+    package = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+    with zipfile.ZipFile(package, mode="w", allowZip64=True) as archive:
+        video_suffix = _safe_media_suffix(composition.video.name, ".mp4")
+        with composition.video.open("rb") as source:
+            with archive.open(
+                f"{prefix}-video{video_suffix}", mode="w", force_zip64=True
+            ) as target:
+                shutil.copyfileobj(source, target, length=1024 * 1024)
+
+        cover = getattr(episode, "cover", None)
+        if cover and cover.image:
+            cover_suffix = _safe_media_suffix(cover.image.name, ".jpg")
+            with cover.image.open("rb") as source:
+                with archive.open(f"{prefix}-cover{cover_suffix}", mode="w") as target:
+                    shutil.copyfileobj(source, target, length=1024 * 1024)
+
+        copy_text = (
+            f"标题：{metadata['title']}\n\n"
+            f"简介：\n{metadata['description']}\n\n"
+            f"标签：{metadata['tags']}\n"
+        )
+        archive.writestr(f"{prefix}-发布文案.txt", copy_text.encode("utf-8"))
+
+    package.seek(0)
+    return FileResponse(
+        package,
+        as_attachment=True,
+        content_type="application/zip",
+        filename=(
+            f"{script_storage_key(episode.script)}-"
+            f"{prefix}-douyin-package.zip"
+        ),
+    )
+
+
+def _douyin_package_metadata(composition):
+    episode = composition.episode
+    return {
+        "title": episode.title.strip() or f"第 {episode.episode_number} 集",
+        "description": episode.summary.strip(),
+        "tags": "#漫剧 #AI动画 #短剧",
+    }
+
+
+def _safe_media_suffix(name, default):
+    suffix = Path(str(name or "")).suffix.lower()
+    if suffix in {".mp4", ".mov", ".jpg", ".jpeg", ".png", ".webp"}:
+        return suffix
+    return default
+
 
 def video_page(request, workspace_id):
     return video_episode_page(request, workspace_id, 1)
@@ -352,6 +536,7 @@ def _render_video_episode(request, workspace_id, episode_number, script_id=None)
             "composition": data["composition"],
             "clean_composition": data["clean_composition"],
             "captioned_composition": data["captioned_composition"],
+            "composition_versions": data["composition_versions"],
             "episode_workflow": _latest_workflow_payload(episode),
             "subtitle": subtitle_page_data(episode, data["shots"]),
             "publishing_accounts": PublishingAccount.objects.filter(
@@ -636,6 +821,34 @@ def export_video_view(request, workspace_id, episode_number):
     return _video_redirect(workspace_id, episode_number, tab="assembly", script_id=script_id)
 
 
+@require_POST
+def upload_external_captioned_video_view(request, workspace_id, episode_number):
+    script_id = _request_script_id(request)
+    episode = _episode(workspace_id, episode_number, script_id=script_id)
+    try:
+        composition = import_external_captioned_video(
+            episode,
+            request.FILES.get("video"),
+        )
+    except ValueError as exc:
+        return _video_error(
+            request,
+            workspace_id,
+            episode_number,
+            str(exc),
+            tab="assembly",
+            script_id=script_id,
+            external_upload_auto_open=True,
+        )
+    return _video_redirect(
+        workspace_id,
+        episode_number,
+        tab="assembly",
+        script_id=script_id,
+        external_uploaded=composition.version,
+    )
+
+
 @require_GET
 def video_status_view(request, workspace_id, episode_number):
     script_id = _request_script_id(request)
@@ -773,6 +986,7 @@ def _video_redirect(
     script_id=None,
     subtitle=False,
     shot_subtitle=None,
+    external_uploaded=None,
 ):
     if script_id:
         url = reverse("studio:video_script_episode", args=[workspace_id, script_id, episode_number])
@@ -783,6 +997,8 @@ def _video_redirect(
         query.append("subtitle=1")
     if shot_subtitle:
         query.append(f"shot_subtitle={shot_subtitle}")
+    if external_uploaded:
+        query.append(f"external_uploaded={external_uploaded}")
     return redirect(f"{url}?{'&'.join(query)}")
 
 
@@ -796,6 +1012,7 @@ def _video_error(
     subtitle_auto_open=False,
     subtitle_style_auto_open=False,
     shot_subtitle_auto_open="",
+    external_upload_auto_open=False,
 ):
     script_id = script_id or _request_script_id(request)
     repository = WorkspaceRepository()
@@ -816,6 +1033,7 @@ def _video_error(
             "composition": data["composition"],
             "clean_composition": data["clean_composition"],
             "captioned_composition": data["captioned_composition"],
+            "composition_versions": data["composition_versions"],
             "episode_workflow": _latest_workflow_payload(episode),
             "subtitle": subtitle_data,
             "characters": Character.objects.filter(
@@ -825,6 +1043,7 @@ def _video_error(
             "active_tab": tab,
             "subtitle_auto_open": subtitle_auto_open,
             "subtitle_style_auto_open": subtitle_style_auto_open,
+            "external_upload_auto_open": external_upload_auto_open,
             "active_nav": "video",
             "error": error,
         },

@@ -1,7 +1,9 @@
 <section class="publishing-settings" aria-labelledby="publishing-account-title">
   <header class="publishing-account-head">
     <div><p class="eyebrow">Publishing Accounts</p><h2 id="publishing-account-title">发布平台账号</h2></div>
-    <button class="primary-button" type="button" data-modal-target="bilibili-login" data-qr-login="{% url 'studio:publishing_qr_login' %}">连接 Bilibili</button>
+    <div class="publishing-account-actions">
+      <button class="secondary-button" type="button" data-modal-target="bilibili-login" data-qr-login="{% url 'studio:publishing_qr_login' %}">连接 Bilibili</button>
+    </div>
   </header>
 
   {% if publishing_success %}<div class="task-status is-success" role="status"><strong>发布账号操作已完成。</strong></div>{% endif %}
@@ -11,7 +13,7 @@
     <div class="publishing-account-list">
       {% for account in publishing_accounts %}
         <article class="publishing-account-row">
-          <div><strong>{{ account.display_name }}</strong> <span class="status-pill {% if account.status == 'connected' %}success{% else %}warning{% endif %}">{{ account.get_status_display }}</span><p>UID {{ account.remote_account_id }}{% if account.last_checked_at %} · 最近检查 {{ account.last_checked_at|date:"Y-m-d H:i" }}{% endif %}</p>{% if account.last_error %}<p class="inline-error">{{ account.last_error }}</p>{% endif %}</div>
+          <div><strong>{{ account.display_name }}</strong> <span class="status-pill">{{ account.get_platform_display }}</span> <span class="status-pill {% if account.status == 'connected' %}success{% else %}warning{% endif %}">{{ account.get_status_display }}</span><p>UID {{ account.remote_account_id }}{% if account.last_checked_at %} · 最近检查 {{ account.last_checked_at|date:"Y-m-d H:i" }}{% endif %}</p>{% if account.last_error %}<p class="inline-error">{{ account.last_error }}</p>{% endif %}</div>
           <div class="publishing-account-actions">
             <form method="post" action="{% url 'studio:publishing_account_check' account.id %}">{% csrf_token %}<button class="ghost-button small" type="submit">检查连接</button></form>
             <form method="post" action="{% url 'studio:publishing_account_logout' account.id %}">{% csrf_token %}<button class="ghost-button small" type="submit">注销</button></form>
@@ -26,7 +28,13 @@
   <details>
     <summary>高级方式：导入 Bilibili Cookie</summary>
     <form class="cookie-login" method="post" action="{% url 'studio:publishing_cookie_login' %}">
-      {% csrf_token %}<textarea name="cookie" aria-label="Bilibili Cookie" placeholder="SESSDATA=...; bili_jct=...; DedeUserID=..." required></textarea><button class="secondary-button" type="submit">检查并连接</button>
+      {% csrf_token %}<input type="hidden" name="platform" value="bilibili"><textarea name="cookie" aria-label="Bilibili Cookie" placeholder="SESSDATA=...; bili_jct=...; DedeUserID=...; buvid3=..." required></textarea><button class="secondary-button" type="submit">检查并连接</button>
+    </form>
+  </details>
+  <details>
+    <summary>连接 AcFun：导入 Cookie</summary>
+    <form class="cookie-login" method="post" action="{% url 'studio:publishing_cookie_login' %}">
+      {% csrf_token %}<input type="hidden" name="platform" value="acfun"><textarea name="cookie" aria-label="AcFun Cookie" placeholder="acPasstoken=...; ac_userId=...; ac_username=..." required></textarea><button class="secondary-button" type="submit">检查并连接</button>
     </form>
   </details>
 </section>

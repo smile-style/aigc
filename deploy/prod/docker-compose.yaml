@@ -5,7 +5,12 @@ x-app-environment: &app-environment
   DJANGO_MEDIA_ROOT: /app/media
   WORKSPACE_DIR: /app/workspace
   LLM_LOG_PATH: /app/workspace/llm.log
-  DB_ENGINE: sqlite
+  DB_ENGINE: "${DB_ENGINE:-sqlite}"
+  DB_NAME: "${MYSQL_DATABASE:-AIGC_STUDIO}"
+  DB_USER: "${MYSQL_USER:-aigc_studio}"
+  DB_PASSWORD: "${MYSQL_PASSWORD:-}"
+  DB_HOST: "${DB_HOST:-aigc-db}"
+  DB_PORT: "${DB_PORT:-3306}"
   GENERATION_WORKER_INTERVAL_SECONDS: "${GENERATION_WORKER_INTERVAL_SECONDS:-2}"
   GENERATION_MAX_CONCURRENCY: "1"
   GENERATION_LEASE_SECONDS: "${GENERATION_LEASE_SECONDS:-900}"
@@ -15,6 +20,18 @@ x-app-environment: &app-environment
   PUBLISH_LEASE_SECONDS: "${PUBLISH_LEASE_SECONDS:-180}"
   PUBLISH_TASK_TIMEOUT_SECONDS: "${PUBLISH_TASK_TIMEOUT_SECONDS:-7200}"
   PUBLISHING_CREDENTIAL_ENCRYPTION_KEY: "${PUBLISHING_CREDENTIAL_ENCRYPTION_KEY:-}"
+  HF_HOME: "${HF_HOME:-/app/workspace/.cache/huggingface}"
+  SUBTITLE_ASR_BACKEND: "${SUBTITLE_ASR_BACKEND:-faster_whisper}"
+  SUBTITLE_WHISPER_MODEL: "${SUBTITLE_WHISPER_MODEL:-small}"
+  SUBTITLE_WHISPER_DEVICE: "${SUBTITLE_WHISPER_DEVICE:-cpu}"
+  SUBTITLE_WHISPER_COMPUTE_TYPE: "${SUBTITLE_WHISPER_COMPUTE_TYPE:-int8}"
+  SUBTITLE_LANGUAGE: "${SUBTITLE_LANGUAGE:-zh}"
+  SUBTITLE_WHISPER_VAD_FILTER: "${SUBTITLE_WHISPER_VAD_FILTER:-true}"
+  SUBTITLE_ASR_PART_MIN_CONFIDENCE: "${SUBTITLE_ASR_PART_MIN_CONFIDENCE:-0.55}"
+  SUBTITLE_MAX_TIMELINE_DRIFT_MS: "${SUBTITLE_MAX_TIMELINE_DRIFT_MS:-1000}"
+  SUBTITLE_CUE_BOUNDARY_TOLERANCE_MS: "${SUBTITLE_CUE_BOUNDARY_TOLERANCE_MS:-300}"
+  EXTERNAL_VIDEO_MAX_UPLOAD_BYTES: "${EXTERNAL_VIDEO_MAX_UPLOAD_BYTES:-2147483648}"
+  EXTERNAL_VIDEO_DURATION_TOLERANCE_MS: "${EXTERNAL_VIDEO_DURATION_TOLERANCE_MS:-1000}"
 
 x-app-service: &app-service
   image: "${AIGC_IMAGE:?Set AIGC_IMAGE in .env}"
@@ -46,9 +63,43 @@ x-app-service: &app-service
       max-file: "5"
 
 services:
+  aigc-db:
+    profiles: ["mysql"]
+    image: registry.cn-shanghai.aliyuncs.com/uwa/mysql:8.0
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+    environment:
+      MYSQL_DATABASE: "${MYSQL_DATABASE:-AIGC_STUDIO}"
+      MYSQL_USER: "${MYSQL_USER:-aigc_studio}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:-}"
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-}"
+      TZ: "${TZ:-Asia/Shanghai}"
+    volumes:
+      - type: bind
+        source: /data/aigc_data/prod/mysql/data
+        target: /var/lib/mysql
+      - type: bind
+        source: ../mysql/config/mysql.cnf
+        target: /etc/mysql/conf.d/aigc.cnf
+        read_only: true
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   migrate:
     <<: *app-service
     restart: "no"
+    depends_on:
+      aigc-db:
+        condition: service_healthy
+        required: false
     command: ["python", "manage.py", "migrate", "--noinput"]
 
   aigc-studio:

@@ -1,0 +1,225 @@
+.cover-format-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.cover-format-preview {
+  min-width: 0;
+  margin: 0;
+}
+
+.cover-format-preview.is-portrait,
+.cover-format-preview.is-xiaohongshu,
+.cover-format-preview.is-douyin {
+  width: min(100%, 360px);
+  justify-self: center;
+}
+
+.cover-format-canvas {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #111820;
+}
+
+.cover-format-preview.is-landscape .cover-format-canvas {
+  aspect-ratio: 4 / 3;
+}
+
+.cover-format-preview.is-portrait .cover-format-canvas {
+  aspect-ratio: 3 / 4;
+}
+
+.cover-format-preview.is-xiaohongshu .cover-format-canvas {
+  aspect-ratio: 7 / 10;
+}
+
+.cover-format-preview.is-douyin .cover-format-canvas {
+  aspect-ratio: 2 / 3;
+}
+
+.cover-format-canvas > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cover-master-copy {
+  position: absolute;
+  inset: auto 0 0;
+  display: grid;
+  gap: 4px;
+  padding: 28px 24px 20px;
+  background: linear-gradient(to bottom, transparent, rgb(8 12 18 / 90%));
+  color: #fff;
+}
+
+.cover-master-copy strong {
+  overflow-wrap: anywhere;
+  font-size: 28px;
+  line-height: 1.12;
+}
+
+.cover-master-copy span {
+  overflow: hidden;
+  color: #ffca3a;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cover-format-preview figcaption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 8px;
+  color: var(--subtle);
+  font-size: 12px;
+}
+
+.cover-format-preview figcaption strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.cover-master-downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.cover-master-downloads .secondary-link {
+  justify-content: center;
+}
+
+.cover-generator-form {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.cover-generator-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.cover-generator-actions > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--subtle);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cover-version-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, 40px);
+  gap: 4px;
+  padding: 4px;
+  background: #111820;
+}
+
+.cover-version-pair .cover-version-thumb {
+  aspect-ratio: 4 / 3;
+}
+
+.cover-version-pair .cover-version-thumb.is-portrait {
+  aspect-ratio: 3 / 4;
+}
+
+.cover-version-pair .cover-version-thumb.is-xiaohongshu {
+  aspect-ratio: 7 / 10;
+}
+
+.cover-version-pair .cover-version-thumb.is-douyin {
+  aspect-ratio: 2 / 3;
+}
+
+.cover-episode-row {
+  grid-template-columns: 42px 250px minmax(0, 1fr) auto;
+}
+
+.cover-episode-previews {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 54px;
+  gap: 8px;
+  align-items: end;
+}
+
+.cover-episode-thumb.is-landscape {
+  aspect-ratio: 4 / 3;
+}
+
+.cover-episode-thumb.is-portrait {
+  aspect-ratio: 3 / 4;
+}
+
+.cover-download-links {
+  display: grid;
+  gap: 6px;
+}
+
+.cover-download-links .secondary-link {
+  justify-content: center;
+  min-width: 58px;
+}
+
+@media (max-width: 900px) {
+  .cover-format-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cover-episode-row {
+    grid-template-columns: 34px 180px minmax(0, 1fr);
+  }
+
+  .cover-download-links {
+    grid-column: 3;
+    display: flex;
+  }
+}
+
+@media (max-width: 620px) {
+  .cover-format-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cover-format-preview.is-portrait,
+  .cover-format-preview.is-xiaohongshu,
+  .cover-format-preview.is-douyin {
+    width: min(72vw, 340px);
+  }
+
+  .cover-generator-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .cover-generator-actions .primary-button {
+    width: 100%;
+  }
+
+  .cover-episode-row {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .cover-episode-previews,
+  .cover-title-form,
+  .cover-download-links {
+    grid-column: 2;
+  }
+
+  .cover-episode-previews {
+    grid-template-columns: minmax(0, 1fr) 72px;
+  }
+}

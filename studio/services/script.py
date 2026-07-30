@@ -168,7 +168,8 @@ def validate_script_payload(payload):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"Episode {index} field {field} must be a non-empty string")
 
-    pacing = validate_episode_pacing(payload.get("episode_1_pacing"))
+    normalized_pacing = _normalize_model_pacing(payload.get("episode_1_pacing"))
+    pacing = validate_episode_pacing(normalized_pacing)
     validate_script_duration_capacity(episode_1_script, pacing["duration_seconds"])
     return {
         "script_plan": script_plan,
@@ -429,6 +430,24 @@ def _normalize_model_pacing(pacing):
 
     normalized = dict(pacing)
     normalized_beats = [dict(beat) for beat in beats]
+    crisis = normalized_beats[0]
+    goal = normalized_beats[1]
+    crisis_start = crisis.get("start_second")
+    crisis_end = crisis.get("end_second")
+    goal_start = goal.get("start_second")
+    if (
+        all(
+            isinstance(value, int) and not isinstance(value, bool)
+            for value in (crisis_start, crisis_end, goal_start)
+        )
+        and 0 <= crisis_start < crisis_end <= duration
+        and goal_start == crisis_end
+    ):
+        corrected_end = min(crisis_end, 3)
+        crisis["start_second"] = 0
+        crisis["end_second"] = corrected_end
+        goal["start_second"] = corrected_end
+
     resolution = normalized_beats[-2]
     next_crisis = normalized_beats[-1]
     start = next_crisis.get("start_second")

@@ -5,7 +5,7 @@
 
 {% block extra_scripts %}
   {% load static %}
-  <script src="{% static 'studio/phase3.js' %}?v=20260724-video" defer></script>
+  <script src="{% static 'studio/phase3.js' %}?v=20260729-external-caption-upload" defer></script>
 {% endblock %}
 
 {% block content %}
@@ -91,7 +91,26 @@
           {% elif subtitle.track.enabled %}<strong>&#24050;&#24320;&#21551;</strong>
           {% else %}<strong>&#24050;&#20851;&#38381;</strong>{% endif %}
           {% if subtitle.track %}<span>{{ subtitle.visible_count }} &#26465;&#26174;&#31034;{% if subtitle.hidden_count %} · {{ subtitle.hidden_count }} &#26465;&#24050;&#38544;&#34255;{% endif %} · {{ subtitle.review_count }} &#26465;&#24453;&#26657;&#23545;</span>{% endif %}
+          {% if subtitle.track %}<span>&#36136;&#26816;&#65306;{% if subtitle.qc_passed %}<strong>&#36890;&#36807;</strong>{% elif subtitle.qc_current %}<strong class="is-warning">&#26410;&#36890;&#36807;</strong>{% else %}<strong class="is-warning">&#24453;&#36136;&#26816;</strong>{% endif %}{% if subtitle.track.qc_score != None %} {{ subtitle.track.qc_score|floatformat:2 }}{% endif %}</span>{% endif %}
         </p>
+        {% if request.GET.external_uploaded %}
+          <div class="alert success-alert external-upload-success" role="status">&#22806;&#37096;&#23383;&#24149;&#25104;&#29255; v{{ request.GET.external_uploaded }} &#24050;&#19978;&#20256;&#65292;&#24050;&#35774;&#20026;&#24403;&#21069;&#23383;&#24149;&#29256;&#12290;</div>
+        {% endif %}
+        <section class="external-caption-workflow" aria-labelledby="external-caption-title">
+          <div class="external-caption-copy">
+            <span class="external-caption-icon" aria-hidden="true">CC</span>
+            <div>
+              <strong id="external-caption-title">&#22806;&#37096;&#21046;&#20316;&#23383;&#24149;</strong>
+              <p>&#19979;&#36733;&#26080;&#23383;&#24149;&#29256;&#65292;&#22312;&#21098;&#36753;&#24037;&#20855;&#20013;&#23436;&#25104;&#23383;&#24149;&#21518;&#65292;&#19978;&#20256;&#24102;&#23383;&#24149; MP4 &#20316;&#20026;&#26032;&#25104;&#29255;&#29256;&#26412;&#12290;</p>
+            </div>
+          </div>
+          <ol class="external-caption-steps" aria-label="&#22806;&#37096;&#23383;&#24149;&#24037;&#20316;&#27969;">
+            <li><span>1</span><strong>&#19979;&#36733;&#26080;&#23383;&#24149;&#29256;</strong></li>
+            <li><span>2</span><strong>&#22806;&#37096;&#21046;&#20316;&#23383;&#24149;</strong></li>
+            <li><span>3</span><strong>&#19978;&#20256;&#23383;&#24149;&#25104;&#29255;</strong></li>
+          </ol>
+          <button class="secondary-button" type="button" data-modal-target="external-caption-upload" {% if not clean_composition or clean_composition.status != 'ready' or not clean_composition.video %}disabled title="&#35831;&#20808;&#23548;&#20986;&#26080;&#23383;&#24149;&#29256;"{% endif %}>&#19978;&#20256;&#23383;&#24149;&#25104;&#29255;</button>
+        </section>
         <div class="export-actions export-download-actions" aria-label="&#25104;&#29255;&#19979;&#36733;">
           {% if clean_composition.status == 'ready' and clean_composition.video %}
             <a class="primary-button" href="{% url 'studio:download_composition' workspace.id episode.episode_number %}?script_id={{ workspace.script_id }}&amp;variant=clean">&#19979;&#36733;&#26080;&#23383;&#24149;&#29256;&#26412;</a>
@@ -101,7 +120,7 @@
           {% if captioned_composition.status == 'ready' and captioned_composition.video %}
             <a class="secondary-button" href="{% url 'studio:download_composition' workspace.id episode.episode_number %}?script_id={{ workspace.script_id }}&amp;variant=captioned">&#19979;&#36733;&#26377;&#23383;&#24149;&#29256;&#26412;</a>
           {% else %}
-            <button class="secondary-button" type="button" disabled title="{% if not subtitle.track or not subtitle.cues %}&#35831;&#20808;&#29983;&#25104;&#23383;&#24149;{% elif subtitle.is_stale %}&#23383;&#24149;&#24050;&#36807;&#26399;&#65292;&#35831;&#37325;&#26032;&#29983;&#25104;{% else %}&#26377;&#23383;&#24149;&#25104;&#29255;&#23578;&#26410;&#23548;&#20986;{% endif %}">&#19979;&#36733;&#26377;&#23383;&#24149;&#29256;&#26412;</button>
+            <button class="secondary-button" type="button" disabled title="{% if not subtitle.track or not subtitle.cues %}&#35831;&#20808;&#29983;&#25104;&#23383;&#24149;{% elif subtitle.is_stale %}&#23383;&#24149;&#24050;&#36807;&#26399;&#65292;&#35831;&#37325;&#26032;&#29983;&#25104;{% elif not subtitle.qc_passed %}&#23383;&#24149;&#36136;&#26816;&#26410;&#36890;&#36807;{% else %}&#26377;&#23383;&#24149;&#25104;&#29255;&#23578;&#26410;&#23548;&#20986;{% endif %}">&#19979;&#36733;&#26377;&#23383;&#24149;&#29256;&#26412;</button>
           {% endif %}
         </div>
         <div class="export-actions export-tool-actions">
@@ -117,10 +136,38 @@
           {% if captioned_composition.status != 'exporting' %}
             <form method="post" action="{% url 'studio:export_video' workspace.id episode.episode_number %}" data-submit-guard>
               {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}"><input type="hidden" name="variant" value="captioned">
-              <button class="ghost-button" type="submit" data-loading-text="&#25552;&#20132;&#23548;&#20986;&#20013;..." {% if counts.ready != counts.total or not counts.total or not subtitle.track or not subtitle.cues or subtitle.is_stale %}disabled{% endif %}>{% if captioned_composition.status == 'ready' %}&#37325;&#26032;&#23548;&#20986;&#23383;&#24149;&#29256;{% else %}&#29983;&#25104;&#23383;&#24149;&#29256;{% endif %}</button>
+              <button class="ghost-button" type="submit" data-loading-text="&#25552;&#20132;&#23548;&#20986;&#20013;..." {% if counts.ready != counts.total or not counts.total or not subtitle.track or not subtitle.cues or subtitle.is_stale or subtitle.qc_blocked %}disabled{% endif %}>{% if captioned_composition.status == 'ready' %}&#37325;&#26032;&#23548;&#20986;&#23383;&#24149;&#29256;{% else %}&#29983;&#25104;&#23383;&#24149;&#29256;{% endif %}</button>
             </form>
           {% else %}<button class="ghost-button" type="button" disabled>&#23383;&#24149;&#29256;&#23548;&#20986;&#20013;</button>{% endif %}
         </div>
+        {% if composition_versions %}
+          <div class="composition-version-list" aria-label="&#25104;&#29255;&#29256;&#26412;">
+            {% for version in composition_versions %}
+              <div class="composition-version-row{% if composition.id == version.id %} is-current{% endif %}">
+                <div><strong>v{{ version.version }}</strong><span>{% if version.source == 'external_upload' %}&#22806;&#37096;&#23383;&#24149;&#29256;{% elif version.variant == 'captioned' %}&#24179;&#21488;&#23383;&#24149;&#29256;{% else %}&#26080;&#23383;&#24149;&#29256;{% endif %}</span>{% if composition.id == version.id %}<small>&#24403;&#21069;</small>{% endif %}</div>
+                <time datetime="{{ version.exported_at|date:'c' }}">{{ version.exported_at|date:"m-d H:i" }}</time>
+                <a class="ghost-button small" href="{% url 'studio:download_finished_film' version.id %}">&#19979;&#36733;</a>
+                {% if composition.id != version.id and not version.publishing_tasks.exists %}
+                  <form class="composition-version-delete" method="post" action="{% url 'studio:delete_finished_film' version.id %}" data-confirm-submit="&#30830;&#23450;&#21024;&#38500;&#36825;&#20010;&#21382;&#21490;&#25104;&#29255;&#29256;&#26412;&#21527;&#65311;&#27492;&#25805;&#20316;&#20250;&#21516;&#26102;&#21024;&#38500;&#30913;&#30424;&#25991;&#20214;&#12290;">
+                    {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button class="danger-link" type="submit" aria-label="&#21024;&#38500; v{{ version.version }} &#21382;&#21490;&#29256;&#26412;">&#21024;&#38500;</button>
+                  </form>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </div>
+      <div class="detail-modal" id="external-caption-upload" role="dialog" aria-modal="true" aria-labelledby="external-caption-upload-title" {% if external_upload_auto_open %}data-auto-open{% endif %} hidden>
+        <div class="detail-backdrop" data-modal-close></div>
+        <section class="detail-panel external-caption-upload-dialog">
+          <button class="modal-close" type="button" data-modal-close aria-label="&#20851;&#38381;">&times;</button>
+          <header><p class="eyebrow">External captions</p><h2 id="external-caption-upload-title">&#19978;&#20256;&#23383;&#24149;&#25104;&#29255;</h2><p>&#23558;&#20445;&#23384;&#20026;&#26032;&#29256;&#26412;&#65292;&#19981;&#20250;&#35206;&#30422;&#26080;&#23383;&#24149;&#21407;&#29255;&#12290;</p></header>
+          <form method="post" enctype="multipart/form-data" action="{% url 'studio:upload_external_captioned_video' workspace.id episode.episode_number %}" data-submit-guard data-external-video-upload>
+            {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+            <label class="external-video-picker"><span>&#36873;&#25321; MP4 &#25104;&#29255;</span><input type="file" name="video" accept="video/mp4,.mp4" required data-external-video-file><small data-external-video-name>H.264 + AAC &#183; 9:16 &#31446;&#23631; &#183; &#19982;&#26080;&#23383;&#24149;&#29256;&#26102;&#38271;&#24046;&#19981;&#36229;&#36807; 1 &#31186;</small></label>
+            <footer><button class="ghost-button" type="button" data-modal-close>&#21462;&#28040;</button><button class="primary-button" type="submit" data-loading-text="&#19978;&#20256;&#24182;&#26657;&#39564;&#20013;...">&#19978;&#20256;&#24182;&#26657;&#39564;</button></footer>
+          </form>
+        </section>
       </div>
       <div class="detail-modal" id="subtitle-editor" role="dialog" aria-modal="true" aria-labelledby="subtitle-editor-title" {% if subtitle_auto_open %}data-auto-open{% endif %} hidden>
         <div class="detail-backdrop" data-modal-close></div>
@@ -151,6 +198,9 @@
 
           {% if subtitle.is_stale %}
             <div class="task-status is-error subtitle-editor-alert" role="alert"><span class="task-indicator" aria-hidden="true"></span><div><strong>&#23383;&#24149;&#38656;&#35201;&#37325;&#26032;&#23545;&#40784;</strong><p>&#38236;&#22836;&#12289;&#39034;&#24207;&#25110;&#21488;&#35789;&#24050;&#32463;&#21464;&#21270;&#12290;</p></div></div>
+          {% endif %}
+          {% if subtitle.track and subtitle.qc_current and not subtitle.qc_passed %}
+            <div class="task-status is-error subtitle-editor-alert" role="alert"><span class="task-indicator" aria-hidden="true"></span><div><strong>&#23383;&#24149;&#36136;&#26816;&#26410;&#36890;&#36807;</strong><p>{{ subtitle.track.qc_reason }}{% if subtitle.track.qc_score != None %} ({{ subtitle.track.qc_score|floatformat:2 }}){% endif %}</p></div></div>
           {% endif %}
           {% if subtitle.track.status == 'failed' %}
             <div class="task-status is-error subtitle-editor-alert" role="alert"><span class="task-indicator" aria-hidden="true"></span><div><strong>&#23383;&#24149;&#29983;&#25104;&#22833;&#36133;</strong><p>{{ subtitle.track.error_message }}</p></div></div>
@@ -199,6 +249,7 @@
                           <span class="subtitle-confidence {% if cue.needs_review %}is-warning{% endif %}">{{ cue.confidence_percent }}%</span>
                         </div>
                         <label class="subtitle-text-field"><span>&#23383;&#24149;&#25991;&#23383;</span><textarea name="cue_text_{{ cue.id }}" rows="2" maxlength="200" data-subtitle-text>{{ cue.text }}</textarea></label>
+                        {% if cue.is_hidden and cue.needs_review %}<p class="subtitle-alignment-warning">未匹配到对应语音，已从导出中隐藏。原台词：{{ cue.source_text }}</p>{% endif %}
                         {% if cue.recognized_text %}<details><summary>&#35821;&#38899;&#35782;&#21035;&#32467;&#26524;</summary><p>{{ cue.recognized_text }}</p></details>{% endif %}
                       </div>
                       <label class="subtitle-reviewed"><input type="checkbox" name="cue_reviewed_{{ cue.id }}" value="1" {% if not cue.needs_review %}checked{% endif %}><span>&#24050;&#26657;&#23545;</span></label>

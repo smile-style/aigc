@@ -10,6 +10,11 @@ urlpatterns = [
     path("", views.outline_page, name="outline"),
     path("outlines/generate/", views.generate_outlines_view, name="generate_outlines"),
     path("outlines/usable/", views.mark_outline_usable_view, name="mark_outline_usable"),
+    path(
+        "outlines/usable/remove/",
+        views.remove_outline_from_library_view,
+        name="remove_outline_from_library",
+    ),
     path("outlines/select/", views.select_outline_view, name="select_outline"),
     path(
         "projects/<int:project_id>/",
@@ -21,6 +26,16 @@ urlpatterns = [
         "films/<int:composition_id>/download/",
         video_views.download_finished_film_view,
         name="download_finished_film",
+    ),
+    path(
+        "films/<int:composition_id>/delete/",
+        video_views.delete_finished_film_view,
+        name="delete_finished_film",
+    ),
+    path(
+        "films/<int:composition_id>/douyin-package/",
+        video_views.download_douyin_package_view,
+        name="download_douyin_package",
     ),
     path("script/", views.script_library_page, name="script_index"),
     path("script/<str:workspace_id>/", views.script_page, name="script"),
@@ -50,6 +65,11 @@ urlpatterns = [
         name="generate_characters",
     ),
     path(
+        "script/<str:workspace_id>/characters/images/download/",
+        views.download_all_character_images_view,
+        name="download_all_character_images",
+    ),
+    path(
         "script/<str:workspace_id>/characters/<int:character_id>/image/",
         views.generate_character_image_view,
         name="generate_character_image",
@@ -63,6 +83,16 @@ urlpatterns = [
         "script/<str:workspace_id>/covers/generate/",
         cover_views.generate_cover_view,
         name="generate_cover",
+    ),
+    path(
+        "script/<str:workspace_id>/covers/version/<int:version>/select/",
+        cover_views.select_cover_template_version_view,
+        name="select_cover_template_version",
+    ),
+    path(
+        "script/<str:workspace_id>/covers/master/<str:variant>/download/",
+        cover_views.download_cover_master_view,
+        name="download_cover_master",
     ),
     path(
         "script/<str:workspace_id>/covers/episode/<int:episode_number>/",
@@ -212,6 +242,11 @@ urlpatterns = [
         "video/<str:workspace_id>/episode/<int:episode_number>/export/",
         video_views.export_video_view,
         name="export_video",
+    ),
+    path(
+        "video/<str:workspace_id>/episode/<int:episode_number>/external-captioned/upload/",
+        video_views.upload_external_captioned_video_view,
+        name="upload_external_captioned_video",
     ),
     path(
         "video/<str:workspace_id>/episode/<int:episode_number>/shot-video/<int:video_id>/download/",

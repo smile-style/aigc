@@ -29,7 +29,59 @@ DEFAULT_STYLE = {
     "margin_bottom": 92,
 }
 MAX_CUE_TEXT_LENGTH = 18
-ROLE_PREFIX_RE = re.compile(r"^[^：:\n]{1,12}[：:]\s*")
+ROLE_PREFIX_RE = re.compile(
+    r"^\s*(?:"
+    r"[【\[][^】\]\n]{1,16}[】\]]\s*[：:]?"
+    r"|[A-Za-z\u4e00-\u9fff·• ]{1,16}(?:（[^）\n]{1,10}）|\([^\)\n]{1,10}\))?\s*[：:]"
+    r")\s*"
+)
+SUBTITLE_QUOTE_RE = re.compile(r"[\"“”‘’「」『』]")
+SUBTITLE_SENTENCE_RE = re.compile(r"[^。！？!?；;\n]+(?:[。！？!?；;]+[\"”’』」]?)?")
+SPEAKER_TAG_RE = re.compile(
+    r"(?P<label>[A-Za-z0-9\u4e00-\u9fff·•（）() ]{1,30})[：:]\s*"
+)
+NO_DIALOGUE_RE = re.compile(
+    r"^\s*(?:无|无对白|无台词|无人说话|空镜|纯画面|环境音|音效|无声|"
+    r"none|n/?a|[-—]+)\s*[。.!！]?\s*$",
+    re.IGNORECASE,
+)
+NON_SPOKEN_SENTENCE_RE = re.compile(
+    r"^(?:画面|镜头|屏幕|楼梯间|走廊|门外|远处|背景|施工声|脚步声|敲击声|"
+    r"警报|音乐|环境音).*(?:传来|响起|出现|显示|切换|闪过|靠近|远去|连续)"
+)
+NON_SPEECH_LABEL_KEYWORDS = (
+    "旁白",
+    "音效",
+    "环境音",
+    "脚步声",
+    "敲击声",
+    "施工声",
+    "警报",
+    "计时",
+    "字幕",
+    "屏幕标识",
+    "画面",
+    "镜头",
+    "动作",
+    "系统提示",
+    "系统播报",
+    "转场",
+)
+SPEECH_LABEL_HINTS = (
+    "说",
+    "问",
+    "答",
+    "喊",
+    "自语",
+    "低声",
+    "高声",
+    "急声",
+    "语音",
+    "电话",
+    "读出",
+    "念出",
+)
+QUOTE_PAIRS = {"“": "”", '"': '"', "「": "」", "『": "』", "‘": "’"}
 _WHISPER_MODEL = None
 
 
@@ -158,13 +210,22 @@ def process_subtitle_task(task_id):
             track,
             ordered,
             source_hash=task.input_snapshot.get("source_hash"),
+            task_id=task.id,
         )
         GenerationTask.objects.filter(pk=task.pk).update(
             status=GenerationTask.STATUS_SUCCEEDED,
+            progress_current=len(ordered),
+            progress_total=len(ordered),
+            progress_percent=100,
             result_snapshot={
                 "subtitle_track_id": track.id,
                 "cue_count": track.cues.count(),
                 "shot_ids": task.input_snapshot.get("shot_ids", []),
+                "subtitle_qc": {
+                    "status": track.qc_status,
+                    "score": track.qc_score,
+                    "reason": track.qc_reason,
+                },
             },
             error_message="",
             finished_at=timezone.now(),
@@ -187,7 +248,7 @@ def process_subtitle_task(task_id):
     return track
 
 
-def generate_subtitle_cues(track, assets, source_hash=None):
+def generate_subtitle_cues(track, assets, source_hash=None, task_id=None):
     target_shot_ids = [asset.shot_id for asset in assets]
     manual_by_shot = {}
     for cue in track.cues.filter(
@@ -198,27 +259,63 @@ def generate_subtitle_cues(track, assets, source_hash=None):
 
     rows = []
     timeline_offset = 0
-    for asset in assets:
+    total_assets = len(assets)
+    if task_id is not None:
+        GenerationTask.objects.filter(pk=task_id).update(
+            progress_current=0,
+            progress_total=total_assets,
+            progress_percent=0,
+            heartbeat_at=timezone.now(),
+        )
+    for asset_index, asset in enumerate(assets, start=1):
         shot = asset.shot
         duration_ms = probe_duration_ms(asset)
-        parts = split_dialogue(shot.dialogue_or_narration)
-        recognized = recognize_speech_window(asset, shot.dialogue_or_narration)
-        if recognized:
-            speech_start, speech_end, recognized_text, confidence = recognized
+        segments = subtitle_dialogue_segments(
+            shot.dialogue_or_narration,
+            speaker_names=shot.character_names,
+        )
+        parts = [segment[1] for segment in segments]
+        alignment = recognize_speech_alignment(
+            asset,
+            shot.dialogue_or_narration,
+            parts,
+        )
+        if alignment:
+            ranges, recognized_text, confidence = alignment
+            ranges = [
+                None
+                if item is None
+                else (max(0, item[0]), min(duration_ms, item[1]))
+                for item in ranges
+            ]
         else:
             speech_start = min(250, max(0, duration_ms // 10))
             speech_end = max(speech_start + 500, duration_ms - speech_start)
             recognized_text = ""
             confidence = 0.5
-
-        ranges = distribute_cues(parts, speech_start, min(duration_ms, speech_end))
+            ranges = distribute_cues(
+                parts,
+                speech_start,
+                min(duration_ms, speech_end),
+            )
         previous_manual = manual_by_shot.get(shot.id, [])
-        for local_index, (cue_text_source, (local_start, local_end)) in enumerate(
-            zip(parts, ranges)
+        for local_index, ((cue_text_source, cleaned_text), cue_range) in enumerate(
+            zip(segments, ranges)
         ):
             old = previous_manual[local_index] if local_index < len(previous_manual) else None
-            cue_text = old.text if old else cue_text_source
             reviewed = bool(old and not old.needs_review)
+            if old is not None:
+                local_start, local_end = _cue_local_times(old)
+                cue_text = old.text
+                cue_confidence = old.confidence
+            elif cue_range is None:
+                local_start, local_end = 0, 100
+                cue_text = ""
+                cue_confidence = 0.0
+            else:
+                local_start, local_end = cue_range
+                cue_text = cleaned_text
+                cue_confidence = confidence
             rows.append(
                 SubtitleCue(
                     track=track,
@@ -228,15 +325,22 @@ def generate_subtitle_cues(track, assets, source_hash=None):
                     recognized_text=recognized_text if local_index == 0 else "",
                     text=cue_text,
                     start_ms=max(0, timeline_offset + local_start),
-                    end_ms=max(timeline_offset + local_start + 100, timeline_offset + local_end),
+                    end_ms=max(timeline_offset + local_start + 1, timeline_offset + local_end),
                     local_start_ms=max(0, local_start),
-                    local_end_ms=max(local_start + 100, local_end),
-                    confidence=confidence,
-                    needs_review=False if reviewed else confidence < 0.85,
+                    local_end_ms=max(local_start + 1, local_end),
+                    confidence=cue_confidence,
+                    needs_review=False if reviewed else cue_confidence < 0.85,
                     is_manually_edited=bool(old),
                 )
             )
         timeline_offset += duration_ms
+        if task_id is not None:
+            GenerationTask.objects.filter(pk=task_id).update(
+                progress_current=asset_index,
+                progress_total=total_assets,
+                progress_percent=int(asset_index * 100 / max(1, total_assets)),
+                heartbeat_at=timezone.now(),
+            )
 
     now = timezone.now()
     with transaction.atomic():
@@ -272,6 +376,9 @@ def generate_subtitle_cues(track, assets, source_hash=None):
         track.revision += 1
         _refresh_track_status(track)
         track.save()
+    from studio.services.subtitle_qc import run_and_persist_subtitle_qc
+
+    run_and_persist_subtitle_qc(track, allow_empty=True)
     return track
 
 
@@ -322,31 +429,119 @@ def _refresh_track_status(track):
         track.status = SubtitleTrack.STATUS_DRAFT
         track.confirmed_at = None
 
-def split_dialogue(value):
-    text = str(value or "").strip()
-    if not text:
-        return []
-    text = ROLE_PREFIX_RE.sub("", text)
-    sentences = [
-        item.strip(" ，,")
-        for item in re.findall(r"[^。！？!?；;\n]+[。！？!?；;]?", text)
-        if item.strip(" ，,")
-    ]
+def clean_subtitle_text(value):
+    text = ROLE_PREFIX_RE.sub("", str(value or "").strip(), count=1)
+    text = SUBTITLE_QUOTE_RE.sub("", text)
+    return text.strip(" ，,")
+
+
+def _split_cue_text(value):
+    sentence = value
     parts = []
-    for sentence in sentences:
-        while len(sentence) > MAX_CUE_TEXT_LENGTH:
-            candidates = [
-                index + 1
-                for index, character in enumerate(sentence[: MAX_CUE_TEXT_LENGTH + 1])
-                if character in "，,、"
-            ]
-            split_at = candidates[-1] if candidates else MAX_CUE_TEXT_LENGTH
-            parts.append(sentence[:split_at].strip())
-            sentence = sentence[split_at:].strip()
-        if sentence:
-            parts.append(sentence)
+    while len(sentence) > MAX_CUE_TEXT_LENGTH:
+        candidates = [
+            index + 1
+            for index, character in enumerate(sentence[: MAX_CUE_TEXT_LENGTH + 1])
+            if character in "，,、"
+        ]
+        split_at = candidates[-1] if candidates else MAX_CUE_TEXT_LENGTH
+        parts.append(sentence[:split_at].strip())
+        sentence = sentence[split_at:].strip()
+    if sentence:
+        parts.append(sentence)
     return parts
 
+
+def _normalized_label(value):
+    return re.sub(r"\s+", "", str(value or "")).lower()
+
+
+def _is_non_speech_label(label):
+    normalized = _normalized_label(label)
+    return any(keyword in normalized for keyword in NON_SPEECH_LABEL_KEYWORDS)
+
+
+def _is_speech_label(label, speaker_names):
+    normalized = _normalized_label(label)
+    names = [
+        _normalized_label(name)
+        for name in (speaker_names or [])
+        if str(name).strip()
+    ]
+    if names and any(name in normalized for name in names):
+        return True
+    if any(hint in normalized for hint in SPEECH_LABEL_HINTS):
+        return True
+    return not speaker_names
+
+
+def _accepted_speaker_tags(text, speaker_names):
+    tags = []
+    for match in SPEAKER_TAG_RE.finditer(text):
+        label = match.group("label").strip()
+        if _is_non_speech_label(label) or _is_speech_label(label, speaker_names):
+            tags.append((match, label))
+    return tags
+
+
+def _quoted_turn_content(value):
+    content = str(value or "").strip()
+    if not content:
+        return ""
+    closer = QUOTE_PAIRS.get(content[0])
+    if closer:
+        closing_index = content.find(closer, 1)
+        if closing_index >= 0:
+            return content[1:closing_index]
+    return content
+
+
+def _append_dialogue_parts(segments, source, content):
+    cleaned = SUBTITLE_QUOTE_RE.sub("", content).strip(" ，,")
+    for match in SUBTITLE_SENTENCE_RE.finditer(cleaned):
+        sentence = match.group(0).strip(" ，,")
+        if (
+            NO_DIALOGUE_RE.fullmatch(sentence)
+            or NON_SPOKEN_SENTENCE_RE.search(sentence)
+        ):
+            continue
+        for part in _split_cue_text(sentence):
+            if normalize_text(part):
+                segments.append((source, part))
+
+
+def subtitle_dialogue_segments(value, speaker_names=None):
+    text = str(value or "").strip()
+    if not text or NO_DIALOGUE_RE.fullmatch(text):
+        return []
+
+    tags = _accepted_speaker_tags(text, speaker_names)
+    if not tags:
+        if speaker_names is not None:
+            if not speaker_names or text[0] not in QUOTE_PAIRS:
+                return []
+        cleaned = clean_subtitle_text(text)
+        segments = []
+        _append_dialogue_parts(segments, text, cleaned)
+        return segments
+
+    segments = []
+    for index, (tag, label) in enumerate(tags):
+        end = tags[index + 1][0].start() if index + 1 < len(tags) else len(text)
+        raw_content = text[tag.end():end]
+        if _is_non_speech_label(label):
+            continue
+        content = _quoted_turn_content(raw_content)
+        source = text[tag.start():tag.end()] + raw_content
+        _append_dialogue_parts(segments, source.strip(), content)
+    return segments
+
+
+def split_dialogue(value, speaker_names=None):
+    return [
+        cleaned
+        for _, cleaned in subtitle_dialogue_segments(value, speaker_names=speaker_names)
+    ]
 
 def distribute_cues(parts, start_ms, end_ms):
     if not parts:
@@ -366,45 +561,143 @@ def distribute_cues(parts, start_ms, end_ms):
     return ranges
 
 
-def recognize_speech_window(asset, source_text):
+def recognize_speech_alignment(asset, source_text, parts):
     if os.environ.get("SUBTITLE_ASR_BACKEND", "").lower() != "faster_whisper":
         return None
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError as exc:
-        raise RuntimeError(
-            "已启用 faster-whisper 字幕对齐，但当前环境没有安装 faster-whisper。"
-        ) from exc
-
+    if not parts:
+        return [], "", 1.0
     global _WHISPER_MODEL
     if _WHISPER_MODEL is None:
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError as exc:
+            raise RuntimeError(
+                "已启用 faster-whisper 字幕对齐，但当前环境没有安装 faster-whisper。"
+            ) from exc
         _WHISPER_MODEL = WhisperModel(
-            os.environ.get("SUBTITLE_WHISPER_MODEL", "large-v3-turbo"),
-            device=os.environ.get("SUBTITLE_WHISPER_DEVICE", "auto"),
-            compute_type=os.environ.get("SUBTITLE_WHISPER_COMPUTE_TYPE", "default"),
+            os.environ.get("SUBTITLE_WHISPER_MODEL", "small"),
+            device=os.environ.get("SUBTITLE_WHISPER_DEVICE", "cpu"),
+            compute_type=os.environ.get("SUBTITLE_WHISPER_COMPUTE_TYPE", "int8"),
         )
+    expected_text = "".join(parts)
+    vad_filter = os.environ.get(
+        "SUBTITLE_WHISPER_VAD_FILTER",
+        "true",
+    ).lower() in {"1", "true", "yes", "on"}
     segments, _ = _WHISPER_MODEL.transcribe(
         asset.video.path,
         language=os.environ.get("SUBTITLE_LANGUAGE", "zh"),
         word_timestamps=True,
-        vad_filter=True,
+        vad_filter=vad_filter,
+        initial_prompt=expected_text,
+        condition_on_previous_text=False,
     )
     segments = list(segments)
     if not segments:
-        return None
+        return [None] * len(parts), "", 0.0
     recognized_text = "".join(segment.text.strip() for segment in segments)
     confidence = SequenceMatcher(
         None,
-        normalize_text(source_text),
+        normalize_text(expected_text or source_text),
         normalize_text(recognized_text),
     ).ratio()
-    return (
-        max(0, round(segments[0].start * 1000)),
-        max(100, round(segments[-1].end * 1000)),
-        recognized_text,
-        confidence,
-    )
+    words = [
+        word
+        for segment in segments
+        for word in (getattr(segment, "words", None) or [])
+        if normalize_text(getattr(word, "word", ""))
+    ]
+    if words:
+        ranges = _align_parts_to_words(parts, words)
+    else:
+        ranges = [None] * len(parts)
+    return ranges, recognized_text, confidence
 
+
+def recognize_speech_window(asset, source_text):
+    alignment = recognize_speech_alignment(asset, source_text, [source_text])
+    if not alignment:
+        return None
+    ranges, recognized_text, confidence = alignment
+    matched = [item for item in ranges if item is not None]
+    if not matched:
+        return None
+    return matched[0][0], matched[-1][1], recognized_text, confidence
+
+
+def _align_parts_to_words(parts, words):
+    expected_parts = [normalize_text(part) for part in parts]
+    expected_text = "".join(expected_parts)
+    recognized_characters = []
+    character_times = []
+    for word in words:
+        token = normalize_text(word.word)
+        if not token:
+            continue
+        start_ms = max(0, round(word.start * 1000))
+        end_ms = max(start_ms + 1, round(word.end * 1000))
+        duration_ms = end_ms - start_ms
+        for index, character in enumerate(token):
+            recognized_characters.append(character)
+            character_times.append(
+                (
+                    start_ms + round(duration_ms * index / len(token)),
+                    start_ms + round(duration_ms * (index + 1) / len(token)),
+                )
+            )
+
+    recognized_text = "".join(recognized_characters)
+    if not expected_text or not recognized_text:
+        return [None] * len(parts)
+
+    expected_to_recognized = {}
+    matcher = SequenceMatcher(None, expected_text, recognized_text, autojunk=False)
+    for block in matcher.get_matching_blocks():
+        for offset in range(block.size):
+            expected_to_recognized[block.a + offset] = block.b + offset
+
+    minimum_match_ratio = float(
+        os.environ.get("SUBTITLE_ASR_PART_MIN_CONFIDENCE", "0.55")
+    )
+    ranges = []
+    expected_offset = 0
+    for part in expected_parts:
+        matched_indexes = [
+            expected_to_recognized[index]
+            for index in range(expected_offset, expected_offset + len(part))
+            if index in expected_to_recognized
+        ]
+        match_ratio = len(matched_indexes) / max(1, len(part))
+        if not matched_indexes or match_ratio < minimum_match_ratio:
+            ranges.append(None)
+        else:
+            start_ms = character_times[min(matched_indexes)][0]
+            end_ms = character_times[max(matched_indexes)][1]
+            ranges.append((start_ms, max(start_ms + 1, end_ms)))
+        expected_offset += len(part)
+    return _remove_alignment_overlaps(ranges)
+
+
+def _remove_alignment_overlaps(ranges):
+    normalized = list(ranges)
+    previous_index = None
+    for index, item in enumerate(normalized):
+        if item is None:
+            continue
+        start_ms, end_ms = item
+        if previous_index is not None:
+            previous_start, previous_end = normalized[previous_index]
+            if start_ms < previous_end:
+                boundary = round((start_ms + previous_end) / 2)
+                boundary = max(previous_start + 1, min(end_ms - 1, boundary))
+                normalized[previous_index] = (previous_start, boundary)
+                start_ms = boundary
+        if end_ms <= start_ms:
+            normalized[index] = None
+            continue
+        normalized[index] = (start_ms, end_ms)
+        previous_index = index
+    return normalized
 
 def probe_duration_ms(asset):
     fallback = max(1000, int(asset.shot.duration_seconds * 1000))
@@ -539,6 +832,9 @@ def save_subtitle_track(track, *, enabled, global_offset_ms, cues, confirm_all=F
 
         _refresh_track_status(track)
         track.save()
+    from studio.services.subtitle_qc import run_and_persist_subtitle_qc
+
+    run_and_persist_subtitle_qc(track)
     return track
 
 
@@ -588,6 +884,9 @@ def save_shot_subtitle(
         track.revision += 1
         _refresh_track_status(track)
         track.save()
+    from studio.services.subtitle_qc import run_and_persist_subtitle_qc
+
+    run_and_persist_subtitle_qc(track)
     return setting
 
 
@@ -645,6 +944,7 @@ def subtitle_snapshot(track, assets=None):
 
     base_style = subtitle_style(track.style_options)
     cues = []
+    shot_timeline = []
     timeline_offset = 0
     for shot in shots:
         asset = asset_map.get(shot.id)
@@ -652,6 +952,9 @@ def subtitle_snapshot(track, assets=None):
             probe_duration_ms(asset)
             if asset is not None
             else max(1000, int(shot.duration_seconds * 1000))
+        )
+        shot_timeline.append(
+            {"shot_id": str(shot.shot_id), "duration_ms": duration_ms}
         )
         setting = settings.get(shot.id)
         if setting is None or setting.enabled:
@@ -678,6 +981,9 @@ def subtitle_snapshot(track, assets=None):
                         "text": cue.text,
                         "start_ms": start_ms,
                         "end_ms": end_ms,
+                        "local_start_ms": local_start,
+                        "local_end_ms": local_end,
+                        "shot_offset_ms": shot_offset,
                         "style": base_style,
                     }
                 )
@@ -687,8 +993,112 @@ def subtitle_snapshot(track, assets=None):
         "track_id": track.id,
         "revision": track.revision,
         "style": base_style,
+        "global_offset_ms": track.global_offset_ms,
+        "shots": shot_timeline,
         "cues": cues,
     }
+
+def retime_subtitle_snapshot(
+    snapshot,
+    normalized_durations_ms,
+    *,
+    max_timeline_drift_ms=None,
+):
+    source_shots = list(snapshot.get("shots") or [])
+    if not source_shots:
+        return snapshot
+    if len(source_shots) != len(normalized_durations_ms):
+        raise ValueError("字幕时间轴与标准化视频片段数量不一致。")
+
+    normalized_durations = [max(100, int(value)) for value in normalized_durations_ms]
+    drift_limit = (
+        int(max_timeline_drift_ms)
+        if max_timeline_drift_ms is not None
+        else int(os.environ.get("SUBTITLE_MAX_TIMELINE_DRIFT_MS", "1000"))
+    )
+    boundary_tolerance = int(
+        os.environ.get("SUBTITLE_CUE_BOUNDARY_TOLERANCE_MS", "300")
+    )
+    source_offset = 0
+    normalized_offset = 0
+    max_drift = 0
+    shot_offsets = {}
+    for index, (source_shot, normalized_duration) in enumerate(
+        zip(source_shots, normalized_durations),
+        start=1,
+    ):
+        shot_id = str(source_shot["shot_id"])
+        source_duration = max(100, int(source_shot["duration_ms"]))
+        shot_offsets[shot_id] = {
+            "source_offset_ms": source_offset,
+            "normalized_offset_ms": normalized_offset,
+            "normalized_duration_ms": normalized_duration,
+        }
+        source_offset += source_duration
+        normalized_offset += normalized_duration
+        drift = abs(normalized_offset - source_offset)
+        max_drift = max(max_drift, drift)
+        if drift > drift_limit:
+            raise ValueError(
+                "字幕时间轴校验失败："
+                f"第 {index} 个镜头后累计偏差 {drift}ms，"
+                f"超过允许值 {drift_limit}ms。"
+            )
+
+    global_offset = int(snapshot.get("global_offset_ms") or 0)
+    retimed_cues = []
+    for cue in snapshot.get("cues", []):
+        timing = shot_offsets.get(str(cue.get("shot_id")))
+        if timing is None:
+            raise ValueError("字幕条目对应的镜头不在本次导出时间轴中。")
+        source_timeline_offset = timing["source_offset_ms"]
+        local_start = int(
+            cue.get("local_start_ms", cue["start_ms"] - source_timeline_offset)
+        )
+        local_end = int(
+            cue.get("local_end_ms", cue["end_ms"] - source_timeline_offset)
+        )
+        shot_offset = int(cue.get("shot_offset_ms") or 0)
+        normalized_timeline_offset = timing["normalized_offset_ms"]
+        start_ms = max(
+            0,
+            normalized_timeline_offset + local_start + shot_offset + global_offset,
+        )
+        end_ms = max(
+            start_ms + 100,
+            normalized_timeline_offset + local_end + shot_offset + global_offset,
+        )
+        shot_end = normalized_timeline_offset + timing["normalized_duration_ms"]
+        if end_ms > shot_end + boundary_tolerance:
+            raise ValueError(
+                "字幕时间轴校验失败："
+                f"第 {cue.get('position', '?')} 条字幕超出所属镜头 "
+                f"{end_ms - shot_end}ms。"
+            )
+        retimed_cues.append(
+            {**cue, "start_ms": start_ms, "end_ms": end_ms}
+        )
+
+    return {
+        **snapshot,
+        "shots": [
+            {
+                **shot,
+                "normalized_duration_ms": normalized_duration,
+            }
+            for shot, normalized_duration in zip(
+                source_shots,
+                normalized_durations,
+            )
+        ],
+        "cues": retimed_cues,
+        "timeline": {
+            "source_duration_ms": source_offset,
+            "normalized_duration_ms": normalized_offset,
+            "max_drift_ms": max_drift,
+        },
+    }
+
 
 def render_srt(snapshot):
     blocks = []
@@ -785,6 +1195,9 @@ def subtitle_page_data(episode, shots):
         .first()
     )
     base_style = subtitle_style(track.style_options if track else None)
+    from studio.services.subtitle_qc import subtitle_qc_is_current
+
+    qc_current = subtitle_qc_is_current(track) if track else False
     settings = {
         setting.shot_id: setting
         for setting in ShotSubtitleSetting.objects.filter(
@@ -876,6 +1289,9 @@ def subtitle_page_data(episode, shots):
             "hidden_count": 0,
             "review_count": 0,
             "is_stale": False,
+            "qc_current": False,
+            "qc_passed": False,
+            "qc_blocked": False,
         }
     return {
         "track": track,
@@ -886,10 +1302,15 @@ def subtitle_page_data(episode, shots):
         "hidden_count": sum(cue.is_hidden for cue in all_cues),
         "review_count": sum(1 for cue in all_cues if cue.needs_review),
         "is_stale": any_stale,
+        "qc_current": qc_current,
+        "qc_passed": qc_current and track.qc_status == track.QC_PASSED,
+        "qc_blocked": qc_current and track.qc_status == track.QC_FAILED,
     }
 
 
 def subtitle_status_data(episode):
+    from studio.services.subtitle_qc import subtitle_qc_is_current
+
     track = SubtitleTrack.objects.filter(episode=episode).first()
     settings = list(
         ShotSubtitleSetting.objects.filter(
@@ -903,6 +1324,10 @@ def subtitle_status_data(episode):
             "cue_count": 0,
             "review_count": 0,
             "is_stale": False,
+            "qc_status": SubtitleTrack.QC_PENDING,
+            "qc_score": None,
+            "qc_reason": "",
+            "qc_current": False,
             "shots": [],
         }
     return {
@@ -911,6 +1336,10 @@ def subtitle_status_data(episode):
         "cue_count": track.cues.count(),
         "review_count": track.cues.filter(needs_review=True).count(),
         "is_stale": is_subtitle_stale(track),
+        "qc_status": track.qc_status,
+        "qc_score": track.qc_score,
+        "qc_reason": track.qc_reason,
+        "qc_current": subtitle_qc_is_current(track),
         "shots": [
             {
                 "shot_id": str(setting.shot.shot_id),

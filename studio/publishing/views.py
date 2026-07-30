@@ -1,7 +1,9 @@
 from io import BytesIO
 
+from django.db import transaction
 from django.http import Http404, HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
 from studio.models import PublishingAccount, PublishingLoginSession, PublishingTask, VideoComposition
@@ -10,6 +12,7 @@ from .errors import PublishingError
 from .service import (
     cancel_task,
     check_publishing_account,
+    complete_oauth_login,
     connect_cookie_account,
     create_publishing_task,
     poll_login_session,
@@ -49,29 +52,64 @@ def create_task_view(request):
         ),
         pk=request.POST.get("composition_id"),
     )
-    account = get_object_or_404(PublishingAccount, pk=request.POST.get("account_id"))
+    raw_account_ids = request.POST.getlist("account_ids")
+    if not raw_account_ids and request.POST.get("account_id"):
+        raw_account_ids = [request.POST["account_id"]]
+    try:
+        account_ids = list(dict.fromkeys(int(value) for value in raw_account_ids))
+    except (TypeError, ValueError):
+        account_ids = []
+    accounts_by_id = {
+        account.id: account
+        for account in PublishingAccount.objects.filter(pk__in=account_ids)
+    }
+    accounts = [accounts_by_id[value] for value in account_ids if value in accounts_by_id]
+    if not accounts or len(accounts) != len(account_ids):
+        message = "\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u4e2a\u53d1\u5e03\u8d26\u53f7\u3002"
+        if request.headers.get("Accept") == "application/json":
+            return JsonResponse({"ok": False, "error": message}, status=400)
+        return HttpResponseBadRequest(message)
+    platforms = [account.platform for account in accounts]
+    if len(platforms) != len(set(platforms)):
+        message = "\u6bcf\u4e2a\u5e73\u53f0\u4e00\u6b21\u53ea\u80fd\u9009\u62e9\u4e00\u4e2a\u8d26\u53f7\u3002"
+        if request.headers.get("Accept") == "application/json":
+            return JsonResponse({"ok": False, "error": message}, status=400)
+        return HttpResponseBadRequest(message)
+
     cover = getattr(composition.episode, "cover", None)
     try:
-        task, created = create_publishing_task(
-            composition,
-            account,
-            {
-                "title": request.POST.get("title"),
-                "description": request.POST.get("description"),
-                "tid": request.POST.get("tid"),
-                "tags": request.POST.get("tags"),
-                "copyright": request.POST.get("copyright"),
-                "source": request.POST.get("source"),
-                "cover": cover.image.name if cover and cover.image else "",
-            },
-            force_republish=request.POST.get("force_republish") == "1",
-        )
+        results = []
+        with transaction.atomic():
+            for account in accounts:
+                task, created = create_publishing_task(
+                    composition,
+                    account,
+                    {
+                        "title": request.POST.get("title"),
+                        "description": request.POST.get("description"),
+                        "tid": request.POST.get(f"tid_{account.platform}") or request.POST.get("tid"),
+                        "tags": request.POST.get("tags"),
+                        "copyright": request.POST.get("copyright"),
+                        "source": request.POST.get("source"),
+                        "cover": cover.image.name if cover and cover.image else "",
+                    },
+                    force_republish=request.POST.get("force_republish") == "1",
+                )
+                results.append((task, created))
     except PublishingError as exc:
         if request.headers.get("Accept") == "application/json":
             return JsonResponse({"ok": False, "error": str(exc), "details": exc.details}, status=400)
         return HttpResponseBadRequest(str(exc))
     if request.headers.get("Accept") == "application/json":
-        return JsonResponse({"ok": True, "created": created, "task": serialize_task(task)})
+        serialized = [serialize_task(task) for task, _ in results]
+        return JsonResponse(
+            {
+                "ok": True,
+                "created": all(created for _, created in results),
+                "task": serialized[0],
+                "tasks": serialized,
+            }
+        )
     return redirect("studio:publishing_tasks")
 
 
@@ -129,7 +167,10 @@ def reconcile_task_view(request, task_id):
 @require_POST
 def cookie_login_view(request):
     try:
-        connect_cookie_account(request.POST.get("cookie"))
+        connect_cookie_account(
+            request.POST.get("cookie"),
+            request.POST.get("platform") or PublishingAccount.PLATFORM_BILIBILI,
+        )
     except PublishingError as exc:
         return redirect(f"/system/?publishing_error={str(exc)}")
     return redirect("/system/?publishing_success=1")
@@ -138,8 +179,9 @@ def cookie_login_view(request):
 @require_POST
 def qr_login_start_view(request):
     try:
-        session = start_login_session()
-    except PublishingError as exc:
+        platform_name = request.POST.get("platform") or PublishingAccount.PLATFORM_BILIBILI
+        session = start_login_session(platform_name)
+    except (PublishingError, ValueError) as exc:
         return JsonResponse({"ok": False, "error": str(exc)}, status=502)
     return JsonResponse(
         {
@@ -150,6 +192,27 @@ def qr_login_start_view(request):
             "expires_at": session.expires_at.isoformat(),
         }
     )
+
+
+@require_GET
+def oauth_login_start_view(request, platform):
+    try:
+        session = start_login_session(platform)
+    except (PublishingError, ValueError) as exc:
+        return redirect(f"/system/?publishing_error={str(exc)}")
+    return redirect(session.login_url)
+
+
+@require_GET
+def oauth_login_callback_view(request, platform):
+    provider_error = request.GET.get("error") or request.GET.get("error_description")
+    if provider_error:
+        return redirect(f"/system/?publishing_error={provider_error}")
+    try:
+        complete_oauth_login(platform, request.GET.get("state"), request.GET.get("code"))
+    except (PublishingError, ValueError) as exc:
+        return redirect(f"/system/?publishing_error={str(exc)}")
+    return redirect(reverse("studio:system_settings") + "?publishing_success=1")
 
 
 @require_GET

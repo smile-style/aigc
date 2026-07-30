@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -23,7 +24,7 @@ from .errors import (
     PublishingOutcomeUnknown,
     PublishingValidationError,
 )
-from .registry import get_platform
+from .registry import get_platform, get_platform_definition
 from .secret import decrypt_credentials, decrypt_login_key, encrypt_credentials, encrypt_login_key
 
 
@@ -47,12 +48,29 @@ def account_credentials(account):
     return {str(key): str(item) for key, item in value.items()}
 
 
+def active_account_credentials(account):
+    credentials = account_credentials(account)
+    login = getattr(get_platform(account.platform), "login", None)
+    ensure_credentials = getattr(login, "ensure_credentials", None)
+    if ensure_credentials is None:
+        return credentials
+    refreshed = ensure_credentials(credentials)
+    if refreshed != credentials:
+        account.credential_ciphertext = encode_credentials(refreshed)
+        account.save(update_fields=["credential_ciphertext", "updated_at"])
+    return refreshed
+
+
 def save_connected_account(platform, credentials, profile):
     defaults = {
         "display_name": profile.display_name,
         "credential_ciphertext": encode_credentials(credentials),
         "status": PublishingAccount.STATUS_CONNECTED,
         "profile_snapshot": profile.payload,
+        "platform_options": {
+            "title_limit": get_platform_definition(platform).title_limit,
+            "requires_partition": get_platform_definition(platform).requires_partition,
+        },
         "last_checked_at": timezone.now(),
         "last_error": "",
     }
@@ -64,12 +82,22 @@ def save_connected_account(platform, credentials, profile):
     return account
 
 
-def connect_cookie_account(raw_cookie):
-    platform_name = PublishingAccount.PLATFORM_BILIBILI
+def connect_cookie_account(raw_cookie, platform_name=PublishingAccount.PLATFORM_BILIBILI):
+    if platform_name not in dict(PublishingAccount.PLATFORM_CHOICES):
+        raise PublishingValidationError("不支持的发布平台。", details={"field": "platform"})
     platform = get_platform(platform_name)
-    credentials = platform.login.parse_cookie_header(raw_cookie)
+    parse_cookie_header = getattr(platform.login, "parse_cookie_header", None)
+    if parse_cookie_header is None:
+        raise PublishingValidationError(
+            "该平台不支持 Cookie 连接，请使用官方授权。",
+            details={"field": "platform"},
+        )
+    credentials = parse_cookie_header(raw_cookie)
     if not credentials:
-        raise PublishingValidationError("请粘贴有效的 Bilibili Cookie。", details={"field": "cookie"})
+        platform_label = dict(PublishingAccount.PLATFORM_CHOICES)[platform_name]
+        raise PublishingValidationError(
+            f"请粘贴有效的 {platform_label} Cookie。", details={"field": "cookie"}
+        )
     profile = platform.checker.check_account(credentials)
     return save_connected_account(platform_name, credentials, profile)
 
@@ -79,9 +107,50 @@ def start_login_session(platform_name=PublishingAccount.PLATFORM_BILIBILI):
     return PublishingLoginSession.objects.create(
         platform=platform_name,
         provider_key_ciphertext=encrypt_login_key(result.provider_key),
+        callback_state_hash=hashlib.sha256(result.provider_key.encode("utf-8")).hexdigest(),
         login_url=result.login_url,
         expires_at=timezone.now() + timedelta(seconds=result.expires_in),
     )
+
+
+def complete_oauth_login(platform_name, state, code):
+    if get_platform_definition(platform_name).login_mode != "oauth":
+        raise PublishingValidationError(
+            "该平台不支持 OAuth 授权。",
+            code="oauth_not_supported",
+        )
+    state = str(state or "")
+    state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+    session = PublishingLoginSession.objects.filter(
+        platform=platform_name,
+        callback_state_hash=state_hash,
+        status=PublishingLoginSession.STATUS_PENDING,
+    ).order_by("-created_at").first()
+    if session is None or session.expires_at <= timezone.now():
+        raise PublishingValidationError(
+            "授权会话不存在或已过期，请重新连接。",
+            code="oauth_state_invalid",
+        )
+    expected_state = decrypt_login_key(session.provider_key_ciphertext)
+    if not hmac.compare_digest(expected_state, state):
+        raise PublishingValidationError(
+            "授权状态校验失败，请重新连接。",
+            code="oauth_state_invalid",
+        )
+    try:
+        platform = get_platform(platform_name)
+        credentials = platform.login.exchange_code(code)
+        profile = platform.checker.check_account(credentials)
+        session.account = save_connected_account(platform_name, credentials, profile)
+        session.status = session.STATUS_SUCCEEDED
+        session.error_message = ""
+        session.save(update_fields=["account", "status", "error_message", "updated_at"])
+        return session.account
+    except PublishingError as exc:
+        session.status = session.STATUS_FAILED
+        session.error_message = str(exc)
+        session.save(update_fields=["status", "error_message", "updated_at"])
+        raise
 
 
 def poll_login_session(session_id):
@@ -117,7 +186,7 @@ def poll_login_session(session_id):
 
 def check_publishing_account(account):
     try:
-        profile = get_platform(account.platform).checker.check_account(account_credentials(account))
+        profile = get_platform(account.platform).checker.check_account(active_account_credentials(account))
         account.display_name = profile.display_name
         account.remote_account_id = profile.remote_account_id
         account.profile_snapshot = profile.payload
@@ -175,8 +244,6 @@ def create_publishing_task(composition, account, metadata, *, force_republish=Fa
         raise PublishingValidationError("只有已导出的成片才能发布。")
     if account.status != PublishingAccount.STATUS_CONNECTED:
         raise PublishingAuthError()
-    if account.platform != PublishingAccount.PLATFORM_BILIBILI:
-        raise PublishingValidationError("账号平台与发布平台不匹配。")
     normalized = normalize_metadata(metadata)
     normalized = get_platform(account.platform).checker.check_submission(composition, normalized)
     content_hash = ensure_composition_hash(composition)
@@ -275,7 +342,7 @@ def process_claimed_task(task_id, worker_id):
         stage=task.stage,
     )
     try:
-        credentials = account_credentials(task.account)
+        credentials = active_account_credentials(task.account)
         platform = get_platform(task.platform)
         platform.checker.check_account(credentials)
         metadata = platform.checker.check_submission(task.composition, task.metadata_snapshot)
@@ -395,7 +462,7 @@ def reconcile_task(task):
     task.stage = task.STAGE_RECONCILING
     task.save(update_fields=["stage", "updated_at"])
     result = get_platform(task.platform).uploader.query_submission(
-        task.remote_video_id, account_credentials(task.account)
+        task.remote_video_id, active_account_credentials(task.account)
     )
     task.remote_status = result.status
     task.remote_payload = result.payload
