@@ -14,6 +14,16 @@ class FakeProvider:
         return self.payload
 
 
+class SequenceProvider:
+    def __init__(self, payloads):
+        self.payloads = iter(payloads)
+        self.calls = []
+
+    def generate_json(self, messages, temperature=None):
+        self.calls.append({"messages": messages, "temperature": temperature})
+        return next(self.payloads)
+
+
 def make_outline(index):
     return {
         "id": f"outline-{index}",
@@ -35,6 +45,40 @@ def test_generate_outlines_returns_six_candidates():
     assert "逆袭爽文" in provider.messages[-1]["content"]
     assert "60集" in provider.messages[-1]["content"]
     assert provider.temperature == 0.9
+
+
+def test_generate_outlines_requires_non_empty_string_fields_in_prompt():
+    provider = FakeProvider({"outlines": [make_outline(i) for i in range(1, 7)]})
+
+    generate_outlines(provider, "urban revenge")
+
+    prompt = provider.messages[-1]["content"]
+    assert "All field values must be non-empty strings" in prompt
+    assert "arc_summary" in prompt
+    assert "long-running story arc" in prompt
+
+
+def test_generate_outlines_corrects_invalid_model_payload_once():
+    invalid = [make_outline(i) for i in range(1, 7)]
+    for outline in invalid:
+        outline["arc_summary"] = None
+    corrected = [make_outline(i) for i in range(1, 7)]
+    provider = SequenceProvider([
+        {"outlines": invalid},
+        {"outlines": corrected},
+    ])
+
+    outlines = generate_outlines(provider, "urban revenge")
+
+    assert outlines == corrected
+    assert len(provider.calls) == 2
+    assert provider.calls[0]["temperature"] == 0.9
+    assert provider.calls[1]["temperature"] == 0.3
+    correction_messages = provider.calls[1]["messages"]
+    assert correction_messages[-2]["role"] == "assistant"
+    assert '"arc_summary": null' in correction_messages[-2]["content"]
+    assert "field arc_summary must be a non-empty string" in correction_messages[-1]["content"]
+    assert "All field values must be non-empty strings" in correction_messages[-1]["content"]
 
 
 def test_validate_outlines_rejects_wrong_count():
