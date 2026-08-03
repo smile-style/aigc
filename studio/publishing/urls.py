@@ -1,10 +1,11 @@
 from django.urls import path
 
-from . import views
+from . import task_views, views
 
 
 urlpatterns = [
-    path("tasks/", views.task_list_view, name="publishing_tasks"),
+    path("tasks/", task_views.task_list_view, name="publishing_tasks"),
+    path("tasks/<int:task_id>/acknowledge/", task_views.acknowledge_task_view, name="publishing_task_acknowledge"),
     path("tasks/create/", views.create_task_view, name="publishing_task_create"),
     path("tasks/status/", views.task_status_view, name="publishing_task_status"),
     path("tasks/<int:task_id>/retry/", views.retry_task_view, name="publishing_task_retry"),

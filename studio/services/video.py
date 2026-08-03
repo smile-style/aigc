@@ -10,7 +10,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import Max, Q
+from django.db.models import Max, OuterRef, Prefetch, Q, Subquery
 from django.utils import timezone
 
 from studio.models import (
@@ -898,3 +898,106 @@ def bind_character_to_named_shots(character, asset):
             )
             bound += 1
     return {"bound": bound, "skipped": skipped}
+
+def _batched_video_page_data(episode, sync=False):
+    if sync:
+        sync_episode_shots(episode)
+
+    latest_video_id = (
+        VideoAsset.objects.filter(shot_id=OuterRef("pk"))
+        .order_by("-version", "-id")
+        .values("id")[:1]
+    )
+    selected_video_id = (
+        VideoAsset.objects.filter(
+            shot_id=OuterRef("pk"),
+            is_selected=True,
+            status=VideoAsset.STATUS_READY,
+        )
+        .order_by("-version", "-id")
+        .values("id")[:1]
+    )
+    references = (
+        ShotCharacterReference.objects.select_related("character", "asset")
+        .prefetch_related("character__assets")
+        .order_by("position", "id")
+    )
+    shots = list(
+        StoryboardShot.objects.filter(storyboard__episode=episode)
+        .annotate(
+            page_latest_video_id=Subquery(latest_video_id),
+            page_selected_video_id=Subquery(selected_video_id),
+        )
+        .prefetch_related(
+            Prefetch(
+                "character_references",
+                queryset=references,
+                to_attr="references_for_page",
+            )
+        )
+        .order_by("position", "shot_number", "id")
+    )
+    video_ids = {
+        video_id
+        for shot in shots
+        for video_id in (shot.page_latest_video_id, shot.page_selected_video_id)
+        if video_id
+    }
+    video_map = {
+        video.id: video
+        for video in VideoAsset.objects.filter(id__in=video_ids)
+    }
+    asset_updates_available = 0
+    for shot in shots:
+        shot.latest_video = video_map.get(shot.page_latest_video_id)
+        shot.selected_video = video_map.get(shot.page_selected_video_id)
+        for reference in shot.references_for_page:
+            assets = list(reference.character.assets.all())
+            if assets and assets[0].id != reference.asset_id:
+                asset_updates_available += 1
+        shot.storyboard_prompt_for_page = storyboard_video_prompt(shot)
+        shot.effective_video_prompt = effective_video_prompt(shot)
+        shot.has_prompt_override = bool(shot.video_prompt_override.strip())
+        shot.prompt_source_changed = bool(
+            shot.has_prompt_override
+            and shot.video_prompt_override_source_hash
+            != _prompt_hash(shot.storyboard_prompt_for_page)
+        )
+
+    missing_shot_numbers = [shot.shot_number for shot in shots if not shot.selected_video]
+    clean_composition = VideoComposition.objects.filter(
+        episode=episode, variant=VideoComposition.VARIANT_CLEAN
+    ).first()
+    captioned_composition = VideoComposition.objects.filter(
+        episode=episode, variant=VideoComposition.VARIANT_CAPTIONED
+    ).first()
+    composition_versions = list(
+        VideoComposition.objects.filter(episode=episode)
+        .exclude(video="")
+        .order_by("-version", "-id")[:8]
+    )
+    composition = captioned_composition or clean_composition
+    return {
+        "shots": shots,
+        "composition": composition,
+        "clean_composition": clean_composition,
+        "captioned_composition": captioned_composition,
+        "composition_versions": composition_versions,
+        "asset_updates_available": asset_updates_available,
+        "counts": {
+            "total": len(shots),
+            "ready": len(shots) - len(missing_shot_numbers),
+            "missing_shot_numbers": missing_shot_numbers,
+            "running": sum(
+                bool(shot.latest_video and shot.latest_video.status in ACTIVE_VIDEO_STATUSES)
+                for shot in shots
+            ),
+            "failed": sum(
+                bool(shot.latest_video and shot.latest_video.status == VideoAsset.STATUS_FAILED)
+                for shot in shots
+            ),
+        },
+    }
+
+
+video_page_data = _batched_video_page_data

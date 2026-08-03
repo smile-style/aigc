@@ -67,7 +67,10 @@
               <button class="drag-handle" type="button" aria-label="拖动镜头 {{ shot.shot_number }} 排序">⋮⋮</button>
               <span class="step-badge">{{ shot.shot_number }}</span>
               <div><strong>镜头 {{ shot.shot_number }}</strong><small>{{ shot.duration_seconds }} 秒 · {{ shot.character_names|join:"、"|default:"未绑定角色" }}</small></div>
+              {% comment %}
               {% if shot.selected_video %}<video src="{{ shot.selected_video.video.url }}" muted preload="metadata" aria-label="镜头 {{ shot.shot_number }} 预览"></video><span class="status-pill is-ready">已就绪</span>{% else %}<span class="status-pill">缺少视频</span>{% endif %}
+              {% endcomment %}
+              {% if shot.selected_video %}<video src="{{ shot.selected_video.video.url }}" muted preload="none" aria-label="Shot {{ shot.shot_number }} preview"></video><span class="status-pill is-ready">&#24050;&#23601;&#32490;</span>{% else %}<span class="status-pill">&#32570;&#23569;&#35270;&#39057;</span>{% endif %}
             <button class="shot-subtitle-chip is-{{ shot.subtitle_status }}" type="button" data-modal-target="shot-subtitle-{{ shot.id }}" aria-label="&#38236;&#22836; {{ shot.shot_number }} &#23383;&#24149;&#65306;{{ shot.subtitle_status_label }}"><span aria-hidden="true">CC</span><strong>{{ shot.subtitle_count }}</strong><small>{{ shot.subtitle_status_label }}</small></button>
             </li>
           {% endfor %}
@@ -322,8 +325,14 @@
                   </details>
                 {% endif %}
               </div>
+                {% comment %}
               <div class="shot-preview-column">
+                {% endcomment %}
+              <div class="shot-preview-column">
+                {% if shot.selected_video %}<video controls preload="none" src="{{ shot.selected_video.video.url }}"></video>{% else %}<div class="video-placeholder"><span>{{ shot.shot_number }}</span><p>&#31561;&#24453;&#29983;&#25104;</p></div>{% endif %}
+                {% comment %}
                 {% if shot.selected_video %}<video controls preload="metadata" src="{{ shot.selected_video.video.url }}"></video>{% else %}<div class="video-placeholder"><span>{{ shot.shot_number }}</span><p>等待生成</p></div>{% endif %}
+                {% endcomment %}
               </div>
             </div>
             {% if shot.latest_video.error_message %}<p class="inline-error" data-shot-error>{{ shot.latest_video.error_message }}</p>{% endif %}

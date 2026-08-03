@@ -262,11 +262,11 @@ def finished_films_page(request):
 
     query = request.GET.get("q", "").strip()[:80]
     selected_status = request.GET.get("status", "").strip()
-    selected_sort = request.GET.get("sort", "recent").strip()
+    selected_sort = request.GET.get("sort", "episode_desc").strip()
     if selected_status not in {"", *state_labels}:
         selected_status = ""
-    if selected_sort not in {"recent", "episode_asc", "episode_desc"}:
-        selected_sort = "recent"
+    if selected_sort not in {"episode_asc", "episode_desc"}:
+        selected_sort = "episode_desc"
     project_rows = []
     for project in projects.values():
         if selected_project and str(project["project_id"]) != selected_project:
@@ -287,13 +287,8 @@ def finished_films_page(request):
             continue
         if selected_sort == "episode_asc":
             episodes.sort(key=lambda item: item["number"])
-        elif selected_sort == "episode_desc":
-            episodes.sort(key=lambda item: item["number"], reverse=True)
         else:
-            episodes.sort(
-                key=lambda item: item["latest"].exported_at or item["latest"].updated_at,
-                reverse=True,
-            )
+            episodes.sort(key=lambda item: item["number"], reverse=True)
         project["episodes"] = episodes
         project["ready_count"] = len(project["episodes"])
         project["ready_percent"] = round(

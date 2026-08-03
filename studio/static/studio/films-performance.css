@@ -1,0 +1,20 @@
+.film-preview > img,
+.film-preview-placeholder {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.film-preview > img {
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.film-preview-placeholder {
+  display: grid;
+  place-items: center;
+  background: #111a28;
+  color: var(--muted);
+  font-size: 22px;
+  font-weight: 900;
+}

@@ -1,0 +1,73 @@
+{% extends "studio/base.html" %}
+{% load static %}
+
+{% block title %}&#21457;&#24067;&#20219;&#21153; | &#28459;&#21095;&#24037;&#22346;{% endblock %}
+{% block page_heading %}&#21457;&#24067;&#20219;&#21153;{% endblock %}
+
+{% block extra_scripts %}
+  <link rel="stylesheet" href="{% static 'studio/publishing-tasks.css' %}?v=20260730-partitions">
+  <script src="{% static 'studio/publishing-tasks.js' %}?v=20260730-partitions" defer></script>
+{% endblock %}
+
+{% block content %}
+<section class="publishing-workspace publishing-dashboard" data-publishing-status-url="{% url 'studio:publishing_task_status' %}">
+  <header class="publishing-page-head">
+    <div><p class="eyebrow">Distribution Queue</p><h2>&#21457;&#24067;&#36827;&#24230;&#19982;&#21382;&#21490;</h2></div>
+    <span class="sr-only">{{ legacy_heading }}</span>
+    <nav class="publishing-view-tabs" aria-label="&#21457;&#24067;&#20219;&#21153;&#35270;&#22270;">
+      <a href="?view=active" {% if view_name == "active" %}aria-current="page"{% endif %}>
+        <span>&#27491;&#22312;&#21457;&#24067;</span><strong>{{ active_count }}</strong>
+        {% if attention_count %}<em>{{ attention_count }} &#24453;&#30830;&#35748;</em>{% endif %}
+      </a>
+      <a href="?view=history" {% if view_name == "history" %}aria-current="page"{% endif %}>
+        <span>&#21457;&#24067;&#21382;&#21490;</span>
+      </a>
+    </nav>
+  </header>
+
+  {% if view_name == "history" %}
+    <form class="publishing-history-toolbar" method="get">
+      <input type="hidden" name="view" value="history">
+      <label><span class="sr-only">&#25628;&#32034;</span><input type="search" name="q" value="{{ query }}" placeholder="&#25628;&#32034;&#39033;&#30446;&#12289;&#38598;&#25968;&#25110;&#31295;&#20214; ID"></label>
+      <label><span class="sr-only">&#32467;&#26524;</span><select name="status">
+        <option value="">&#20840;&#37096;&#32467;&#26524;</option>
+        <option value="published" {% if status_filter == "published" %}selected{% endif %}>&#21457;&#24067;&#25104;&#21151;</option>
+        <option value="failed" {% if status_filter == "failed" %}selected{% endif %}>&#21457;&#24067;&#22833;&#36133;</option>
+        <option value="rejected" {% if status_filter == "rejected" %}selected{% endif %}>&#24179;&#21488;&#36864;&#22238;</option>
+        <option value="outcome_unknown" {% if status_filter == "outcome_unknown" %}selected{% endif %}>&#32467;&#26524;&#24453;&#30830;&#35748;</option>
+        <option value="cancelled" {% if status_filter == "cancelled" %}selected{% endif %}>&#24050;&#21462;&#28040;</option>
+      </select></label>
+      <label><span class="sr-only">&#24179;&#21488;</span><select name="platform">
+        <option value="">&#20840;&#37096;&#24179;&#21488;</option>
+        {% for value, label in platform_choices %}<option value="{{ value }}" {% if platform_filter == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select></label>
+      <button class="secondary-button" type="submit">&#31579;&#36873;</button>
+    </form>
+  {% endif %}
+
+  {% if view_name == "active" %}
+    <section class="publishing-section" aria-labelledby="publishing-active-title">
+      <div class="publishing-section-head"><div><p class="eyebrow">Live Queue</p><h3 id="publishing-active-title">&#27491;&#22312;&#22788;&#29702;</h3></div><strong>{{ active_count }}</strong></div>
+      {% if active_tasks %}<div class="publishing-task-list">{% for task in active_tasks %}{% include "studio/publishing/_task_v2.html" with task=task %}{% endfor %}</div>
+      {% else %}<div class="publishing-empty-inline">&#24403;&#21069;&#27809;&#26377;&#36827;&#34892;&#20013;&#30340;&#21457;&#24067;&#20219;&#21153;&#12290;</div>{% endif %}
+    </section>
+
+    <section class="publishing-section publishing-attention-section" aria-labelledby="publishing-attention-title">
+      <div class="publishing-section-head"><div><p class="eyebrow">Action Required</p><h3 id="publishing-attention-title">&#38656;&#35201;&#30830;&#35748;</h3></div><strong>{{ attention_count }}</strong></div>
+      {% if attention_tasks %}<div class="publishing-task-list">{% for task in attention_tasks %}{% include "studio/publishing/_task_v2.html" with task=task %}{% endfor %}</div>
+      {% else %}<div class="publishing-empty-inline">&#27809;&#26377;&#24453;&#30830;&#35748;&#30340;&#24322;&#24120;&#20219;&#21153;&#12290;</div>{% endif %}
+    </section>
+  {% else %}
+    {% if publishing_tasks %}<div class="publishing-task-list publishing-history-list">{% for task in publishing_tasks %}{% include "studio/publishing/_task_v2.html" with task=task %}{% endfor %}</div>
+    {% else %}<div class="empty-state"><h2>&#27809;&#26377;&#31526;&#21512;&#26465;&#20214;&#30340;&#21457;&#24067;&#35760;&#24405;</h2><p>&#35843;&#25972;&#25628;&#32034;&#25110;&#31579;&#36873;&#26465;&#20214;&#21518;&#20877;&#35797;&#12290;</p></div>{% endif %}
+  {% endif %}
+
+  {% if page_obj.paginator.num_pages > 1 %}
+    <nav class="publishing-pagination" aria-label="&#21457;&#24067;&#20219;&#21153;&#20998;&#39029;">
+      {% if page_obj.has_previous %}<a class="ghost-button" href="?{{ pagination_query }}&amp;page={{ page_obj.previous_page_number }}">&#19978;&#19968;&#39029;</a>{% endif %}
+      <span>{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+      {% if page_obj.has_next %}<a class="ghost-button" href="?{{ pagination_query }}&amp;page={{ page_obj.next_page_number }}">&#19979;&#19968;&#39029;</a>{% endif %}
+    </nav>
+  {% endif %}
+</section>
+{% endblock %}

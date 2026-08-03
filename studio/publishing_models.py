@@ -145,6 +145,9 @@ class PublishingTask(models.Model):
     started_at = models.DateTimeField(null=True, blank=True)
     submitted_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+    acknowledged_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    acknowledged_by = models.CharField(max_length=120, blank=True)
+    acknowledgement_note = models.CharField(max_length=500, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -153,6 +156,7 @@ class PublishingTask(models.Model):
         indexes = [
             models.Index(fields=["status", "next_retry_at", "created_at"], name="publish_task_queue_idx"),
             models.Index(fields=["account", "status"], name="publish_account_status_idx"),
+            models.Index(fields=["status", "acknowledged_at", "finished_at"], name="publish_task_history_idx"),
         ]
 
     @property

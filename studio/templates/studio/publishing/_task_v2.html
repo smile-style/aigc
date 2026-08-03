@@ -1,0 +1,19 @@
+<article class="publishing-task{% if task.needs_acknowledgement %} needs-attention{% endif %}" data-publishing-task="{{ task.id }}" data-status="{{ task.status }}">
+  <div class="publishing-task__identity">
+    <span class="publishing-platform-mark" aria-hidden="true">{% if task.platform == "acfun" %}A{% elif task.platform == "douyin" %}D{% else %}B{% endif %}</span>
+    <div><strong>&#31532; {{ task.composition.episode.episode_number }} &#38598; &middot; v{{ task.composition.version }}</strong><small>{{ task.composition.episode.title }} &middot; {{ task.account.display_name }}</small></div>
+  </div>
+  <div class="publishing-task__progress">
+    <div><span data-task-stage>{{ task.get_stage_display }}</span><strong data-task-percent>{{ task.progress_percent }}%</strong></div>
+    <progress max="100" value="{{ task.progress_percent }}" data-task-progress>{{ task.progress_percent }}%</progress>
+    <small data-task-error>{% if task.error_message %}{{ task.error_message }}{% else %}&#23581;&#35797; {{ task.attempt_count }} / {{ task.max_attempts }}{% endif %}</small>
+  </div>
+  <span class="status-pill publish-status-{{ task.status }}" data-task-status>{{ task.get_status_display }}</span>
+  <div class="publishing-task__actions">
+    {% if task.remote_url %}<a class="ghost-button small" href="{{ task.remote_url }}" target="_blank" rel="noopener">&#25171;&#24320;&#35270;&#39057;</a>{% endif %}
+    {% if task.status == "queued" or task.status == "running" or task.status == "retry_wait" %}<form method="post" action="{% url 'studio:publishing_task_cancel' task.id %}">{% csrf_token %}<button class="ghost-button small" type="submit">&#21462;&#28040;</button></form>{% endif %}
+    {% if task.status == "failed" or task.status == "rejected" %}<form method="post" action="{% url 'studio:publishing_task_retry' task.id %}">{% csrf_token %}<button class="secondary-button small" type="submit">&#37325;&#35797;</button></form>{% endif %}
+    {% if task.status == "submitted" or task.status == "outcome_unknown" and task.remote_video_id %}<form method="post" action="{% url 'studio:publishing_task_reconcile' task.id %}">{% csrf_token %}<button class="secondary-button small" type="submit">&#26680;&#23545;&#24179;&#21488;</button></form>{% endif %}
+    {% if task.needs_acknowledgement %}<form method="post" action="{% url 'studio:publishing_task_acknowledge' task.id %}" data-confirm-submit="&#30830;&#35748;&#24050;&#22788;&#29702;&#35813;&#20219;&#21153;&#24182;&#31227;&#20837;&#21457;&#24067;&#21382;&#21490;&#21527;&#65311;">{% csrf_token %}<button class="ghost-button small" type="submit">&#30830;&#35748;&#24182;&#31227;&#20837;&#21382;&#21490;</button></form>{% endif %}
+  </div>
+</article>

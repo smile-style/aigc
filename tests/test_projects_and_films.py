@@ -419,6 +419,12 @@ def test_finished_films_support_status_search_project_and_sort_filters(client):
     assert "film-summary-grid" in html
     assert "film-play-button" in html
     assert 'id="film-player"' in html
+    assert 'value="episode_desc" selected' in html
+    assert 'value="recent"' not in html
+    assert response.context["filters"]["sort"] == "episode_desc"
+    assert [
+        item["number"] for item in response.context["film_projects"][0]["episodes"]
+    ] == [2, 1]
 
     published = client.get(
         reverse("studio:finished_films"),
@@ -441,12 +447,18 @@ def test_finished_films_support_status_search_project_and_sort_filters(client):
 
     sorted_response = client.get(
         reverse("studio:finished_films"),
-        {"project": first_outline.id, "sort": "episode_desc"},
+        {"project": first_outline.id, "sort": "episode_asc"},
     )
     assert [
         item["number"]
         for item in sorted_response.context["film_projects"][0]["episodes"]
-    ] == [2, 1]
+    ] == [1, 2]
+
+    invalid_sort = client.get(
+        reverse("studio:finished_films"),
+        {"project": first_outline.id, "sort": "recent"},
+    )
+    assert invalid_sort.context["filters"]["sort"] == "episode_desc"
 
 def test_delete_finished_film_removes_history_record_and_file(
     client, tmp_path, django_capture_on_commit_callbacks

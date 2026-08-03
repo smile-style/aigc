@@ -5,7 +5,11 @@
 
 {% block extra_scripts %}
   {% load static %}
+  <link rel="stylesheet" href="{% static 'studio/films-performance.css' %}?v=20260730-lazy-preview">
+  {% comment %}
   <script src="{% static 'studio/publishing.js' %}?v=20260729-multi-platform" defer></script>
+  {% endcomment %}
+  <script src="{% static 'studio/films-publishing.js' %}?v=20260730-lazy-form" defer></script>
   <script src="{% static 'studio/films.js' %}?v=20260729-history-delete" defer></script>
 {% endblock %}
 
@@ -55,13 +59,12 @@
     <label>
       <span class="sr-only">&#25490;&#24207;</span>
       <select name="sort">
-        <option value="recent" {% if filters.sort == "recent" %}selected{% endif %}>&#26368;&#36817;&#23548;&#20986;</option>
         <option value="episode_asc" {% if filters.sort == "episode_asc" %}selected{% endif %}>&#38598;&#25968;&#21319;&#24207;</option>
         <option value="episode_desc" {% if filters.sort == "episode_desc" %}selected{% endif %}>&#38598;&#25968;&#38477;&#24207;</option>
       </select>
     </label>
     <button class="secondary-button" type="submit">&#31579;&#36873;</button>
-    {% if filters.q or filters.project or filters.status or filters.sort != "recent" %}<a class="ghost-button" href="{% url 'studio:finished_films' %}">&#37325;&#32622;</a>{% endif %}
+    {% if filters.q or filters.project or filters.status or filters.sort != "episode_desc" %}<a class="ghost-button" href="{% url 'studio:finished_films' %}">&#37325;&#32622;</a>{% endif %}
     <span class="film-result-count">{{ filtered_count }} &#38598;</span>
   </form>
 
@@ -93,7 +96,12 @@
                         data-film-preview-title="&#31532; {{ episode.number }} &#38598; &#183; {{ episode.title }}"
                         data-film-preview-meta="v{{ episode.latest.version }} &#183; {{ episode.latest.exported_at|date:'Y-m-d H:i' }}"
                         aria-label="&#25773;&#25918;&#31532; {{ episode.number }} &#38598;&#25104;&#29255;">
+                  {% comment %}
                   <video controls playsinline preload="metadata" src="{{ episode.latest.video.url }}" aria-label="第 {{ episode.number }} 集成片预览"></video>
+                  {% endcomment %}
+                  {% with cover=episode.latest.episode.cover %}
+                    {% if cover and cover.image %}<img src="{{ cover.image.url }}" loading="lazy" decoding="async" alt="EP {{ episode.number }}">{% else %}<span class="film-preview-placeholder" aria-hidden="true">EP {{ episode.number|stringformat:"02d" }}</span>{% endif %}
+                  {% endwith %}
                   <span class="film-preview-shade" aria-hidden="true"></span>
                   <span class="film-preview-badges">
                     <span>EP {{ episode.number|stringformat:"02d" }}</span>

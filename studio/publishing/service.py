@@ -430,6 +430,9 @@ def retry_task(task):
     task.error_code = ""
     task.error_message = ""
     task.finished_at = None
+    task.acknowledged_at = None
+    task.acknowledged_by = ""
+    task.acknowledgement_note = ""
     task.save()
     return task
 
