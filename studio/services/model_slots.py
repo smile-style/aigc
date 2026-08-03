@@ -154,6 +154,7 @@ def get_simple_model_slots():
                     (
                         (ProviderConfig.TYPE_OPENAI_COMPATIBLE, "OpenAI / New API 视频"),
                         (ProviderConfig.TYPE_DASHSCOPE, "阿里百炼 / DashScope"),
+                        (ProviderConfig.TYPE_MINIMAX_H3, "MiniMax H3 V2"),
                     )
                     if category == CATEGORY_VIDEO
                     else ()
@@ -175,9 +176,54 @@ def get_simple_model_slots():
                 "verification_message": model.verification_message if model else "",
                 "verification_latency_ms": model.verification_latency_ms if model else None,
                 "last_verified_at": model.last_verified_at if model else None,
+                "video_schemes": get_video_schemes() if category == CATEGORY_VIDEO else [],
             }
         )
     return rows
+
+
+def get_video_schemes():
+    active_model_id = (
+        ModelAssignment.objects.filter(purpose=ModelAssignment.PURPOSE_SHOT_VIDEO)
+        .values_list("model_id", flat=True)
+        .first()
+    )
+    models = (
+        ModelConfig.objects.select_related("provider")
+        .filter(
+            capability=ModelConfig.CAPABILITY_VIDEO_REFERENCE,
+            enabled=True,
+            provider__enabled=True,
+        )
+        .order_by("model_id", "id")
+    )
+    return [
+        {
+            "id": model.id,
+            "name": model.name,
+            "display_name": _video_scheme_name(model.provider.provider_type, model.model_id),
+            "model_id": model.model_id,
+            "provider_label": model.provider.get_provider_type_display(),
+            "active": model.id == active_model_id,
+            "verification_status": model.verification_status,
+        }
+        for model in models
+    ]
+
+
+@transaction.atomic
+def activate_video_scheme(model_id):
+    model = ModelConfig.objects.select_related("provider").get(
+        pk=model_id,
+        capability=ModelConfig.CAPABILITY_VIDEO_REFERENCE,
+        enabled=True,
+        provider__enabled=True,
+    )
+    ModelAssignment.objects.update_or_create(
+        purpose=ModelAssignment.PURPOSE_SHOT_VIDEO,
+        defaults={"model": model},
+    )
+    return model
 
 
 @transaction.atomic
@@ -192,6 +238,7 @@ def save_simple_model_slot(category, post):
         if requested_type in {
             ProviderConfig.TYPE_OPENAI_COMPATIBLE,
             ProviderConfig.TYPE_DASHSCOPE,
+            ProviderConfig.TYPE_MINIMAX_H3,
         }:
             provider_type = requested_type
         elif model_id.lower().startswith("doubao-seedance"):
@@ -202,14 +249,28 @@ def save_simple_model_slot(category, post):
         raise ValueError("Base URL 和模型 ID 不能为空。")
 
     current_model = _slot_model(spec)
+    if (
+        category == CATEGORY_VIDEO
+        and current_model
+        and current_model.provider.provider_type != provider_type
+    ):
+        current_model = None
     provider = current_model.provider if current_model else None
     if provider is None:
         provider, _ = ProviderConfig.objects.get_or_create(
-            name=spec["provider_name"],
+            name=(
+                _video_provider_name(provider_type)
+                if category == CATEGORY_VIDEO
+                else spec["provider_name"]
+            ),
             defaults={
-                "provider_type": spec["provider_type"],
+                "provider_type": provider_type,
                 "base_url": base_url,
-                "api_key_env_var": _configured_env_name(spec["key_env_names"]),
+                "api_key_env_var": (
+                    _video_key_env(provider_type)
+                    if category == CATEGORY_VIDEO
+                    else _configured_env_name(spec["key_env_names"])
+                ),
             },
         )
 
@@ -222,8 +283,10 @@ def save_simple_model_slot(category, post):
     )
     provider.provider_type = provider_type
     provider.base_url = base_url
-    provider.api_key_env_var = provider.api_key_env_var or _configured_env_name(
-        spec["key_env_names"]
+    provider.api_key_env_var = provider.api_key_env_var or (
+        _video_key_env(provider_type)
+        if category == CATEGORY_VIDEO
+        else _configured_env_name(spec["key_env_names"])
     )
     provider.enabled = True
     provider.timeout_seconds = 600
@@ -234,19 +297,26 @@ def save_simple_model_slot(category, post):
     provider.full_clean()
     provider.save()
 
-    defaults = (
-        dict(current_model.default_parameters or {})
-        if current_model
-        else dict(spec["default_parameters"])
+    defaults = dict(current_model.default_parameters or {}) if current_model else {}
+    defaults.update(
+        _video_default_parameters(provider_type)
+        if category == CATEGORY_VIDEO
+        else spec["default_parameters"]
     )
-    defaults.update(spec["default_parameters"])
     model, _ = ModelConfig.objects.get_or_create(
         provider=provider,
         model_id=model_id,
         capability=spec["capability"],
-        defaults={"name": spec["label"], "default_parameters": defaults},
+        defaults={
+            "name": _video_scheme_name(provider_type, model_id) if category == CATEGORY_VIDEO else spec["label"],
+            "default_parameters": defaults,
+        },
     )
-    model.name = spec["label"]
+    model.name = (
+        _video_scheme_name(provider_type, model_id)
+        if category == CATEGORY_VIDEO
+        else spec["label"]
+    )
     model.default_parameters = defaults
     model.enabled = True
     if configuration_changed:
@@ -349,6 +419,18 @@ def _verify_image(client, provider, model, api_key):
 
 
 def _verify_video(client, provider, model, api_key):
+    if provider.provider_type == ProviderConfig.TYPE_MINIMAX_H3:
+        response = client.get(
+            f"{provider.base_url.rstrip('/')}/v2/query/video_generation",
+            params={"page_num": 1, "page_size": 1},
+            headers=_headers(api_key),
+            timeout=30,
+        )
+        _raise_for_configuration(response)
+        return (
+            ModelConfig.VERIFICATION_PARTIAL,
+            "MiniMax H3 地址和 Token 正常，模型权限将在首次生成时确认。",
+        )
     if (
         provider.provider_type == ProviderConfig.TYPE_OPENAI_COMPATIBLE
         or model.model_id.lower().startswith("doubao-seedance")
@@ -423,6 +505,45 @@ def _friendly_verification_error(exc):
     if isinstance(exc, httpx.HTTPError):
         return f"网络请求失败：{message}"
     return message or exc.__class__.__name__
+
+
+def _video_provider_name(provider_type):
+    names = {
+        ProviderConfig.TYPE_DASHSCOPE: "阿里云百炼（北京）",
+        ProviderConfig.TYPE_OPENAI_COMPATIBLE: "OpenAI / New API 视频服务",
+        ProviderConfig.TYPE_MINIMAX_H3: "MiniMax H3 视频服务",
+    }
+    return names[provider_type]
+
+
+def _video_key_env(provider_type):
+    names = {
+        ProviderConfig.TYPE_DASHSCOPE: "DASHSCOPE_API_KEY",
+        ProviderConfig.TYPE_OPENAI_COMPATIBLE: "VIDEO_API_KEY",
+        ProviderConfig.TYPE_MINIMAX_H3: "MINIMAX_API_KEY",
+    }
+    return names[provider_type]
+
+
+def _video_scheme_name(provider_type, model_id):
+    if provider_type == ProviderConfig.TYPE_MINIMAX_H3:
+        return "MiniMax H3"
+    if str(model_id).lower().startswith("doubao-seedance"):
+        return "Seedance 视频生成"
+    if provider_type == ProviderConfig.TYPE_DASHSCOPE:
+        return "万相视频生成"
+    return str(model_id)
+
+
+def _video_default_parameters(provider_type):
+    if provider_type == ProviderConfig.TYPE_MINIMAX_H3:
+        return {
+            "resolution": "768P",
+            "ratio": "9:16",
+            "duration": 5,
+            "watermark": False,
+        }
+    return dict(SLOT_SPECS[CATEGORY_VIDEO]["default_parameters"])
 
 
 def _slot_model(spec):

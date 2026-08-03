@@ -2,6 +2,7 @@ import json
 import os
 
 from studio.llm.image_provider import ImageConfig, ImageProvider
+from studio.llm.minimax_h3_video_provider import MiniMaxH3VideoProvider
 from studio.llm.new_api_video_provider import NewApiVideoProvider
 from studio.llm.provider import LLMConfig, LLMConfigurationError, LLMProvider
 from studio.llm.video_provider import BailianVideoProvider
@@ -121,6 +122,8 @@ def llm_provider_for(purpose):
 def video_provider_for(model, client=None):
     provider = model.provider
     api_key = provider_api_key(provider)
+    if provider.provider_type == ProviderConfig.TYPE_MINIMAX_H3:
+        return MiniMaxH3VideoProvider(model, api_key, client=client)
     if (
         provider.provider_type == ProviderConfig.TYPE_OPENAI_COMPATIBLE
         or model.model_id.lower().startswith("doubao-seedance")

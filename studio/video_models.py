@@ -36,9 +36,11 @@ def composition_video_upload_to(instance, filename):
 class ProviderConfig(models.Model):
     TYPE_OPENAI_COMPATIBLE = "openai_compatible"
     TYPE_DASHSCOPE = "dashscope"
+    TYPE_MINIMAX_H3 = "minimax_h3"
     TYPE_CHOICES = [
         (TYPE_OPENAI_COMPATIBLE, "OpenAI compatible"),
         (TYPE_DASHSCOPE, "Aliyun Bailian / DashScope"),
+        (TYPE_MINIMAX_H3, "MiniMax H3 V2"),
     ]
 
     name = models.CharField(max_length=120, unique=True)

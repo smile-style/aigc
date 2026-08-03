@@ -6,6 +6,7 @@
 {% block extra_scripts %}
   {% load static %}
   <script src="{% static 'studio/publishing.js' %}?v=20260728-douyin" defer></script>
+  <script src="{% static 'studio/simple-settings.js' %}?v=20260803-h3" defer></script>
 {% endblock %}
 
 {% block content %}
@@ -34,13 +35,40 @@
           </span>
         </header>
 
+        {% if slot.category == "video" and slot.video_schemes %}
+          <div class="video-scheme-switcher">
+            <label class="model-field">
+              <span>当前全局方案</span>
+              <select name="scheme_id" aria-label="当前全局视频方案">
+                {% for scheme in slot.video_schemes %}
+                  <option value="{{ scheme.id }}" {% if scheme.active %}selected{% endif %}>
+                    {{ scheme.display_name }}
+                  </option>
+                {% endfor %}
+              </select>
+            </label>
+            <button
+              class="secondary-button"
+              type="submit"
+              formaction="?action=activate_video_scheme"
+              name="action"
+              value="activate_video_scheme"
+              data-loading-text="切换中..."
+            >切换方案</button>
+          </div>
+        {% endif %}
+
         <div class="model-slot__fields {% if slot.provider_type_choices %}has-provider-type{% endif %}">
           {% if slot.provider_type_choices %}
             <label class="model-field">
               <span>接口协议</span>
-              <select name="provider_type" required>
+              <select name="provider_type" required data-video-provider>
                 {% for value, label in slot.provider_type_choices %}
-                  <option value="{{ value }}" {% if value == slot.provider_type %}selected{% endif %}>{{ label }}</option>
+                  <option
+                    value="{{ value }}"
+                    {% if value == slot.provider_type %}selected{% endif %}
+                    {% if value == "minimax_h3" %}data-default-base-url="https://api.minimaxi.com" data-default-model-id="MiniMax-H3"{% endif %}
+                  >{{ label }}</option>
                 {% endfor %}
               </select>
             </label>
@@ -56,6 +84,7 @@
               autocomplete="url"
               spellcheck="false"
               required
+              {% if slot.category == "video" %}data-video-base-url{% endif %}
             >
           </label>
 
@@ -68,6 +97,7 @@
               placeholder="{{ slot.token_placeholder }}"
               autocomplete="new-password"
               spellcheck="false"
+              {% if slot.category == "video" %}data-video-token{% endif %}
             >
           </label>
 
@@ -81,6 +111,7 @@
               autocomplete="off"
               spellcheck="false"
               required
+              {% if slot.category == "video" %}data-video-model-id{% endif %}
             >
           </label>
         </div>
@@ -114,7 +145,7 @@
               name="action"
               value="save_slot"
               data-loading-text="保存中..."
-            >保存</button>
+            >{% if slot.category == "video" %}保存并启用{% else %}保存{% endif %}</button>
           </div>
         </footer>
       </form>

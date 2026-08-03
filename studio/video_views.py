@@ -31,6 +31,7 @@ from studio.repositories.workspace import CURRENT_WORKSPACE_ID, WorkspaceReposit
 from studio.services.characters import create_storyboard_characters, storyboard_character_candidates
 from studio.services.episode_workflow import workflow_payload
 from studio.services.model_slots import (
+    activate_video_scheme,
     get_simple_model_slots,
     save_simple_model_slot,
     verify_simple_model_slot,
@@ -67,17 +68,21 @@ def system_settings_page(request):
         action = request.POST.get("action") or request.GET.get("action")
         category = request.POST.get("category", "")
         try:
-            if action not in {"save_slot", "verify_slot"}:
+            if action == "activate_video_scheme":
+                model = activate_video_scheme(request.POST.get("scheme_id"))
+                success = f"已启用视频方案：{model.name}。"
+            elif action not in {"save_slot", "verify_slot"}:
                 raise ValueError("无法识别的系统管理操作。")
-            model = save_simple_model_slot(category, request.POST)
-            if action == "save_slot":
-                success = f"{model.name}已保存。"
             else:
-                model = verify_simple_model_slot(category)
-                if model.verification_status == model.VERIFICATION_FAILED:
-                    error = f"{model.name}验证失败：{model.verification_message}"
+                model = save_simple_model_slot(category, request.POST)
+                if action == "save_slot":
+                    success = f"{model.name}已保存并启用。" if category == "video" else f"{model.name}已保存。"
                 else:
-                    success = f"{model.name}验证完成。"
+                    model = verify_simple_model_slot(category)
+                    if model.verification_status == model.VERIFICATION_FAILED:
+                        error = f"{model.name}验证失败：{model.verification_message}"
+                    else:
+                        success = f"{model.name}验证完成。"
         except Exception as exc:
             error = str(exc)
 
