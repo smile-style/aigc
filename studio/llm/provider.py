@@ -2,9 +2,24 @@
 import logging
 import os
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 import httpx
+
+
+_CURRENT_REQUEST_OBSERVER = ContextVar("llm_request_observer", default=None)
+
+
+@contextmanager
+def observe_llm_requests(observer):
+    token = _CURRENT_REQUEST_OBSERVER.set(observer)
+    try:
+        yield observer
+    finally:
+        _CURRENT_REQUEST_OBSERVER.reset(token)
 
 
 class LLMConfigurationError(RuntimeError):
@@ -54,11 +69,12 @@ class LLMProvider:
     DEFAULT_MAX_RETRIES = 3
     RETRYABLE_STATUS_CODES = {502, 503, 504}
 
-    def __init__(self, config, client=None, timeout=None):
+    def __init__(self, config, client=None, timeout=None, request_observer=None):
         self.config = config
         self.client = client or httpx.Client(trust_env=self._trust_env_from_env())
         self.timeout = timeout or self._timeout_from_env()
         self.max_retries = self._max_retries_from_env()
+        self.request_observer = request_observer
 
     @classmethod
     def from_env(cls, environ=None):
@@ -114,6 +130,15 @@ class LLMProvider:
         if temperature is not None:
             payload["temperature"] = temperature
 
+        observer = self.request_observer
+        if observer is None:
+            observer = _CURRENT_REQUEST_OBSERVER.get()
+        observation = None
+        if observer is not None:
+            # The observer receives only the request body. Transport details and
+            # credentials never cross the audit boundary.
+            observation = observer.request_started(deepcopy(payload))
+
         started_at = time.perf_counter()
         self._log_event(
             "request.start",
@@ -155,6 +180,7 @@ class LLMProvider:
                 elapsed_ms=elapsed_ms,
                 content_chars=len(content),
             )
+            self._notify_request_succeeded(observer, observation)
             return content
         except httpx.TimeoutException as exc:
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
@@ -166,7 +192,11 @@ class LLMProvider:
                 timeout_seconds=self.timeout,
                 error=str(exc),
             )
-            raise LLMAPIError(f"Model request timed out after {self.timeout:g} seconds") from exc
+            error = LLMAPIError(
+                f"Model request timed out after {self.timeout:g} seconds"
+            )
+            self._notify_request_failed(observer, observation, error)
+            raise error from exc
         except httpx.HTTPStatusError as exc:
             response = exc.response
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
@@ -182,7 +212,9 @@ class LLMProvider:
                 body_preview=response.text[:1000],
                 error=str(exc),
             )
-            raise LLMAPIError(self._friendly_http_error(exc)) from exc
+            error = LLMAPIError(self._friendly_http_error(exc))
+            self._notify_request_failed(observer, observation, error)
+            raise error from exc
         except httpx.HTTPError as exc:
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
             self._log_event(
@@ -192,7 +224,9 @@ class LLMProvider:
                 elapsed_ms=elapsed_ms,
                 error=str(exc),
             )
-            raise LLMAPIError(self._friendly_http_error(exc)) from exc
+            error = LLMAPIError(self._friendly_http_error(exc))
+            self._notify_request_failed(observer, observation, error)
+            raise error from exc
         except (json.JSONDecodeError, ValueError, KeyError, IndexError, TypeError) as exc:
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
             self._log_event(
@@ -202,7 +236,31 @@ class LLMProvider:
                 elapsed_ms=elapsed_ms,
                 error=str(exc),
             )
-            raise LLMAPIError("Model response did not include message content") from exc
+            error = LLMAPIError("Model response did not include message content")
+            self._notify_request_failed(observer, observation, error)
+            raise error from exc
+
+    @staticmethod
+    def _notify_request_succeeded(observer, observation):
+        if observer is None:
+            return
+        try:
+            observer.request_succeeded(observation)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not mark audited LLM request as succeeded"
+            )
+
+    @staticmethod
+    def _notify_request_failed(observer, observation, error):
+        if observer is None:
+            return
+        try:
+            observer.request_failed(observation, error)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not mark audited LLM request as failed"
+            )
 
     def _post_with_retry(self, url, **kwargs):
         for attempt in range(self.max_retries + 1):

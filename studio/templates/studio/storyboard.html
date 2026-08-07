@@ -35,6 +35,13 @@
       </div>
       <div class="hero-actions">
         <a class="ghost-button" href="{% url 'studio:script_episode_context' workspace.id workspace.script_id episode.episode %}">查看本集剧本</a>
+        <button
+          class="ghost-button"
+          type="button"
+          data-llm-request-open
+          data-llm-request-url="{% url 'studio:llm_request_list' workspace.id %}?purpose=storyboard&amp;episode_number={{ episode.episode }}"
+          data-llm-request-title="第 {{ episode.episode }} 集分镜模型请求"
+        >查看分镜请求</button>
         {% if episode.has_script %}
           <form method="post" action="{% url 'studio:generate_storyboard_script' workspace.id workspace.script_id episode.episode %}" data-submit-guard data-generation-form data-storyboard-form>
             {% csrf_token %}
@@ -74,6 +81,25 @@
         <a class="secondary-link" href="{% url 'studio:script' workspace.id %}">返回 60 集列表</a>
       </div>
 
+      {% with cold_open=episode.cold_open_payload|default:workspace.cold_open_payload %}
+        {% if cold_open %}
+          <section class="cold-open-summary" aria-label="前置片花状态">
+            <div class="cold-open-summary-title">
+              <span class="cold-open-mark" aria-hidden="true">0–3s</span>
+              <div><p class="eyebrow">Cold Open</p><h3>前置片花</h3></div>
+            </div>
+            <dl>
+              {% if cold_open.source_shot_number %}<div><dt>源镜头</dt><dd>镜头 {{ cold_open.source_shot_number }}</dd></div>{% endif %}
+              {% if cold_open.source_beat_id %}<div><dt>源节拍</dt><dd>{{ cold_open.source_beat_id }}</dd></div>{% endif %}
+              {% if cold_open.trim_end_ms %}<div><dt>截取区间</dt><dd>{{ cold_open.trim_start_ms }}–{{ cold_open.trim_end_ms }} ms</dd></div>{% elif cold_open.source_in_second or cold_open.in_second %}<div><dt>截取区间</dt><dd>{% firstof cold_open.source_in_second cold_open.in_second %}–{% firstof cold_open.source_out_second cold_open.out_second %} 秒</dd></div>{% endif %}
+              {% if cold_open.withheld_reveal %}<div><dt>保留揭晓</dt><dd>{{ cold_open.withheld_reveal }}</dd></div>{% endif %}
+              {% if cold_open.return_bridge %}<div><dt>回切</dt><dd>{{ cold_open.return_bridge }}</dd></div>{% endif %}
+            </dl>
+            {% if cold_open.source_shot_number %}<span class="status-pill success">已绑定</span>{% else %}<span class="status-pill warning">待绑定</span>{% endif %}
+          </section>
+        {% endif %}
+      {% endwith %}
+
       {% if not episode.has_script %}
         <div class="empty-state">
           <h2>本集还没有完整剧本</h2>
@@ -83,13 +109,16 @@
       {% elif workspace.storyboard_prompts %}
         <div class="shot-grid">
           {% for shot in workspace.storyboard_prompts %}
-            <article class="shot-card">
+            <article class="shot-card{% if shot.is_cold_open_source or shot.shot_number == episode.cold_open_payload.source_shot_number or shot.shot_number == workspace.cold_open_payload.source_shot_number %} is-cold-open-source{% endif %}">
               <div class="card-head">
                 <span class="step-badge">{{ shot.shot_number }}</span>
                 <div>
                   <p class="eyebrow">第 {{ episode.episode }} 集 · 镜头 {{ shot.shot_number }}</p>
                   <h3>{{ shot.duration }}</h3>
                 </div>
+                {% if shot.is_cold_open_source or shot.shot_number == episode.cold_open_payload.source_shot_number or shot.shot_number == workspace.cold_open_payload.source_shot_number %}
+                  <span class="status-pill warning cold-open-source-pill" title="截取 {{ shot.cold_open_trim_start_ms }}–{{ shot.cold_open_trim_end_ms }} ms">片花源镜头</span>
+                {% endif %}
               </div>
               <dl>
                 <div><dt>画面描述</dt><dd>{{ shot.visual_description }}</dd></div>

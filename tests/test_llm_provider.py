@@ -9,6 +9,7 @@ from studio.llm.provider import (
     LLMConfigurationError,
     LLMJSONParseError,
     LLMProvider,
+    observe_llm_requests,
 )
 
 
@@ -38,6 +39,34 @@ class FakeClient:
     def post(self, url, headers, json, timeout):
         self.calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
         return self.response
+
+
+class SequenceFakeClient:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def post(self, url, headers, json, timeout):
+        self.calls.append(
+            {"url": url, "headers": headers, "json": json, "timeout": timeout}
+        )
+        return self.responses.pop(0)
+
+
+class RecordingObserver:
+    def __init__(self):
+        self.events = []
+
+    def request_started(self, payload):
+        handle = f"request-{len(self.events) + 1}"
+        self.events.append(("started", handle, payload))
+        return handle
+
+    def request_succeeded(self, handle):
+        self.events.append(("succeeded", handle))
+
+    def request_failed(self, handle, error):
+        self.events.append(("failed", handle, str(error)))
 
 
 class ClosingFakeClient(FakeClient):
@@ -161,6 +190,93 @@ def test_generate_text_calls_chat_completions():
     assert client.calls[0]["json"]["model"] == "model-a"
     assert client.calls[0]["json"]["temperature"] == 0.2
     assert client.calls[0]["json"]["stream"] is False
+
+
+def test_generate_text_notifies_observer_with_only_final_payload():
+    response = FakeResponse(
+        payload={"choices": [{"message": {"content": "hello"}}]},
+    )
+    observer = RecordingObserver()
+    provider = LLMProvider(
+        LLMConfig(
+            base_url="https://example.test/v1",
+            api_key="secret-key",
+            model="model-a",
+        ),
+        client=FakeClient(response),
+        request_observer=observer,
+    )
+
+    provider.generate_text([{"role": "user", "content": "Hi"}], temperature=0.2)
+
+    assert observer.events == [
+        (
+            "started",
+            "request-1",
+            {
+                "model": "model-a",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "stream": False,
+                "temperature": 0.2,
+            },
+        ),
+        ("succeeded", "request-1"),
+    ]
+    observed_payload = observer.events[0][2]
+    assert "secret-key" not in json.dumps(observed_payload)
+    assert "url" not in observed_payload
+    assert "headers" not in observed_payload
+
+
+def test_generate_text_marks_observed_request_failed():
+    observer = RecordingObserver()
+    provider = LLMProvider(
+        LLMConfig(base_url="https://example.test/v1", api_key="key", model="model-a"),
+        client=FakeClient(FakeResponse(status_code=401, payload={"error": "bad key"})),
+        request_observer=observer,
+    )
+
+    with pytest.raises(LLMAPIError):
+        provider.generate_text([{"role": "user", "content": "Hi"}])
+
+    assert [event[0] for event in observer.events] == ["started", "failed"]
+    assert observer.events[1][1] == "request-1"
+
+
+def test_transport_retry_is_one_observed_logical_request(monkeypatch):
+    monkeypatch.setattr("studio.llm.provider.time.sleep", lambda _seconds: None)
+    observer = RecordingObserver()
+    client = SequenceFakeClient(
+        [
+            FakeResponse(status_code=502),
+            FakeResponse(payload={"choices": [{"message": {"content": "hello"}}]}),
+        ]
+    )
+    provider = LLMProvider(
+        LLMConfig(base_url="https://example.test/v1", api_key="key", model="model-a"),
+        client=client,
+        request_observer=observer,
+    )
+
+    assert provider.generate_text([{"role": "user", "content": "Hi"}]) == "hello"
+
+    assert len(client.calls) == 2
+    assert [event[0] for event in observer.events] == ["started", "succeeded"]
+
+
+def test_context_observer_applies_only_inside_context():
+    response = FakeResponse(payload={"choices": [{"message": {"content": "hello"}}]})
+    observer = RecordingObserver()
+    provider = LLMProvider(
+        LLMConfig(base_url="https://example.test/v1", api_key="key", model="model-a"),
+        client=FakeClient(response),
+    )
+
+    with observe_llm_requests(observer):
+        provider.generate_text([{"role": "user", "content": "first"}])
+    provider.generate_text([{"role": "user", "content": "second"}])
+
+    assert [event[0] for event in observer.events] == ["started", "succeeded"]
 
 
 def test_close_closes_client_when_supported():

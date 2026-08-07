@@ -1,3 +1,5 @@
+import hashlib
+import json
 import re
 import uuid
 from pathlib import Path
@@ -295,6 +297,7 @@ class WorkspaceRepository:
         script_plan,
         episode_1_script,
         episode_1_pacing=None,
+        episode_1_continuity=None,
     ):
         with transaction.atomic():
             try:
@@ -320,6 +323,7 @@ class WorkspaceRepository:
                         "script_plan": script_plan,
                         "episode_1_script": episode_1_script,
                         "episode_1_pacing": episode_1_pacing or {},
+                        "episode_1_continuity": episode_1_continuity or {},
                         "pacing_profile_version": PACING_PROFILE_VERSION,
                     },
                 },
@@ -339,6 +343,7 @@ class WorkspaceRepository:
                 script_plan,
                 episode_1_script,
                 episode_1_pacing=episode_1_pacing,
+                episode_1_continuity=episode_1_continuity,
             )
             StoryboardPrompt.objects.filter(project=project).exclude(script=script).delete()
 
@@ -384,7 +389,10 @@ class WorkspaceRepository:
         project = episode.script.project
         workspace["selected_episode"] = self._episode_to_dict(episode)
         storyboard = getattr(episode, "storyboard_prompt", None)
-        workspace["storyboard_prompts"] = storyboard.prompts_payload if storyboard else []
+        workspace["storyboard_prompts"] = self._storyboard_prompts_to_dict(storyboard)
+        workspace["cold_open_payload"] = (
+            dict(storyboard.cold_open_payload or {}) if storyboard else {}
+        )
         storyboard_target = self._storyboard_task_target(script_id, episode_number)
         workspace["storyboard_task"] = self._latest_task_dict(
             project,
@@ -456,6 +464,7 @@ class WorkspaceRepository:
         full_script,
         script_id=None,
         pacing_payload=None,
+        continuity_payload=None,
     ):
         if not isinstance(full_script, str) or not full_script.strip():
             raise ValueError("Episode script must be a non-empty string")
@@ -466,10 +475,17 @@ class WorkspaceRepository:
                 for_update=True,
                 script_id=script_id,
             )
+            previous_carry_out = _carry_out(episode.continuity_payload)
             episode.full_script = full_script
             episode.script_status = Episode.SCRIPT_READY
             if isinstance(pacing_payload, dict):
                 episode.pacing_payload = pacing_payload
+            if isinstance(continuity_payload, dict):
+                episode.continuity_payload = continuity_payload
+                episode.continuity_input_hash = _continuity_hash(
+                    continuity_payload.get("carry_in", {})
+                )
+            episode.is_story_stale = False
             episode.script_error = ""
             episode.script_finished_at = timezone.now()
             episode.save(
@@ -478,6 +494,9 @@ class WorkspaceRepository:
                     "script_status",
                     "script_error",
                     "pacing_payload",
+                    "continuity_payload",
+                    "continuity_input_hash",
+                    "is_story_stale",
                     "script_finished_at",
                     "updated_at",
                 ]
@@ -486,6 +505,13 @@ class WorkspaceRepository:
                 episode.script.episode_1_script = full_script
                 episode.script.save(update_fields=["episode_1_script", "updated_at"])
             StoryboardPrompt.objects.filter(episode=episode).delete()
+            current_carry_out = _carry_out(episode.continuity_payload)
+            if current_carry_out != previous_carry_out:
+                Episode.objects.filter(
+                    script=episode.script,
+                    episode_number__gt=episode_number,
+                    script_status=Episode.SCRIPT_READY,
+                ).update(is_story_stale=True)
         return self.get_episode(workspace_id, episode_number, script_id=script_id)
 
     def mark_episode_script_generation_failed(
@@ -515,6 +541,8 @@ class WorkspaceRepository:
             target_id = self._storyboard_task_target(script_id, episode_number)
             if not episode.full_script.strip():
                 raise ValueError(f"请先生成第 {episode_number} 集完整剧本，再生成分镜。")
+            if episode.is_story_stale:
+                raise ValueError("上游剧情状态已变化，请先重新生成本集剧本，再生成分镜。")
             running_task = project.generation_tasks.filter(
                 task_type=GenerationTask.TYPE_STORYBOARD,
                 target_id=target_id,
@@ -541,7 +569,19 @@ class WorkspaceRepository:
             task_data["created"] = True
             return task_data
 
-    def save_storyboard_for_episode(self, workspace_id, episode_number, prompts, script_id=None):
+    def save_storyboard_for_episode(
+        self,
+        workspace_id,
+        episode_number,
+        prompts,
+        script_id=None,
+        cold_open_payload=None,
+    ):
+        if isinstance(prompts, dict):
+            cold_open_payload = prompts.get("cold_open", cold_open_payload)
+            prompts = prompts.get("storyboard_prompts")
+        if not isinstance(prompts, list):
+            raise ValueError("Storyboard prompts must be a list")
         with transaction.atomic():
             episode = self._get_episode_model(workspace_id, episode_number, for_update=True, script_id=script_id)
             StoryboardPrompt.objects.update_or_create(
@@ -550,6 +590,9 @@ class WorkspaceRepository:
                     "project": episode.script.project,
                     "script": episode.script,
                     "prompts_payload": prompts,
+                    "cold_open_payload": (
+                        cold_open_payload if isinstance(cold_open_payload, dict) else {}
+                    ),
                 },
             )
         return self.get_episode_workspace(workspace_id, episode_number, script_id=script_id)
@@ -1031,8 +1074,12 @@ class WorkspaceRepository:
             ) if script else None,
             "episode_1_script": episode_1.full_script if episode_1 else "",
             "episode_1_pacing": episode_1.pacing_payload if episode_1 else {},
-            "storyboard_prompts": (
-                storyboard_prompt.prompts_payload if storyboard_prompt else []
+            "episode_1_continuity": episode_1.continuity_payload if episode_1 else {},
+            "storyboard_prompts": self._storyboard_prompts_to_dict(storyboard_prompt),
+            "cold_open_payload": (
+                dict(storyboard_prompt.cold_open_payload or {})
+                if storyboard_prompt
+                else {}
             ),
             "storyboard_task": self._latest_task_dict(
                 project,
@@ -1042,6 +1089,29 @@ class WorkspaceRepository:
             "created_at": self._format_datetime(project.created_at),
             "updated_at": self._format_datetime(project.updated_at),
         }
+
+    @staticmethod
+    def _storyboard_prompts_to_dict(storyboard):
+        if storyboard is None:
+            return []
+        cold_open = dict(storyboard.cold_open_payload or {})
+        source_number = cold_open.get("source_shot_number")
+        prompts = []
+        for item in storyboard.prompts_payload or []:
+            payload = dict(item)
+            is_source = payload.get("shot_number") == source_number
+            if is_source:
+                payload["is_cold_open_source"] = True
+                payload["cold_open_trim_start_ms"] = cold_open.get(
+                    "trim_start_ms",
+                    0,
+                )
+                payload["cold_open_trim_end_ms"] = cold_open.get(
+                    "trim_end_ms",
+                    3000,
+                )
+            prompts.append(payload)
+        return prompts
 
     def _outline_to_dict(self, outline):
         payload = dict(outline.raw_payload or {})
@@ -1104,6 +1174,7 @@ class WorkspaceRepository:
         script_plan,
         episode_1_script,
         episode_1_pacing=None,
+        episode_1_continuity=None,
     ):
         if not isinstance(script_plan, list):
             return
@@ -1147,6 +1218,12 @@ class WorkspaceRepository:
                 )
                 if isinstance(episode_1_pacing, dict):
                     episode.pacing_payload = episode_1_pacing
+                if isinstance(episode_1_continuity, dict):
+                    episode.continuity_payload = episode_1_continuity
+                    episode.continuity_input_hash = _continuity_hash(
+                        episode_1_continuity.get("carry_in", {})
+                    )
+                episode.is_story_stale = False
                 episode.script_error = ""
             episode.save()
 
@@ -1218,6 +1295,12 @@ class WorkspaceRepository:
             "next_crisis": episode.plan_payload.get("next_crisis", ""),
             "plan_payload": episode.plan_payload,
             "pacing_payload": episode.pacing_payload,
+            "continuity_payload": episode.continuity_payload,
+            "continuity_input_hash": episode.continuity_input_hash,
+            "is_story_stale": episode.is_story_stale,
+            "cold_open_payload": (
+                dict(storyboard.cold_open_payload or {}) if storyboard else {}
+            ),
             "has_storyboard": storyboard is not None,
             "storyboard_count": len(storyboard.prompts_payload) if storyboard else 0,
             "video_version_status": video_version_status,
@@ -1356,4 +1439,18 @@ class WorkspaceRepository:
             character.deleted_at = timezone.now()
             character.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
         return character
+def _continuity_hash(value):
+    normalized = value if isinstance(value, dict) else {}
+    return hashlib.sha256(
+        json.dumps(normalized, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def _carry_out(continuity):
+    if not isinstance(continuity, dict):
+        return {}
+    carry_out = continuity.get("carry_out")
+    return carry_out if isinstance(carry_out, dict) else {}
+
+
 JsonWorkspaceRepository = WorkspaceRepository

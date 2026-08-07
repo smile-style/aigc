@@ -96,31 +96,448 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  const modalTriggers = new WeakMap();
+  const focusableSelector = [
+    'a[href]',
+    'button:not([disabled]):not([tabindex="-1"])',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(",");
+  const openModals = () => Array.from(document.querySelectorAll(".detail-modal:not([hidden])"));
+  const topModal = () => openModals().at(-1) || null;
+  const modalFocusables = (modal) => Array.from(modal.querySelectorAll(focusableSelector)).filter(
+    (element) => !element.closest("[hidden]") && element.getAttribute("aria-hidden") !== "true",
+  );
+  const syncModalState = () => document.body.classList.toggle("modal-open", openModals().length > 0);
   const closeModal = (modal) => {
-    if (!modal) return;
+    if (!(modal instanceof HTMLElement) || modal.hidden) return;
     modal.hidden = true;
-    document.body.classList.remove("modal-open");
+    const trigger = modalTriggers.get(modal);
+    modalTriggers.delete(modal);
+    syncModalState();
+    if (trigger instanceof HTMLElement && trigger.isConnected) {
+      trigger.focus();
+      return;
+    }
+    const remainingModal = topModal();
+    remainingModal?.querySelector(".modal-panel")?.focus();
   };
-  const openModal = (modal) => {
-    if (!modal) return;
-    if (modal.parentElement !== document.body) document.body.appendChild(modal);
+  const openModal = (modal, trigger = null) => {
+    if (!(modal instanceof HTMLElement)) return;
+    document.body.appendChild(modal);
+    if (trigger instanceof HTMLElement) modalTriggers.set(modal, trigger);
     modal.hidden = false;
-    const scrollArea = modal.querySelector("[data-outline-detail-scroll], .modal-script");
+    const scrollArea = modal.querySelector("[data-outline-detail-scroll], .modal-script, .llm-request-view");
     if (scrollArea instanceof HTMLElement) scrollArea.scrollTop = 0;
-    document.body.classList.add("modal-open");
-    modal.querySelector("[data-modal-close], [data-outline-detail-close]")?.focus();
+    syncModalState();
+    const initialFocus = modal.querySelector(
+      "[data-modal-initial-focus], [data-modal-close], [data-outline-detail-close], [data-llm-request-close]",
+    );
+    window.requestAnimationFrame(() => (initialFocus || modal.querySelector(".modal-panel"))?.focus());
   };
   document.querySelectorAll("[data-outline-detail-target], [data-modal-target]").forEach((button) => {
-    button.addEventListener("click", () => openModal(document.getElementById(button.dataset.modalTarget || button.dataset.outlineDetailTarget)));
+    button.addEventListener("click", () => openModal(
+      document.getElementById(button.dataset.modalTarget || button.dataset.outlineDetailTarget),
+      button,
+    ));
   });
-  document.querySelectorAll("[data-outline-detail-close], [data-modal-close]").forEach((button) => {
+  document.querySelectorAll("[data-outline-detail-close], [data-modal-close], [data-llm-request-close]").forEach((button) => {
     button.addEventListener("click", () => closeModal(button.closest(".detail-modal")));
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeModal(document.querySelector(".detail-modal:not([hidden])"));
+    const modal = topModal();
+    if (!modal) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeModal(modal);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusables = modalFocusables(modal);
+    if (!focusables.length) {
+      event.preventDefault();
+      modal.querySelector(".modal-panel")?.focus();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables.at(-1);
+    const active = document.activeElement;
+    if (!modal.contains(active)) {
+      event.preventDefault();
+      first.focus();
+    } else if (event.shiftKey && active === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
   });
   const autoOpenModal = document.querySelector(".detail-modal[data-auto-open]");
   if (autoOpenModal instanceof HTMLElement) openModal(autoOpenModal);
+
+  const requestDialog = document.querySelector("[data-llm-request-dialog]");
+  if (requestDialog instanceof HTMLElement) {
+    const requestTitle = requestDialog.querySelector("[data-llm-request-title]");
+    const historySelect = requestDialog.querySelector("[data-llm-request-history]");
+    const metaList = requestDialog.querySelector("[data-llm-request-meta]");
+    const recordError = requestDialog.querySelector("[data-llm-request-record-error]");
+    const messagesRoot = requestDialog.querySelector("[data-llm-request-messages]");
+    const rawRoot = requestDialog.querySelector("[data-llm-request-raw]");
+    const copyButton = requestDialog.querySelector("[data-llm-request-copy]");
+    const liveRegion = requestDialog.querySelector("[data-llm-request-live]");
+    const errorMessage = requestDialog.querySelector("[data-llm-request-error]");
+    const retryButton = requestDialog.querySelector("[data-llm-request-retry]");
+    const viewButtons = Array.from(requestDialog.querySelectorAll("[data-llm-request-view]"));
+    const viewPanels = Array.from(requestDialog.querySelectorAll("[data-llm-request-panel]"));
+    let records = [];
+    let activeListUrl = "";
+    let selectedIndex = 0;
+    let requestToken = 0;
+    let retryMode = "list";
+    let currentRawText = "";
+
+    const announce = (message) => {
+      if (!(liveRegion instanceof HTMLElement)) return;
+      liveRegion.textContent = "";
+      window.requestAnimationFrame(() => { liveRegion.textContent = message; });
+    };
+    const setRequestState = (state) => {
+      requestDialog.querySelectorAll("[data-llm-request-state]").forEach((element) => {
+        element.hidden = element.dataset.llmRequestState !== state;
+      });
+    };
+    const setRequestView = (view) => {
+      viewButtons.forEach((button) => {
+        const isActive = button.dataset.llmRequestView === view;
+        button.setAttribute("aria-selected", String(isActive));
+        button.tabIndex = isActive ? 0 : -1;
+      });
+      viewPanels.forEach((panel) => { panel.hidden = panel.dataset.llmRequestPanel !== view; });
+    };
+    const normalizeList = (payload) => {
+      if (Array.isArray(payload)) return payload;
+      if (!payload || typeof payload !== "object") return [];
+      return payload.requests || payload.results || payload.items || payload.records || [];
+    };
+    const unwrapDetail = (payload) => {
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+      return payload.request || payload.record || payload.item || payload;
+    };
+    const requestPayload = (record) => {
+      if (!record || typeof record !== "object") return undefined;
+      let payload = record.sanitized_payload ?? record.payload ?? record.request_payload ?? record.request_body;
+      if (payload === undefined && record.request && typeof record.request === "object") payload = record.request;
+      if (typeof payload !== "string") return payload;
+      try {
+        return JSON.parse(payload);
+      } catch (error) {
+        return payload;
+      }
+    };
+    const hasRequestPayload = (record) => requestPayload(record) !== undefined && requestPayload(record) !== null;
+    const formatDate = (value) => {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return new Intl.DateTimeFormat("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }).format(date);
+    };
+    const statusLabel = (status) => ({
+      pending: "等待中",
+      running: "请求中",
+      succeeded: "成功",
+      failed: "失败",
+      cancelled: "已取消",
+    }[status] || status || "");
+    const historyLabel = (record, index) => {
+      const attempt = record.task_attempt ?? record.attempt;
+      const sequence = record.call_sequence ?? record.request_sequence;
+      const callLabel = attempt || sequence
+        ? `第 ${attempt || 1} 次 · 调用 ${sequence || 1}`
+        : `记录 ${records.length - index}`;
+      return [
+        callLabel,
+        record.request_kind_label || record.request_kind,
+        record.model,
+        formatDate(record.created_at),
+        statusLabel(record.status),
+      ].filter(Boolean).join(" · ");
+    };
+    const detailUrl = (record) => {
+      const explicitUrl = record.detail_url || record.url;
+      if (explicitUrl) return new URL(explicitUrl, window.location.href).toString();
+      const identifier = record.id ?? record.pk;
+      if (identifier === undefined || identifier === null || !activeListUrl) return "";
+      const url = new URL(activeListUrl, window.location.href);
+      url.pathname = `${url.pathname.replace(/\/+$/, "")}/${encodeURIComponent(identifier)}/`;
+      url.search = "";
+      return url.toString();
+    };
+    const fetchJson = async (url) => {
+      const response = await fetch(url, {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch (error) {
+        payload = null;
+      }
+      if (!response.ok) {
+        throw new Error(payload?.error || payload?.detail || `请求失败（${response.status}）`);
+      }
+      return payload;
+    };
+    const addMeta = (label, value) => {
+      if (!(metaList instanceof HTMLElement) || value === undefined || value === null || value === "") return;
+      const item = document.createElement("div");
+      const term = document.createElement("dt");
+      const detail = document.createElement("dd");
+      term.textContent = label;
+      detail.textContent = String(value);
+      item.append(term, detail);
+      metaList.appendChild(item);
+    };
+    const stringifyContent = (content) => {
+      if (typeof content === "string") return content;
+      if (content === undefined || content === null) return "";
+      return JSON.stringify(content, null, 2);
+    };
+    const writeClipboard = async (value) => {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        return;
+      }
+      const fallbackTextarea = document.createElement("textarea");
+      fallbackTextarea.value = value;
+      fallbackTextarea.setAttribute("readonly", "");
+      fallbackTextarea.style.position = "fixed";
+      fallbackTextarea.style.opacity = "0";
+      document.body.appendChild(fallbackTextarea);
+      try {
+        fallbackTextarea.select();
+        if (!document.execCommand("copy")) throw new Error("copy failed");
+      } finally {
+        fallbackTextarea.remove();
+      }
+    };
+    const renderMessages = (payload) => {
+      if (!(messagesRoot instanceof HTMLElement)) return;
+      messagesRoot.replaceChildren();
+      let messages = payload && typeof payload === "object" ? payload.messages : null;
+      if (!Array.isArray(messages) && payload && typeof payload === "object" && Array.isArray(payload.input)) {
+        messages = payload.input;
+      }
+      if (!Array.isArray(messages) || !messages.length) {
+        messages = [{ role: "request", content: payload }];
+      }
+      const roleNames = {
+        system: "System",
+        developer: "Developer",
+        user: "User",
+        assistant: "Assistant",
+        tool: "Tool",
+        request: "Request",
+      };
+      messages.forEach((message, index) => {
+        const block = document.createElement("article");
+        block.className = "llm-request-message";
+        const header = document.createElement("header");
+        const role = document.createElement("strong");
+        const order = document.createElement("span");
+        const copyMessage = document.createElement("button");
+        const content = document.createElement("pre");
+        const roleValue = message && typeof message === "object" ? message.role : "request";
+        role.textContent = roleNames[roleValue] || String(roleValue || "Message");
+        order.textContent = String(index + 1).padStart(2, "0");
+        const messageText = stringifyContent(
+          message && typeof message === "object" && Object.hasOwn(message, "content") ? message.content : message,
+        );
+        content.textContent = messageText;
+        copyMessage.type = "button";
+        copyMessage.className = "llm-request-message-copy";
+        copyMessage.textContent = "复制";
+        copyMessage.title = `复制第 ${index + 1} 条消息`;
+        copyMessage.setAttribute("aria-label", copyMessage.title);
+        copyMessage.addEventListener("click", async () => {
+          try {
+            await writeClipboard(messageText);
+            announce(`第 ${index + 1} 条消息已复制`);
+          } catch (error) {
+            announce("复制失败，请稍后重试");
+          } finally {
+            copyMessage.focus();
+          }
+        });
+        header.append(role, order, copyMessage);
+        block.append(header, content);
+        messagesRoot.appendChild(block);
+      });
+    };
+    const renderRecord = (record) => {
+      const payload = requestPayload(record);
+      currentRawText = typeof payload === "string" ? payload : JSON.stringify(payload ?? {}, null, 2);
+      if (metaList instanceof HTMLElement) metaList.replaceChildren();
+      addMeta("类型", record.purpose_label || record.request_kind_label || record.purpose || record.request_kind);
+      addMeta("模型", record.model);
+      addMeta("温度", record.temperature);
+      addMeta("Prompt 版本", record.prompt_version);
+      addMeta("状态", statusLabel(record.status));
+      addMeta("时间", formatDate(record.created_at));
+      const attempt = record.task_attempt ?? record.attempt;
+      const sequence = record.call_sequence ?? record.request_sequence;
+      addMeta("调用", attempt || sequence ? `第 ${attempt || 1} 次 / ${sequence || 1}` : "");
+      if (recordError instanceof HTMLElement) {
+        recordError.textContent = record.error_message ? `失败原因：${record.error_message}` : "";
+        recordError.hidden = !record.error_message;
+      }
+      renderMessages(payload);
+      if (rawRoot instanceof HTMLElement) rawRoot.textContent = currentRawText;
+      if (copyButton instanceof HTMLButtonElement) copyButton.disabled = false;
+      setRequestState("content");
+    };
+    const showRequestError = (error, mode) => {
+      retryMode = mode;
+      if (errorMessage instanceof HTMLElement) errorMessage.textContent = error.message || "请稍后重试。";
+      if (copyButton instanceof HTMLButtonElement) copyButton.disabled = true;
+      setRequestState("error");
+    };
+    const loadRecord = async (index) => {
+      const record = records[index];
+      if (!record) return;
+      selectedIndex = index;
+      if (historySelect instanceof HTMLSelectElement) historySelect.value = String(index);
+      const token = ++requestToken;
+      setRequestState("loading");
+      if (copyButton instanceof HTMLButtonElement) copyButton.disabled = true;
+      try {
+        let detail = record;
+        if (!hasRequestPayload(record)) {
+          const url = detailUrl(record);
+          if (!url) throw new Error("请求详情地址不可用。");
+          const response = unwrapDetail(await fetchJson(url));
+          detail = response && typeof response === "object" ? { ...record, ...response } : record;
+        }
+        if (token !== requestToken) return;
+        renderRecord(detail);
+      } catch (error) {
+        if (token !== requestToken) return;
+        showRequestError(error, "detail");
+      }
+    };
+    const populateHistory = () => {
+      if (!(historySelect instanceof HTMLSelectElement)) return;
+      historySelect.replaceChildren();
+      records.forEach((record, index) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = historyLabel(record, index);
+        historySelect.appendChild(option);
+      });
+      historySelect.disabled = records.length < 2;
+    };
+    const loadRequestList = async () => {
+      const token = ++requestToken;
+      retryMode = "list";
+      records = [];
+      if (historySelect instanceof HTMLSelectElement) {
+        historySelect.disabled = true;
+        historySelect.replaceChildren(new Option("正在加载...", ""));
+      }
+      if (copyButton instanceof HTMLButtonElement) copyButton.disabled = true;
+      setRequestState("loading");
+      try {
+        const payload = await fetchJson(activeListUrl);
+        if (token !== requestToken) return;
+        records = normalizeList(payload);
+        if (!Array.isArray(records) || !records.length) {
+          records = [];
+          if (historySelect instanceof HTMLSelectElement) {
+            historySelect.replaceChildren(new Option("没有历史记录", ""));
+          }
+          setRequestState("empty");
+          return;
+        }
+        populateHistory();
+        await loadRecord(0);
+      } catch (error) {
+        if (token !== requestToken) return;
+        showRequestError(error, "list");
+      }
+    };
+    const copyRawRequest = async () => {
+      if (!currentRawText) return;
+      try {
+        await writeClipboard(currentRawText);
+        announce("请求 JSON 已复制");
+      } catch (error) {
+        announce("复制失败，请稍后重试");
+      } finally {
+        copyButton?.focus();
+      }
+    };
+
+    document.querySelectorAll("[data-llm-request-open]").forEach((trigger) => {
+      trigger.addEventListener("click", () => {
+        activeListUrl = trigger.dataset.llmRequestUrl || "";
+        if (!activeListUrl) return;
+        if (requestTitle instanceof HTMLElement) {
+          requestTitle.textContent = trigger.dataset.llmRequestTitle || "模型请求";
+        }
+        setRequestView("messages");
+        openModal(requestDialog, trigger);
+        loadRequestList();
+      });
+    });
+    historySelect?.addEventListener("change", () => loadRecord(Number(historySelect.value)));
+    retryButton?.addEventListener("click", () => {
+      if (retryMode === "detail" && records.length) loadRecord(selectedIndex);
+      else loadRequestList();
+    });
+    copyButton?.addEventListener("click", copyRawRequest);
+    viewButtons.forEach((button, index) => {
+      button.addEventListener("click", () => setRequestView(button.dataset.llmRequestView));
+      button.addEventListener("keydown", (event) => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        let nextIndex = index;
+        if (event.key === "ArrowLeft") nextIndex = (index - 1 + viewButtons.length) % viewButtons.length;
+        if (event.key === "ArrowRight") nextIndex = (index + 1) % viewButtons.length;
+        if (event.key === "Home") nextIndex = 0;
+        if (event.key === "End") nextIndex = viewButtons.length - 1;
+        const nextButton = viewButtons[nextIndex];
+        setRequestView(nextButton.dataset.llmRequestView);
+        nextButton.focus();
+      });
+    });
+  }
+
+  document.querySelectorAll("[data-pacing-track]").forEach((track) => {
+    const duration = Number(track.dataset.pacingDuration);
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    track.querySelectorAll("[data-pacing-start][data-pacing-end]").forEach((segment) => {
+      const start = Number(segment.dataset.pacingStart);
+      const end = Number(segment.dataset.pacingEnd);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+      segment.style.setProperty("--pacing-span", String(Math.max(1, end - start)));
+    });
+    track.querySelectorAll("[data-pacing-at]").forEach((marker) => {
+      const at = Number(marker.dataset.pacingAt);
+      if (!Number.isFinite(at)) return;
+      const position = Math.min(100, Math.max(0, (at / duration) * 100));
+      marker.style.setProperty("--pacing-position", `${position}%`);
+    });
+  });
 
   document.querySelectorAll("[data-task-poller]").forEach((taskPoller) => {
     if (!(taskPoller instanceof HTMLElement)) return;

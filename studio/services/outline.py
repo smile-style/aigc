@@ -4,6 +4,10 @@ from studio.constants import (
     EPISODE_COUNT,
     EPISODE_DURATION_MAX_SECONDS,
     EPISODE_DURATION_MIN_SECONDS,
+    EPISODE_DURATION_TARGET_SECONDS,
+    MAX_INFORMATION_GAP_SECONDS,
+    NEXT_CRISIS_MAX_SECONDS,
+    NEXT_CRISIS_MIN_SECONDS,
     OUTLINE_CANDIDATE_COUNT,
 )
 
@@ -33,12 +37,17 @@ def generate_outlines(provider, genre):
             "content": (
                 f"题材：{genre}\n"
                 f"目标：生成 {OUTLINE_CANDIDATE_COUNT} 个 AI 漫剧大纲候选。\n"
-                f"固定规格：{EPISODE_COUNT}集；单集时长由剧情内容决定，"
-                f"仅以 {EPISODE_DURATION_MIN_SECONDS} 到 {EPISODE_DURATION_MAX_SECONDS} 秒"
-                "作为合理安全边界，不得为了凑时长压缩对白、动作或情绪停顿。\n"
+                f"固定规格：{EPISODE_COUNT}集；单集必须控制在 "
+                f"{EPISODE_DURATION_MIN_SECONDS} 到 {EPISODE_DURATION_MAX_SECONDS} 秒，"
+                f"默认按 {EPISODE_DURATION_TARGET_SECONDS} 秒设计。内容超量时删除重复说明、"
+                "合并同功能事件，不得扩展时间轴或压缩语速。\n"
                 f"每个候选必须包含 {REQUIRED_OUTLINE_FIELD_LIST}。"
                 "核心设定由你随机生成，要适合高密度短视频漫剧；"
-                "每集都应支持危机前置、明确目标、两次阻碍、解决或反转和下集新危机。"
+                "每集只安排一个目标、一条主冲突链和一次核心反转，主要角色不超过3人、"
+                "场景不超过2个。前 3 秒必须截取本集后段真实剧情作为片花，不能另写"
+                "不会在正片兑现的开场；随后明确目标、升级两次阻碍并兑现反转。"
+                f"有效信息空档不得超过 {MAX_INFORMATION_GAP_SECONDS} 秒，结尾仅用 "
+                f"{NEXT_CRISIS_MIN_SECONDS} 到 {NEXT_CRISIS_MAX_SECONDS} 秒开启下集新问题。"
             ),
         },
     ]

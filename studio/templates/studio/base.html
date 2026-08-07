@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}AI 漫剧生成工具{% endblock %}</title>
-  <link rel="stylesheet" href="{% static 'studio/app.css' %}?v=20260713-workbench">
+  <link rel="stylesheet" href="{% static 'studio/app.css' %}?v=20260807-request-viewer">
   <link rel="stylesheet" href="{% static 'studio/phase3.css' %}?v=20260729-film-history-delete">
   <link rel="stylesheet" href="{% static 'studio/phase3-extras.css' %}?v=20260729-film-library">
   <link rel="stylesheet" href="{% static 'studio/simple-settings.css' %}?v=20260714-simple-models">
@@ -14,7 +14,7 @@
   <link rel="stylesheet" href="{% static 'studio/covers.css' %}?v=20260728-cover-versions">
   <link rel="stylesheet" href="{% static 'studio/covers-dual.css' %}?v=20260729-dual-cover-formats">
   <link rel="stylesheet" href="{% static 'studio/workflow.css' %}?v=20260729-caption-option">
-  <script src="{% static 'studio/app-v2.js' %}?v=20260727-characters" defer></script>
+  <script src="{% static 'studio/app-v2.js' %}?v=20260807-request-viewer" defer></script>
   <script src="{% static 'studio/episode-workflow.js' %}?v=20260727-automation" defer></script>
 </head>
 <body>
@@ -95,6 +95,7 @@
       </div>
     </main>
   </div>
+  {% include "studio/_llm_request_dialog.html" %}
   {% block extra_scripts %}{% endblock %}
 </body>
 </html>

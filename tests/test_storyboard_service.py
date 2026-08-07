@@ -67,8 +67,8 @@ def test_generate_storyboard_returns_valid_shots():
     assert "video_prompt" in prompt
     assert "无人说话时固定填写“无对白”" in prompt
     assert "不要填写旁白、音效、系统提示、画面字幕、动作或环境描述" in prompt
-    assert "60 到 300 秒" in prompt
-    assert "自然总时长 120 秒" in prompt
+    assert "60 到 90 秒" in prompt
+    assert "成片总时长为 75 秒" in prompt
     assert "4 到 15" in prompt
     assert provider.temperature == 0.6
 
@@ -178,7 +178,7 @@ def test_validate_storyboard_payload_rejects_total_duration_outside_range():
 
 
 def test_validate_storyboard_payload_matches_expected_duration():
-    with pytest.raises(ValueError, match="120"):
+    with pytest.raises(ValueError, match="110.*75"):
         validate_storyboard_payload(make_payload(), expected_duration_seconds=110)
 
 
@@ -190,7 +190,70 @@ def test_normalize_duration_rejects_clips_shorter_than_seedance_minimum():
 def test_validate_storyboard_payload_accepts_content_driven_duration():
     prompts = validate_storyboard_payload(
         make_payload(),
-        expected_duration_seconds=120,
+        expected_duration_seconds=EPISODE_DURATION_TARGET_SECONDS,
     )
 
-    assert sum(item["duration_seconds"] for item in prompts) == 120
+    assert sum(item["duration_seconds"] for item in prompts) == EPISODE_DURATION_TARGET_SECONDS
+
+
+def test_short_drama_v3_binds_cold_open_to_a_body_shot_without_adding_a_shot():
+    payload = make_payload()
+    durations = [6] * len(payload["storyboard_prompts"])
+    durations[-1] -= sum(durations) - 72
+    beat_ids = [
+        "beat_02_protagonist_goal",
+        "beat_02_protagonist_goal",
+        "beat_03_obstacle_1",
+        "beat_03_obstacle_1",
+        "beat_04_obstacle_2",
+        "beat_04_obstacle_2",
+        "beat_04_obstacle_2",
+        "beat_05_resolution_or_reversal",
+        "beat_05_resolution_or_reversal",
+        "beat_05_resolution_or_reversal",
+        "beat_06_next_crisis",
+        "beat_06_next_crisis",
+    ]
+    for index, (shot, duration, beat_id) in enumerate(
+        zip(payload["storyboard_prompts"], durations, beat_ids),
+        start=1,
+    ):
+        shot["duration"] = f"{duration}秒"
+        shot["duration_seconds"] = duration
+        shot["beat_id"] = beat_id
+    payload["cold_open"] = {
+        "source_beat_id": "beat_05_resolution_or_reversal",
+        "source_shot_number": 9,
+        "trim_start_ms": 1500,
+        "trim_end_ms": 4500,
+    }
+    pacing = {
+        "duration_seconds": 75,
+        "cold_open": {
+            "hook_type": "reversal_dialogue",
+            "source_beat_id": "beat_05_resolution_or_reversal",
+            "duration_seconds": 3,
+            "withheld_reveal": "隐藏真相",
+            "return_bridge": "两小时前",
+        },
+        "beats": [
+            {"beat_id": "beat_01_crisis_open", "beat_type": "crisis_open"},
+            {"beat_id": "beat_02_protagonist_goal", "beat_type": "protagonist_goal"},
+            {"beat_id": "beat_03_obstacle_1", "beat_type": "obstacle_1"},
+            {"beat_id": "beat_04_obstacle_2", "beat_type": "obstacle_2"},
+            {"beat_id": "beat_05_resolution_or_reversal", "beat_type": "resolution_or_reversal"},
+            {"beat_id": "beat_06_next_crisis", "beat_type": "next_crisis"},
+        ],
+    }
+
+    result = generate_storyboard(
+        FakeProvider(payload),
+        "完整剧本",
+        pacing=pacing,
+        include_metadata=True,
+    )
+
+    assert len(result["storyboard_prompts"]) == MIN_STORYBOARD_SHOTS
+    assert sum(item["duration_seconds"] for item in result["storyboard_prompts"]) == 72
+    assert result["cold_open"]["source_shot_number"] == 9
+    assert result["cold_open"]["trim_end_ms"] - result["cold_open"]["trim_start_ms"] == 3000

@@ -24,12 +24,21 @@
       <p class="hero-copy">统一维护剧本、角色与封面母版，确保整部作品的叙事和视觉一致。</p>
     </div>
     {% if workspace and selected_outline %}
-      <form method="post" action="{% url 'studio:generate_script' workspace.id %}" data-submit-guard>
-        {% csrf_token %}
-        <input type="hidden" name="outline_id" value="{{ selected_outline.id }}">
-        <input type="hidden" name="next" value="project">
-        <button class="primary-button" type="submit" data-loading-text="提交中..." {% if selected_outline.script_status == "generating" %}disabled{% endif %}>{% if workspace.episodes %}重新生成规划{% else %}生成 60 集规划{% endif %}</button>
-      </form>
+      <div class="hero-actions llm-request-entry-group">
+        <button
+          class="ghost-button"
+          type="button"
+          data-llm-request-open
+          data-llm-request-url="{% url 'studio:llm_request_list' workspace.id %}?purpose=script"
+          data-llm-request-title="60 集规划模型请求"
+        >查看规划请求</button>
+        <form method="post" action="{% url 'studio:generate_script' workspace.id %}" data-submit-guard>
+          {% csrf_token %}
+          <input type="hidden" name="outline_id" value="{{ selected_outline.id }}">
+          <input type="hidden" name="next" value="project">
+          <button class="primary-button" type="submit" data-loading-text="提交中..." {% if selected_outline.script_status == "generating" %}disabled{% endif %}>{% if workspace.episodes %}重新生成规划{% else %}生成 60 集规划{% endif %}</button>
+        </form>
+      </div>
     {% endif %}
   </section>
 
@@ -191,12 +200,23 @@
             <div class="episode-copy"><h3>{{ episode.title }}</h3><p>{{ episode.summary }}</p></div>
             <div class="episode-state">
               {% if episode.has_script %}<span class="status-pill success">剧本已完成</span>{% elif episode.script_status == "generating" %}<span class="status-pill info">剧本生成中</span>{% else %}<span class="status-pill muted">待生成剧本</span>{% endif %}
+              {% if episode.pacing_payload.duration_seconds %}<span class="status-pill info">{{ episode.pacing_payload.duration_seconds }} 秒</span>{% endif %}
+              {% if episode.cold_open_payload.source_shot_number %}<span class="status-pill success">片花镜头 {{ episode.cold_open_payload.source_shot_number }}</span>{% elif episode.pacing_payload.cold_open.source_beat_id %}<span class="status-pill warning">片花待绑定</span>{% endif %}
               {% if episode.has_storyboard %}<span class="status-pill success">{{ episode.storyboard_count }} 个分镜</span>{% endif %}
               {% if episode.video_version_status.clean %}<span class="status-pill muted">&#26080;&#23383;&#24149;&#25104;&#29255;</span>{% endif %}
               {% if episode.video_version_status.external_captioned %}<span class="status-pill info">&#22806;&#37096;&#19978;&#20256;&#23383;&#24149;&#25104;&#29255;</span>{% endif %}
               {% if episode.video_version_status.generated_captioned %}<span class="status-pill success">&#31995;&#32479;&#23383;&#24149;&#25104;&#29255;</span>{% endif %}
             </div>
             <div class="episode-row-actions">
+              {% if episode.has_script or episode.script_status == "generating" or episode.script_status == "failed" %}
+                <button
+                  class="ghost-button small"
+                  type="button"
+                  data-llm-request-open
+                  data-llm-request-url="{% url 'studio:llm_request_list' workspace.id %}?purpose=episode_script&amp;episode_number={{ episode.episode }}"
+                  data-llm-request-title="第 {{ episode.episode }} 集剧本模型请求"
+                >模型请求</button>
+              {% endif %}
               {% if episode.workflow.status == 'queued' or episode.workflow.status == 'running' %}
                 <button class="primary-button small" type="button" disabled>&#29983;&#25104;&#20013; {{ episode.workflow.progress_percent }}%</button>
               {% elif episode.workflow.status == 'failed' %}
@@ -250,7 +270,58 @@
                   {% if episode.next_crisis %}<div><dt>下集危机</dt><dd>{{ episode.next_crisis }}</dd></div>{% endif %}
                 </dl>
                 {% if episode.pacing_payload %}
-                  <p class="hero-copy">节奏校验：{{ episode.pacing_payload.duration_seconds }} 秒 · {{ episode.pacing_payload.information_beats|length }} 个信息点</p>
+                  <section
+                    class="pacing-overview"
+                    aria-labelledby="episode-pacing-title-{{ episode.episode }}"
+                    data-pacing-track
+                    data-pacing-duration="{{ episode.pacing_payload.duration_seconds }}"
+                  >
+                    <div class="pacing-overview-head">
+                      <div>
+                        <p class="eyebrow">Pacing</p>
+                        <h4 id="episode-pacing-title-{{ episode.episode }}">{{ episode.pacing_payload.duration_seconds }} 秒节奏轨</h4>
+                      </div>
+                      <div class="pacing-overview-status">
+                        <span>{{ episode.pacing_payload.information_beats|length }} 个信息点</span>
+                        {% if episode.cold_open_payload.source_shot_number %}
+                          <span class="status-pill success">片花已绑定镜头 {{ episode.cold_open_payload.source_shot_number }}</span>
+                        {% elif episode.pacing_payload.cold_open.source_beat_id %}
+                          <span class="status-pill warning">片花待分镜绑定</span>
+                        {% endif %}
+                      </div>
+                    </div>
+                    {% if episode.pacing_payload.beats %}
+                      <div class="pacing-timeline">
+                        <div class="pacing-segments" aria-label="剧情节拍">
+                          {% for beat in episode.pacing_payload.beats %}
+                            <span
+                              class="pacing-segment pacing-segment-{{ beat.beat_type }}"
+                              data-pacing-start="{{ beat.start_second }}"
+                              data-pacing-end="{{ beat.end_second }}"
+                              aria-label="{{ beat.start_second }} 到 {{ beat.end_second }} 秒，{{ beat.event }}"
+                              title="{{ beat.start_second }}–{{ beat.end_second }} 秒 · {{ beat.event }}"
+                            >
+                              <b class="pacing-segment-label">
+                                {% if beat.beat_type == "crisis_open" %}片花{% elif beat.beat_type == "protagonist_goal" %}目标{% elif beat.beat_type == "obstacle_1" %}阻碍{% elif beat.beat_type == "obstacle_2" %}升级{% elif beat.beat_type == "resolution_or_reversal" %}反转{% elif beat.beat_type == "next_crisis" %}尾钩{% else %}{{ beat.beat_type }}{% endif %}
+                              </b>
+                              <small>{{ beat.start_second }}–{{ beat.end_second }}s</small>
+                            </span>
+                          {% endfor %}
+                        </div>
+                        {% if episode.pacing_payload.information_beats %}
+                          <div class="pacing-markers" aria-label="信息点">
+                            {% for item in episode.pacing_payload.information_beats %}
+                              <span
+                                class="pacing-marker"
+                                data-pacing-at="{{ item.at_second }}"
+                                title="{{ item.at_second }} 秒 · {{ item.information }} · {{ item.consequence }}"
+                              ><span class="sr-only">{{ item.at_second }} 秒：{{ item.information }}，{{ item.consequence }}</span></span>
+                            {% endfor %}
+                          </div>
+                        {% endif %}
+                      </div>
+                    {% endif %}
+                  </section>
                 {% endif %}
                 <pre class="script-block modal-script">{{ episode.full_script }}</pre>
                 <div class="episode-automation-actions">

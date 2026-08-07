@@ -1,0 +1,95 @@
+<div class="detail-modal llm-request-modal" data-llm-request-dialog hidden>
+  <div class="modal-scrim" data-llm-request-close></div>
+  <section
+    class="modal-panel llm-request-panel"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="llm-request-dialog-title"
+    aria-describedby="llm-request-dialog-context"
+    tabindex="-1"
+  >
+    <header class="modal-head llm-request-head">
+      <div>
+        <p class="eyebrow" id="llm-request-dialog-context">Model Request</p>
+        <h3 id="llm-request-dialog-title" data-llm-request-title>模型请求</h3>
+      </div>
+      <button class="icon-button" type="button" data-llm-request-close aria-label="关闭模型请求">
+        <span aria-hidden="true">&times;</span>
+      </button>
+    </header>
+
+    <div class="llm-request-toolbar">
+      <label class="field llm-request-history-field" for="llm-request-history">
+        <span>历史记录</span>
+        <select id="llm-request-history" data-llm-request-history disabled>
+          <option>正在加载...</option>
+        </select>
+      </label>
+
+      <div class="llm-request-toolbar-actions">
+        <div class="llm-request-tabs" role="tablist" aria-label="请求内容视图">
+          <button
+            id="llm-request-messages-tab"
+            type="button"
+            role="tab"
+            aria-selected="true"
+            aria-controls="llm-request-messages-panel"
+            data-llm-request-view="messages"
+          >消息</button>
+          <button
+            id="llm-request-raw-tab"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="llm-request-raw-panel"
+            tabindex="-1"
+            data-llm-request-view="raw"
+          >原始 JSON</button>
+        </div>
+        <button class="ghost-button llm-request-copy" type="button" data-llm-request-copy disabled>复制 JSON</button>
+      </div>
+    </div>
+
+    <div class="llm-request-body">
+      <div class="llm-request-state" data-llm-request-state="loading" role="status" aria-live="polite">
+        <span class="task-indicator" aria-hidden="true"></span>
+        <strong>正在加载请求记录</strong>
+      </div>
+      <div class="llm-request-state" data-llm-request-state="empty" hidden>
+        <strong>没有可查看的请求</strong>
+        <p>旧项目或尚未发起生成时不会有历史记录。</p>
+      </div>
+      <div class="llm-request-state is-error" data-llm-request-state="error" role="alert" hidden>
+        <strong>请求记录加载失败</strong>
+        <p data-llm-request-error>请稍后重试。</p>
+        <button class="secondary-button small" type="button" data-llm-request-retry>重试</button>
+      </div>
+
+      <section class="llm-request-content" data-llm-request-state="content" hidden>
+        <dl class="llm-request-metadata" data-llm-request-meta aria-label="请求元数据"></dl>
+        <p class="llm-request-record-error" data-llm-request-record-error hidden></p>
+        <div
+          class="llm-request-view"
+          id="llm-request-messages-panel"
+          role="tabpanel"
+          aria-labelledby="llm-request-messages-tab"
+          data-llm-request-panel="messages"
+        >
+          <div class="llm-request-messages" data-llm-request-messages></div>
+        </div>
+        <div
+          class="llm-request-view"
+          id="llm-request-raw-panel"
+          role="tabpanel"
+          aria-labelledby="llm-request-raw-tab"
+          data-llm-request-panel="raw"
+          hidden
+        >
+          <pre class="llm-request-raw" data-llm-request-raw></pre>
+        </div>
+      </section>
+    </div>
+
+    <p class="sr-only" data-llm-request-live aria-live="polite" aria-atomic="true"></p>
+  </section>
+</div>

@@ -123,6 +123,9 @@ class Episode(models.Model):
     full_script = models.TextField(blank=True)
     plan_payload = models.JSONField(default=dict, blank=True)
     pacing_payload = models.JSONField(default=dict, blank=True)
+    continuity_payload = models.JSONField(default=dict, blank=True)
+    continuity_input_hash = models.CharField(max_length=64, blank=True, default="")
+    is_story_stale = models.BooleanField(default=False, db_index=True)
     script_status = models.CharField(
         max_length=20,
         choices=SCRIPT_STATUS_CHOICES,
@@ -165,6 +168,7 @@ class StoryboardPrompt(models.Model):
         related_name="storyboard_prompt",
     )
     prompts_payload = models.JSONField(default=list)
+    cold_open_payload = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -377,6 +381,61 @@ class GenerationTask(models.Model):
 
     def __str__(self):
         return f"{self.task_type}:{self.status} for {self.project}"
+
+
+class LLMRequestRecord(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_SUCCEEDED = "succeeded"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_SUCCEEDED, "Succeeded"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="llm_request_records",
+    )
+    task = models.ForeignKey(
+        GenerationTask,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="llm_request_records",
+    )
+    purpose = models.CharField(max_length=64, db_index=True)
+    target_id = models.CharField(max_length=120, blank=True, default="", db_index=True)
+    episode_number = models.PositiveIntegerField(null=True, blank=True, db_index=True)
+    task_attempt = models.PositiveIntegerField(default=1)
+    call_sequence = models.PositiveIntegerField(default=1)
+    model = models.CharField(max_length=120)
+    temperature = models.FloatField(null=True, blank=True)
+    sanitized_payload = models.JSONField(default=dict)
+    payload_hash = models.CharField(max_length=64, db_index=True)
+    status = models.CharField(
+        max_length=16,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+        db_index=True,
+    )
+    error_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["project", "purpose", "episode_number", "-created_at"],
+                name="llm_req_project_lookup_idx",
+            ),
+            models.Index(
+                fields=["task", "task_attempt", "call_sequence"],
+                name="llm_req_task_history_idx",
+            ),
+        ]
 
 
 class GenerationAttempt(models.Model):

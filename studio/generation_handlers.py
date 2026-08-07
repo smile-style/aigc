@@ -13,6 +13,7 @@ from studio.services.covers import (
     save_cover_template,
 )
 from studio.services.model_config import image_provider_for, llm_provider_for
+from studio.services.llm_request_audit import audit_llm_requests
 from studio.services.script import generate_episode_script, generate_script
 from studio.services.storyboard import generate_storyboard
 
@@ -33,16 +34,18 @@ def handle_script_generation(task):
         )
     if outline is None:
         raise FileNotFoundError(f"Outline not found: {outline_id}")
-    payload = generate_script(
-        llm_provider_for(ModelAssignment.PURPOSE_SCRIPT),
-        outline,
-    )
+    with _audit_context(task, ModelAssignment.PURPOSE_SCRIPT):
+        payload = generate_script(
+            llm_provider_for(ModelAssignment.PURPOSE_SCRIPT),
+            outline,
+        )
     repository.save_script_for_outline(
         workspace_id,
         outline_id,
         payload["script_plan"],
         payload["episode_1_script"],
         episode_1_pacing=payload["episode_1_pacing"],
+        episode_1_continuity=payload.get("episode_1_continuity"),
     )
     return {
         "outline_id": outline_id,
@@ -67,13 +70,20 @@ def handle_episode_script_generation(task):
         (item for item in episodes if item.get("episode") == episode_number + 1),
         None,
     )
-    generated = generate_episode_script(
-        llm_provider_for(ModelAssignment.PURPOSE_EPISODE_SCRIPT),
-        workspace["selected_outline"],
-        episode,
-        previous_episode=previous_episode,
-        next_episode=next_episode,
-    )
+    continuity_context = _continuity_context(previous_episode)
+    with _audit_context(
+        task,
+        ModelAssignment.PURPOSE_EPISODE_SCRIPT,
+        episode_number=episode_number,
+    ):
+        generated = generate_episode_script(
+            llm_provider_for(ModelAssignment.PURPOSE_EPISODE_SCRIPT),
+            workspace["selected_outline"],
+            episode,
+            previous_episode=previous_episode,
+            next_episode=next_episode,
+            continuity_context=continuity_context,
+        )
     if isinstance(generated, dict):
         full_script = generated["episode_script"]
         pacing_payload = generated.get("pacing")
@@ -86,6 +96,9 @@ def handle_episode_script_generation(task):
         full_script,
         script_id=script_id,
         pacing_payload=pacing_payload,
+        continuity_payload=(
+            generated.get("continuity") if isinstance(generated, dict) else None
+        ),
     )
     return {"episode_number": episode_number}
 
@@ -104,12 +117,18 @@ def handle_storyboard_generation(task):
     kwargs = {}
     if episode.get("pacing_payload"):
         kwargs["pacing"] = episode["pacing_payload"]
-    prompts = generate_storyboard(
-        llm_provider_for(ModelAssignment.PURPOSE_STORYBOARD),
-        episode["full_script"],
+    with _audit_context(
+        task,
+        ModelAssignment.PURPOSE_STORYBOARD,
         episode_number=episode_number,
-        **kwargs,
-    )
+    ):
+        prompts = generate_storyboard(
+            llm_provider_for(ModelAssignment.PURPOSE_STORYBOARD),
+            episode["full_script"],
+            episode_number=episode_number,
+            include_metadata=True,
+            **kwargs,
+        )
     repository.save_storyboard_for_episode(
         workspace_id,
         episode_number,
@@ -118,7 +137,32 @@ def handle_storyboard_generation(task):
     )
     return {
         "episode_number": episode_number,
-        "storyboard_prompt_count": len(prompts),
+        "storyboard_prompt_count": len(prompts["storyboard_prompts"]),
+    }
+
+
+def _audit_context(task, purpose, *, episode_number=None):
+    return audit_llm_requests(
+        project=task.project,
+        task=task,
+        purpose=purpose,
+        target_id=task.target_id,
+        episode_number=episode_number,
+        task_attempt=max(1, task.attempt_count or 1),
+    )
+
+
+def _continuity_context(previous_episode):
+    if not previous_episode:
+        return {}
+    continuity = previous_episode.get("continuity_payload")
+    if isinstance(continuity, dict):
+        carry_out = continuity.get("carry_out")
+        if isinstance(carry_out, dict) and carry_out:
+            return carry_out
+    return {
+        "legacy_summary": str(previous_episode.get("summary") or ""),
+        "legacy_cliffhanger": str(previous_episode.get("cliffhanger") or ""),
     }
 
 

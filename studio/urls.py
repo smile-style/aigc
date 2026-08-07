@@ -21,6 +21,16 @@ urlpatterns = [
         views.project_workbench_page,
         name="project_workbench",
     ),
+    path(
+        "projects/<str:workspace_id>/llm-requests/",
+        views.llm_request_list_view,
+        name="llm_request_list",
+    ),
+    path(
+        "projects/<str:workspace_id>/llm-requests/<int:request_id>/",
+        views.llm_request_detail_view,
+        name="llm_request_detail",
+    ),
     path("films/", video_views.finished_films_page, name="finished_films"),
     path(
         "films/<int:composition_id>/download/",

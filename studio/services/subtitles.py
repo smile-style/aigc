@@ -1100,6 +1100,161 @@ def retime_subtitle_snapshot(
     }
 
 
+def retime_subtitle_snapshot_for_edit_plan(
+    snapshot,
+    edit_plan,
+    normalized_durations_ms,
+    *,
+    max_timeline_drift_ms=None,
+):
+    """Retime body cues and duplicate only the source interval used by the cold open."""
+    segments = list(edit_plan or [])
+    if not segments:
+        return retime_subtitle_snapshot(
+            snapshot,
+            normalized_durations_ms,
+            max_timeline_drift_ms=max_timeline_drift_ms,
+        )
+    if len(segments) != len(normalized_durations_ms):
+        raise ValueError("剪辑计划与标准化视频片段数量不一致。")
+
+    cold_segments = [item for item in segments if item.get("role") == "cold_open"]
+    if not cold_segments:
+        return retime_subtitle_snapshot(
+            snapshot,
+            normalized_durations_ms,
+            max_timeline_drift_ms=max_timeline_drift_ms,
+        )
+
+    body_pairs = [
+        (item, duration)
+        for item, duration in zip(segments, normalized_durations_ms)
+        if item.get("role") != "cold_open"
+    ]
+    source_shots = list(snapshot.get("shots") or [])
+    if len(body_pairs) != len(source_shots):
+        raise ValueError("剪辑计划中的正片镜头与字幕时间轴不一致。")
+
+    body_plan_ids = [str(item.get("shot_id") or "") for item, _ in body_pairs]
+    source_shot_ids = [str(item.get("shot_id") or "") for item in source_shots]
+    if body_plan_ids != source_shot_ids:
+        raise ValueError("剪辑计划中的正片镜头顺序与字幕时间轴不一致。")
+
+    body_durations = [duration for _, duration in body_pairs]
+    body_snapshot = retime_subtitle_snapshot(
+        snapshot,
+        body_durations,
+        max_timeline_drift_ms=max_timeline_drift_ms,
+    )
+    body_offsets = {}
+    offset = 0
+    for shot, duration in zip(body_snapshot["shots"], body_durations):
+        body_offsets[str(shot["shot_id"])] = offset
+        offset += int(duration)
+
+    cues_by_shot = {}
+    for cue in body_snapshot.get("cues", []):
+        cues_by_shot.setdefault(str(cue.get("shot_id") or ""), []).append(cue)
+
+    output_cues = []
+    output_segments = []
+    output_offset = 0
+    planned_duration = 0
+    for index, (segment, normalized_duration) in enumerate(
+        zip(segments, normalized_durations_ms),
+        start=1,
+    ):
+        normalized_duration = max(100, int(normalized_duration))
+        role = str(segment.get("role") or "body")
+        shot_id = str(segment.get("shot_id") or "")
+        in_ms = max(0, int(segment.get("in_ms") or 0))
+        out_value = segment.get("out_ms")
+        out_ms = int(out_value) if out_value is not None else None
+        planned_segment_duration = (
+            max(100, out_ms - in_ms)
+            if out_ms is not None
+            else next(
+                (
+                    int(shot["duration_ms"])
+                    for shot in source_shots
+                    if str(shot.get("shot_id") or "") == shot_id
+                ),
+                normalized_duration,
+            )
+        )
+        planned_duration += planned_segment_duration
+        output_segments.append(
+            {
+                "segment_id": str(segment.get("segment_id") or f"segment-{index}"),
+                "role": role,
+                "shot_id": shot_id,
+                "in_ms": in_ms,
+                "out_ms": out_ms,
+                "duration_ms": normalized_duration,
+                "output_start_ms": output_offset,
+            }
+        )
+
+        source_offset = body_offsets.get(shot_id)
+        if source_offset is None:
+            raise ValueError("剪辑计划中的镜头不在字幕时间轴中。")
+        for cue in cues_by_shot.get(shot_id, []):
+            local_start = int(cue["start_ms"]) - source_offset
+            local_end = int(cue["end_ms"]) - source_offset
+            if role == "cold_open":
+                segment_end = out_ms if out_ms is not None else in_ms + normalized_duration
+                overlap_start = max(local_start, in_ms)
+                overlap_end = min(local_end, segment_end)
+                if overlap_end - overlap_start < 100:
+                    continue
+                start_ms = output_offset + overlap_start - in_ms
+                end_ms = output_offset + overlap_end - in_ms
+                cue_payload = {
+                    **cue,
+                    "start_ms": start_ms,
+                    "end_ms": min(output_offset + normalized_duration, end_ms),
+                    "timeline_role": "cold_open",
+                }
+            else:
+                start_ms = output_offset + local_start
+                end_ms = output_offset + local_end
+                cue_payload = {
+                    **cue,
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "timeline_role": "body",
+                }
+            if cue_payload["end_ms"] - cue_payload["start_ms"] >= 100:
+                output_cues.append(cue_payload)
+        output_offset += normalized_duration
+
+    output_cues.sort(key=lambda item: (item["start_ms"], item["end_ms"]))
+    output_cues = [
+        {**cue, "position": index}
+        for index, cue in enumerate(output_cues, start=1)
+    ]
+    base_timeline = body_snapshot.get("timeline") or {}
+    return {
+        **body_snapshot,
+        "cues": output_cues,
+        "edit_segments": output_segments,
+        "timeline": {
+            **base_timeline,
+            "source_duration_ms": planned_duration,
+            "normalized_duration_ms": output_offset,
+            "max_drift_ms": max(
+                int(base_timeline.get("max_drift_ms") or 0),
+                abs(output_offset - planned_duration),
+            ),
+            "cold_open_duration_ms": sum(
+                item["duration_ms"]
+                for item in output_segments
+                if item["role"] == "cold_open"
+            ),
+        },
+    }
+
+
 def render_srt(snapshot):
     blocks = []
     for index, cue in enumerate(snapshot.get("cues", []), start=1):

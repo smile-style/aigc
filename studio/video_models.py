@@ -289,6 +289,7 @@ class VideoComposition(models.Model):
     video_height = models.PositiveIntegerField(null=True, blank=True)
     include_subtitles = models.BooleanField(default=False)
     subtitle_snapshot = models.JSONField(default=dict, blank=True)
+    edit_plan = models.JSONField(default=list, blank=True)
     subtitle_file = models.FileField(upload_to="videos/subtitles/%Y/%m/%d", blank=True)
     content_hash = models.CharField(max_length=64, blank=True, db_index=True)
     error_message = models.TextField(blank=True)

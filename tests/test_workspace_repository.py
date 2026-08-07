@@ -32,7 +32,7 @@ def test_create_workspace_writes_default_structure():
     assert data["genre"] == GENRES[0]
     assert data["episode_count"] == 60
     assert data["episode_duration_minutes"] == 2
-    assert data["episode_duration_label"] == "内容自适应（约 1–5 分钟）"
+    assert data["episode_duration_label"] == "60–90 秒（目标 75 秒）"
     assert data["outlines"] == []
     assert data["selected_outline_id"] is None
     assert data["script_plan"] == []

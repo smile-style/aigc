@@ -32,6 +32,7 @@ from studio.services.subtitles import (
     render_ass,
     render_srt,
     retime_subtitle_snapshot,
+    retime_subtitle_snapshot_for_edit_plan,
     subtitle_snapshot,
 )
 
@@ -92,7 +93,48 @@ def sync_storyboard_shots(storyboard):
         if created or not shot.character_references.exists():
             _bind_named_characters(shot, characters, names)
     storyboard.shots.exclude(shot_number__in=seen_numbers).delete()
-    return list(storyboard.shots.all())
+    shots = list(storyboard.shots.all())
+    _bind_cold_open_source(storyboard, shots)
+    return shots
+
+
+def _bind_cold_open_source(storyboard, shots):
+    cold_open = dict(getattr(storyboard, "cold_open_payload", {}) or {})
+    if not cold_open:
+        return
+
+    source_number = _as_int(cold_open.get("source_shot_number"), 0)
+    if not source_number and cold_open.get("source_beat_id"):
+        source_beat_id = str(cold_open["source_beat_id"])
+        source_number = next(
+            (
+                _as_int(item.get("shot_number"), 0)
+                for item in reversed(storyboard.prompts_payload or [])
+                if str(item.get("beat_id") or "") == source_beat_id
+            ),
+            0,
+        )
+    source_shot = next(
+        (shot for shot in shots if shot.shot_number == source_number),
+        None,
+    )
+    if source_shot is None:
+        raise ValueError("片花来源镜头不在当前分镜中，请重新生成分镜。")
+
+    duration_ms = max(1000, int(cold_open.get("duration_seconds") or 3) * 1000)
+    shot_duration_ms = source_shot.duration_seconds * 1000
+    trim_start_ms = max(0, _as_int(cold_open.get("trim_start_ms"), 0))
+    trim_start_ms = min(trim_start_ms, max(0, shot_duration_ms - duration_ms))
+    bound_payload = {
+        **cold_open,
+        "source_shot_number": source_shot.shot_number,
+        "source_shot_id": str(source_shot.shot_id),
+        "trim_start_ms": trim_start_ms,
+        "trim_end_ms": trim_start_ms + duration_ms,
+    }
+    if bound_payload != cold_open:
+        storyboard.cold_open_payload = bound_payload
+        storyboard.save(update_fields=["cold_open_payload", "updated_at"])
 
 
 def sync_episode_shots(episode):
@@ -315,19 +357,31 @@ def queue_export(episode, include_subtitles=None):
         if include_subtitles
         else VideoComposition.VARIANT_CLEAN
     )
+    selected = [
+        shot.video_assets.filter(
+            is_selected=True,
+            status=VideoAsset.STATUS_READY,
+        ).first()
+        for shot in sync_episode_shots(episode)
+    ]
+    if not selected or any(asset is None for asset in selected):
+        raise ValueError("所有分镜都生成并选定视频后才能导出。")
+    edit_plan = build_edit_plan(episode, selected)
+    edit_plan_hash = hashlib.sha256(
+        json.dumps(edit_plan, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
     active_tasks = episode.script.project.generation_tasks.filter(
         task_type=GenerationTask.TYPE_VIDEO_EXPORT,
         status__in=[GenerationTask.STATUS_PENDING, GenerationTask.STATUS_RUNNING],
     ).order_by("-created_at", "-id")
     for active in active_tasks:
         snapshot = active.input_snapshot or {}
-        if snapshot.get("episode_id") == episode.id and bool(
-            snapshot.get("include_subtitles")
-        ) == include_subtitles:
+        if (
+            snapshot.get("episode_id") == episode.id
+            and bool(snapshot.get("include_subtitles")) == include_subtitles
+            and snapshot.get("edit_plan_hash") == edit_plan_hash
+        ):
             return active, False
-    selected = [shot.video_assets.filter(is_selected=True, status=VideoAsset.STATUS_READY).first() for shot in sync_episode_shots(episode)]
-    if not selected or any(asset is None for asset in selected):
-        raise ValueError("所有分镜都生成并选定视频后才能导出。")
     subtitle_data = {}
     if include_subtitles:
         if track is None:
@@ -357,6 +411,7 @@ def queue_export(episode, include_subtitles=None):
         status=VideoComposition.STATUS_EXPORTING,
         include_subtitles=include_subtitles,
         subtitle_snapshot=subtitle_data,
+        edit_plan=edit_plan,
     )
     task = GenerationTask.objects.create(
         project=episode.script.project,
@@ -366,6 +421,8 @@ def queue_export(episode, include_subtitles=None):
             "episode_id": episode.id,
             "composition_version": version,
             "video_asset_ids": [asset.id for asset in selected],
+            "edit_plan": edit_plan,
+            "edit_plan_hash": edit_plan_hash,
             "include_subtitles": include_subtitles,
             "subtitle_snapshot": subtitle_data,
         },
@@ -382,9 +439,11 @@ def process_export_task(task_id):
         asset_map = {asset.id: asset for asset in assets}
         ordered = [asset_map[asset_id] for asset_id in task.input_snapshot["video_asset_ids"]]
         subtitle_data = task.input_snapshot.get("subtitle_snapshot") or {}
+        edit_plan = task.input_snapshot.get("edit_plan") or []
         content, subtitle_data = _ffmpeg_concat(
             ordered,
             subtitle_snapshot=subtitle_data,
+            edit_plan=edit_plan,
             return_subtitle_snapshot=True,
         )
         composition.video.save("result.mp4", ContentFile(content), save=False)
@@ -395,6 +454,7 @@ def process_export_task(task_id):
                 save=False,
             )
         composition.subtitle_snapshot = subtitle_data
+        composition.edit_plan = edit_plan
         composition.content_hash = hashlib.sha256(content).hexdigest()
         composition.status = VideoComposition.STATUS_READY
         composition.error_message = ""
@@ -414,6 +474,69 @@ def process_export_task(task_id):
         composition.save(update_fields=["status", "error_message", "updated_at"])
         _fail_task(task, exc)
     return composition
+
+
+def build_edit_plan(episode, selected_assets):
+    body_segments = [
+        {
+            "segment_id": f"body:{asset.shot.shot_id}",
+            "asset_id": asset.id,
+            "asset_version": asset.version,
+            "shot_id": str(asset.shot.shot_id),
+            "shot_number": asset.shot.shot_number,
+            "role": "body",
+            "in_ms": 0,
+            "out_ms": None,
+        }
+        for asset in selected_assets
+    ]
+    try:
+        storyboard = episode.storyboard_prompt
+    except StoryboardPrompt.DoesNotExist:
+        return body_segments
+    cold_open = dict(getattr(storyboard, "cold_open_payload", {}) or {})
+    if not cold_open:
+        return body_segments
+
+    source_shot_id = str(cold_open.get("source_shot_id") or "")
+    source_shot_number = _as_int(cold_open.get("source_shot_number"), 0)
+    source_asset = next(
+        (
+            asset
+            for asset in selected_assets
+            if (
+                (source_shot_id and str(asset.shot.shot_id) == source_shot_id)
+                or (
+                    source_shot_number
+                    and asset.shot.shot_number == source_shot_number
+                )
+            )
+        ),
+        None,
+    )
+    if source_asset is None:
+        raise ValueError("片花来源镜头没有可用的已选视频，请重新选择或生成该镜头。")
+
+    duration_ms = _as_int(cold_open.get("duration_seconds"), 3) * 1000
+    if duration_ms != 3000:
+        raise ValueError("片花时长必须为 3 秒。")
+    trim_start_ms = max(0, _as_int(cold_open.get("trim_start_ms"), 0))
+    trim_end_ms = _as_int(cold_open.get("trim_end_ms"), trim_start_ms + duration_ms)
+    if trim_end_ms - trim_start_ms != duration_ms:
+        raise ValueError("片花裁剪区间必须恰好为 3 秒。")
+
+    cold_segment = {
+        "segment_id": f"cold-open:{source_asset.shot.shot_id}",
+        "asset_id": source_asset.id,
+        "asset_version": source_asset.version,
+        "shot_id": str(source_asset.shot.shot_id),
+        "shot_number": source_asset.shot.shot_number,
+        "source_beat_id": str(cold_open.get("source_beat_id") or ""),
+        "role": "cold_open",
+        "in_ms": trim_start_ms,
+        "out_ms": trim_end_ms,
+    }
+    return [cold_segment, *body_segments]
 
 
 @contextmanager
@@ -569,6 +692,13 @@ def video_page_data(episode, sync=False):
         if sync
         else list(StoryboardShot.objects.filter(storyboard__episode=episode).order_by("position", "shot_number", "id"))
     )
+    try:
+        storyboard = episode.storyboard_prompt
+    except StoryboardPrompt.DoesNotExist:
+        storyboard = None
+    cold_open = dict(getattr(storyboard, "cold_open_payload", {}) or {})
+    source_shot_id = str(cold_open.get("source_shot_id") or "")
+    source_shot_number = _as_int(cold_open.get("source_shot_number"), 0)
     for shot in shots:
         shot.references_for_page = list(
             shot.character_references.select_related("character", "asset")
@@ -582,6 +712,20 @@ def video_page_data(episode, sync=False):
         shot.prompt_source_changed = bool(
             shot.has_prompt_override
             and shot.video_prompt_override_source_hash != _prompt_hash(shot.storyboard_prompt_for_page)
+        )
+        shot.is_cold_open_source = bool(
+            (source_shot_id and str(shot.shot_id) == source_shot_id)
+            or (source_shot_number and shot.shot_number == source_shot_number)
+        )
+        shot.cold_open_trim_start_ms = (
+            _as_int(cold_open.get("trim_start_ms"), 0)
+            if shot.is_cold_open_source
+            else None
+        )
+        shot.cold_open_trim_end_ms = (
+            _as_int(cold_open.get("trim_end_ms"), 3000)
+            if shot.is_cold_open_source
+            else None
         )
     missing_shot_numbers = [shot.shot_number for shot in shots if not shot.selected_video]
     clean_composition = VideoComposition.objects.filter(
@@ -607,6 +751,7 @@ def video_page_data(episode, sync=False):
         "clean_composition": clean_composition,
         "captioned_composition": captioned_composition,
         "composition_versions": composition_versions,
+        "cold_open_payload": cold_open,
         "asset_updates_available": asset_updates_available,
         "counts": {
             "total": len(shots),
@@ -731,6 +876,7 @@ def _ffmpeg_concat(
     assets,
     subtitle_snapshot=None,
     *,
+    edit_plan=None,
     return_subtitle_snapshot=False,
 ):
     ffmpeg = shutil.which("ffmpeg")
@@ -743,14 +889,33 @@ def _ffmpeg_concat(
         temp = Path(temp_dir)
         normalized = []
         normalized_durations_ms = []
-        for index, asset in enumerate(assets, start=1):
+        if edit_plan:
+            asset_map = {asset.id: asset for asset in assets}
+            segments = []
+            for item in edit_plan:
+                asset = asset_map.get(_as_int(item.get("asset_id"), 0))
+                if asset is None:
+                    raise ValueError("剪辑计划引用的视频素材不存在或已被替换。")
+                segments.append((asset, item))
+        else:
+            segments = [(asset, {}) for asset in assets]
+
+        for index, (asset, segment) in enumerate(segments, start=1):
             output = temp / f"normalized-{index:03d}.mp4"
             video_filter = (
                 "scale=720:1280:force_original_aspect_ratio=decrease,"
                 "pad=720:1280:(ow-iw)/2:(oh-ih)/2,fps=25"
             )
             has_audio = _has_audio_stream(ffprobe, asset.video.path)
-            command = [ffmpeg, "-y", "-i", asset.video.path]
+            command = [ffmpeg, "-y"]
+            in_ms = max(0, _as_int(segment.get("in_ms"), 0))
+            out_value = segment.get("out_ms")
+            out_ms = _as_int(out_value, 0) if out_value is not None else None
+            if in_ms:
+                command.extend(["-ss", f"{in_ms / 1000:.3f}"])
+            command.extend(["-i", asset.video.path])
+            if out_ms is not None and out_ms <= in_ms:
+                raise ValueError("剪辑计划中的裁剪结束时间必须晚于开始时间。")
             if not has_audio:
                 command.extend(
                     [
@@ -758,6 +923,8 @@ def _ffmpeg_concat(
                         "anullsrc=channel_layout=stereo:sample_rate=48000",
                     ]
                 )
+            if out_ms is not None:
+                command.extend(["-t", f"{(out_ms - in_ms) / 1000:.3f}"])
             command.extend(
                 [
                     "-map", "0:v:0",
@@ -788,10 +955,17 @@ def _ffmpeg_concat(
         )
         effective_subtitles = subtitle_snapshot or {}
         if effective_subtitles.get("shots"):
-            effective_subtitles = retime_subtitle_snapshot(
-                effective_subtitles,
-                normalized_durations_ms,
-            )
+            if edit_plan:
+                effective_subtitles = retime_subtitle_snapshot_for_edit_plan(
+                    effective_subtitles,
+                    edit_plan,
+                    normalized_durations_ms,
+                )
+            else:
+                effective_subtitles = retime_subtitle_snapshot(
+                    effective_subtitles,
+                    normalized_durations_ms,
+                )
         result = clean_result
         if effective_subtitles.get("cues"):
             ass_path = temp / "subtitles.ass"

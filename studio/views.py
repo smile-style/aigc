@@ -1,3 +1,4 @@
+import inspect
 import logging
 from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -21,13 +22,20 @@ from .llm.provider import (
     LLMJSONParseError,
     LLMProvider,
 )
-from .models import EpisodeWorkflowRun, GenerationTask, ModelAssignment
+from .models import (
+    EpisodeWorkflowRun,
+    GenerationTask,
+    LLMRequestRecord,
+    ModelAssignment,
+    Project,
+)
 from .services.episode_workflow import workflow_payload
 from .repositories.workspace import CURRENT_WORKSPACE_ID, WorkspaceRepository
 from .models import Character
 from .services.characters import apply_character_visual_style, generate_character_profiles
 from .services.covers import decorate_cover_workspace
 from .services.model_config import image_provider_for, llm_provider_for
+from .services.llm_request_audit import audit_llm_requests
 from .services.outline import generate_outlines
 from .services.script import generate_episode_script, generate_script
 from .services.storyboard import generate_storyboard
@@ -62,7 +70,17 @@ def generate_outlines_view(request):
         workspace = None
 
     try:
-        outlines = generate_outlines(llm_provider_for(ModelAssignment.PURPOSE_OUTLINE), genre)
+        workspace = repository.create_workspace(genre, CURRENT_WORKSPACE_ID)
+        project = Project.objects.get(workspace_id=workspace["id"])
+        with audit_llm_requests(
+            project=project,
+            purpose=ModelAssignment.PURPOSE_OUTLINE,
+            target_id="outline-candidates",
+        ):
+            outlines = generate_outlines(
+                llm_provider_for(ModelAssignment.PURPOSE_OUTLINE),
+                genre,
+            )
         workspace = repository.replace_current_outline_set(genre, outlines)
     except EXPECTED_GENERATION_ERRORS as exc:
         return _render_outline(request, workspace=workspace, error=str(exc), genre=genre)
@@ -495,6 +513,78 @@ def task_status_view(request, task_id):
     return JsonResponse(task)
 
 
+def _llm_request_metadata(record):
+    return {
+        "id": record.id,
+        "task_id": record.task_id,
+        "purpose": record.purpose,
+        "target_id": record.target_id,
+        "episode_number": record.episode_number,
+        "task_attempt": record.task_attempt,
+        "call_sequence": record.call_sequence,
+        "model": record.model,
+        "temperature": record.temperature,
+        "payload_hash": record.payload_hash,
+        "status": record.status,
+        "error_message": record.error_message,
+        "created_at": record.created_at.isoformat(),
+        "completed_at": (
+            record.completed_at.isoformat() if record.completed_at else None
+        ),
+    }
+
+
+def _audit_project(workspace_id):
+    try:
+        return Project.objects.get(workspace_id=workspace_id)
+    except Project.DoesNotExist as exc:
+        raise Http404("Project not found") from exc
+
+
+@require_GET
+def llm_request_list_view(request, workspace_id):
+    project = _audit_project(workspace_id)
+    queryset = project.llm_request_records.select_related("task").all()
+
+    purpose = request.GET.get("purpose", "").strip()
+    target_id = request.GET.get("target_id", "").strip()
+    episode_number = request.GET.get("episode_number", "").strip()
+    task_id = request.GET.get("task_id", "").strip()
+    if purpose:
+        queryset = queryset.filter(purpose=purpose)
+    if target_id:
+        queryset = queryset.filter(target_id=target_id)
+    try:
+        if episode_number:
+            queryset = queryset.filter(episode_number=int(episode_number))
+        if task_id:
+            queryset = queryset.filter(task_id=int(task_id))
+        limit = min(max(int(request.GET.get("limit", 100)), 1), 200)
+    except ValueError:
+        return JsonResponse({"error": "Invalid numeric filter"}, status=400)
+
+    total = queryset.count()
+    records = list(queryset[:limit])
+    return JsonResponse(
+        {
+            "requests": [_llm_request_metadata(record) for record in records],
+            "total": total,
+        }
+    )
+
+
+@require_GET
+def llm_request_detail_view(request, workspace_id, request_id):
+    project = _audit_project(workspace_id)
+    try:
+        record = project.llm_request_records.select_related("task").get(pk=request_id)
+    except LLMRequestRecord.DoesNotExist as exc:
+        raise Http404("LLM request record not found") from exc
+    payload = _llm_request_metadata(record)
+    payload["sanitized_payload"] = record.sanitized_payload
+    return JsonResponse(payload)
+
+
 @require_POST
 def retry_generation_task_view(request, task_id):
     from .generation_queue import retry_task
@@ -567,7 +657,26 @@ def _run_character_image_generation(task_id):
     finally:
         close_old_connections()
 
+def _previous_continuity(previous_episode):
+    if not previous_episode:
+        return {}
+    continuity = previous_episode.get("continuity_payload")
+    if isinstance(continuity, dict):
+        carry_out = continuity.get("carry_out")
+        if isinstance(carry_out, dict) and carry_out:
+            return carry_out
+    return {
+        "legacy_summary": str(previous_episode.get("summary") or ""),
+        "legacy_cliffhanger": str(previous_episode.get("cliffhanger") or ""),
+    }
 
+
+def _accepts_keyword(callback, keyword):
+    parameters = inspect.signature(callback).parameters
+    return keyword in parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
 
 
 def _run_episode_script_generation(task_id):
@@ -600,13 +709,28 @@ def _run_episode_script_generation(task_id):
             ),
             None,
         )
-        generated = generate_episode_script(
-            llm_provider_for(ModelAssignment.PURPOSE_EPISODE_SCRIPT),
-            workspace["selected_outline"],
-            episode,
-            previous_episode=previous_episode,
-            next_episode=next_episode,
-        )
+        continuity_context = _previous_continuity(previous_episode)
+        task_model = GenerationTask.objects.select_related("project").get(pk=task_id)
+        with audit_llm_requests(
+            project=task_model.project,
+            task=task_model,
+            purpose=ModelAssignment.PURPOSE_EPISODE_SCRIPT,
+            target_id=task_model.target_id,
+            episode_number=episode_number,
+            task_attempt=max(1, task_model.attempt_count or 1),
+        ):
+            generation_kwargs = {
+                "previous_episode": previous_episode,
+                "next_episode": next_episode,
+            }
+            if _accepts_keyword(generate_episode_script, "continuity_context"):
+                generation_kwargs["continuity_context"] = continuity_context
+            generated = generate_episode_script(
+                llm_provider_for(ModelAssignment.PURPOSE_EPISODE_SCRIPT),
+                workspace["selected_outline"],
+                episode,
+                **generation_kwargs,
+            )
         if isinstance(generated, dict):
             full_script = generated["episode_script"]
             pacing_payload = generated.get("pacing")
@@ -619,6 +743,9 @@ def _run_episode_script_generation(task_id):
             full_script,
             script_id=script_id,
             pacing_payload=pacing_payload,
+            continuity_payload=(
+                generated.get("continuity") if isinstance(generated, dict) else None
+            ),
         )
         repository.finish_task(task_id, result={"episode_number": episode_number})
     except Exception as exc:
@@ -654,12 +781,23 @@ def _run_storyboard_generation(task_id):
         storyboard_kwargs = {}
         if episode.get("pacing_payload"):
             storyboard_kwargs["pacing"] = episode["pacing_payload"]
-        prompts = generate_storyboard(
-            llm_provider_for(ModelAssignment.PURPOSE_STORYBOARD),
-            episode["full_script"],
+        task_model = GenerationTask.objects.select_related("project").get(pk=task_id)
+        with audit_llm_requests(
+            project=task_model.project,
+            task=task_model,
+            purpose=ModelAssignment.PURPOSE_STORYBOARD,
+            target_id=task_model.target_id,
             episode_number=episode_number,
-            **storyboard_kwargs,
-        )
+            task_attempt=max(1, task_model.attempt_count or 1),
+        ):
+            if _accepts_keyword(generate_storyboard, "include_metadata"):
+                storyboard_kwargs["include_metadata"] = True
+            prompts = generate_storyboard(
+                llm_provider_for(ModelAssignment.PURPOSE_STORYBOARD),
+                episode["full_script"],
+                episode_number=episode_number,
+                **storyboard_kwargs,
+            )
         repository.save_storyboard_for_episode(
             workspace_id,
             episode_number,
@@ -670,7 +808,11 @@ def _run_storyboard_generation(task_id):
             task_id,
             result={
                 "episode_number": episode_number,
-                "storyboard_prompt_count": len(prompts),
+                "storyboard_prompt_count": len(
+                    prompts.get("storyboard_prompts", [])
+                    if isinstance(prompts, dict)
+                    else prompts
+                ),
             },
         )
     except Exception as exc:
@@ -692,13 +834,23 @@ def _run_script_generation(workspace_id, outline_id):
         outline = _outline_by_id(workspace, outline_id)
         if outline is None:
             raise FileNotFoundError(f"Outline not found: {outline_id}")
-        payload = generate_script(llm_provider_for(ModelAssignment.PURPOSE_SCRIPT), outline)
+        project = Project.objects.get(workspace_id=workspace_id)
+        with audit_llm_requests(
+            project=project,
+            purpose=ModelAssignment.PURPOSE_SCRIPT,
+            target_id=outline_id,
+        ):
+            payload = generate_script(
+                llm_provider_for(ModelAssignment.PURPOSE_SCRIPT),
+                outline,
+            )
         repository.save_script_for_outline(
             workspace_id,
             outline_id,
             payload["script_plan"],
             payload["episode_1_script"],
             episode_1_pacing=payload["episode_1_pacing"],
+            episode_1_continuity=payload.get("episode_1_continuity"),
         )
     except EXPECTED_GENERATION_ERRORS as exc:
         logger.exception("Script generation failed for outline %s", outline_id)

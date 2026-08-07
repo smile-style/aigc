@@ -35,6 +35,7 @@ from studio.services.subtitles import (
     render_ass,
     render_srt,
     retime_subtitle_snapshot,
+    retime_subtitle_snapshot_for_edit_plan,
     save_shot_subtitle,
     save_subtitle_style,
     save_subtitle_track,
@@ -43,6 +44,7 @@ from studio.services.subtitles import (
     subtitle_source_hash,
 )
 from studio.services.video import (
+    build_edit_plan,
     effective_video_prompt,
     queue_episode_videos,
     queue_export,
@@ -311,6 +313,46 @@ def test_each_export_creates_a_new_composition_version():
         .values_list("version", flat=True)
     ) == [1, 2]
     assert first_task.target_id != second_task.target_id
+
+
+def test_queue_export_freezes_cold_open_trim_and_reuses_the_source_asset():
+    _, episode, storyboard = make_episode(with_character=False)
+    shots = sync_storyboard_shots(storyboard)
+    assets = []
+    for index, shot in enumerate(shots, start=1):
+        asset = VideoAsset.objects.create(
+            shot=shot,
+            version=2,
+            status=VideoAsset.STATUS_READY,
+            prompt_snapshot="prompt",
+            is_selected=True,
+        )
+        asset.video.save(f"cold-open-{index}.mp4", ContentFile(b"video"))
+        assets.append(asset)
+    storyboard.cold_open_payload = {
+        "hook_type": "reversal_dialogue",
+        "source_beat_id": "beat_05_resolution_or_reversal",
+        "source_shot_number": 2,
+        "duration_seconds": 3,
+        "withheld_reveal": "答案",
+        "return_bridge": "两小时前",
+        "trim_start_ms": 500,
+        "trim_end_ms": 3500,
+    }
+    storyboard.save(update_fields=["cold_open_payload", "updated_at"])
+    sync_storyboard_shots(storyboard)
+
+    task, created = queue_export(episode, include_subtitles=False)
+    composition = VideoComposition.objects.get(pk=task.target_id)
+
+    assert created is True
+    assert len(composition.edit_plan) == len(assets) + 1
+    assert composition.edit_plan[0]["role"] == "cold_open"
+    assert composition.edit_plan[0]["asset_id"] == assets[1].id
+    assert composition.edit_plan[0]["out_ms"] - composition.edit_plan[0]["in_ms"] == 3000
+    assert composition.edit_plan[-1]["asset_id"] == assets[1].id
+    assert task.input_snapshot["video_asset_ids"] == [asset.id for asset in assets]
+    assert task.input_snapshot["edit_plan_hash"]
 
 
 def test_ffmpeg_export_preserves_audio_without_subtitles(tmp_path, monkeypatch):
@@ -1410,6 +1452,116 @@ def test_ffmpeg_export_retimes_subtitles_from_normalized_clips(tmp_path, monkeyp
     assert content == b"exported-video"
     assert effective["cues"][0]["start_ms"] == 5300
     assert effective["timeline"]["max_drift_ms"] == 200
+
+
+def test_cold_open_subtitles_are_cropped_then_body_cues_shift_by_three_seconds():
+    snapshot = {
+        "style": {},
+        "global_offset_ms": 0,
+        "shots": [
+            {"shot_id": "shot-1", "duration_ms": 6000},
+            {"shot_id": "shot-2", "duration_ms": 4000},
+        ],
+        "cues": [
+            {
+                "position": 1,
+                "shot_id": "shot-2",
+                "text": "反转台词",
+                "start_ms": 6500,
+                "end_ms": 8500,
+                "local_start_ms": 500,
+                "local_end_ms": 2500,
+                "shot_offset_ms": 0,
+                "style": {},
+            }
+        ],
+    }
+    edit_plan = [
+        {
+            "segment_id": "cold-open:shot-2",
+            "asset_id": 2,
+            "shot_id": "shot-2",
+            "role": "cold_open",
+            "in_ms": 0,
+            "out_ms": 3000,
+        },
+        {
+            "segment_id": "body:shot-1",
+            "asset_id": 1,
+            "shot_id": "shot-1",
+            "role": "body",
+            "in_ms": 0,
+            "out_ms": None,
+        },
+        {
+            "segment_id": "body:shot-2",
+            "asset_id": 2,
+            "shot_id": "shot-2",
+            "role": "body",
+            "in_ms": 0,
+            "out_ms": None,
+        },
+    ]
+
+    effective = retime_subtitle_snapshot_for_edit_plan(
+        snapshot,
+        edit_plan,
+        [3000, 6000, 4000],
+    )
+
+    assert [(cue["timeline_role"], cue["start_ms"], cue["end_ms"]) for cue in effective["cues"]] == [
+        ("cold_open", 500, 2500),
+        ("body", 9500, 11500),
+    ]
+    assert effective["timeline"]["normalized_duration_ms"] == 13000
+    assert effective["timeline"]["cold_open_duration_ms"] == 3000
+
+
+def test_ffmpeg_edit_plan_trims_cold_open_before_reusing_full_asset(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    asset = SimpleNamespace(
+        id=7,
+        video=SimpleNamespace(path=str(source)),
+        shot=SimpleNamespace(shot_id="shot-7", duration_seconds=6),
+    )
+    commands = []
+    monkeypatch.setattr("studio.services.video.shutil.which", lambda name: name)
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if command[0] == "ffprobe":
+            return SimpleNamespace(stdout="0\n")
+        Path(command[-1]).write_bytes(b"exported-video")
+        return SimpleNamespace(stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("studio.services.video.subprocess.run", fake_run)
+    edit_plan = [
+        {
+            "asset_id": 7,
+            "shot_id": "shot-7",
+            "role": "cold_open",
+            "in_ms": 500,
+            "out_ms": 3500,
+        },
+        {
+            "asset_id": 7,
+            "shot_id": "shot-7",
+            "role": "body",
+            "in_ms": 0,
+            "out_ms": None,
+        },
+    ]
+
+    content = _ffmpeg_concat([asset], edit_plan=edit_plan)
+
+    normalize_commands = [command for command in commands if "-vf" in command]
+    assert content == b"exported-video"
+    assert len(normalize_commands) == 2
+    assert normalize_commands[0][normalize_commands[0].index("-ss") + 1] == "0.500"
+    assert normalize_commands[0][normalize_commands[0].index("-t") + 1] == "3.000"
+    assert "-ss" not in normalize_commands[1]
+    assert "-t" not in normalize_commands[1]
 
 
 def test_subtitle_generate_save_and_download_views(client):

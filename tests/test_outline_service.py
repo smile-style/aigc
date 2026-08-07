@@ -44,6 +44,11 @@ def test_generate_outlines_returns_six_candidates():
     assert outlines[0]["id"] == "outline-1"
     assert "逆袭爽文" in provider.messages[-1]["content"]
     assert "60集" in provider.messages[-1]["content"]
+    assert "60 到 90 秒" in provider.messages[-1]["content"]
+    assert "75 秒" in provider.messages[-1]["content"]
+    assert "前 3 秒" in provider.messages[-1]["content"]
+    assert "后段真实剧情" in provider.messages[-1]["content"]
+    assert "5 到 8 秒" in provider.messages[-1]["content"]
     assert provider.temperature == 0.9
 
 
