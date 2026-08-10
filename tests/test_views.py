@@ -896,6 +896,67 @@ def test_episode_script_route_auto_opens_requested_episode_modal(client):
     assert 'id="episode-script-1" data-auto-open' in content
 
 
+def test_episode_script_modal_renders_scrolling_layout_and_accessible_pacing(client):
+    workspace = write_workspace(
+        script_plan=script_payload()["script_plan"],
+        episode_1_script="第一幕\n" + "长剧本文本。\n" * 80,
+    )
+    episode = Episode.objects.get(
+        script_id=workspace["script_id"],
+        episode_number=1,
+    )
+    episode.plan_payload = {
+        **episode.plan_payload,
+        "episode_goal": "进入洞房并找到救人的办法",
+        "obstacle_1": "夜璃身中奇毒",
+        "obstacle_2": "寿命交易带来新的代价",
+        "resolution_or_reversal": "陆离用三年寿命换来解药",
+        "next_crisis": "验身使闯入洞房",
+    }
+    episode.pacing_payload = {
+        "duration_seconds": 210,
+        "cold_open": {
+            "duration_seconds": 3,
+            "source_beat_id": "beat_05_resolution_or_reversal",
+        },
+        "beats": [
+            {"beat_type": "crisis_open", "start_second": 0, "end_second": 3, "event": "片花"},
+            {"beat_type": "protagonist_goal", "start_second": 3, "end_second": 32, "event": "目标"},
+            {"beat_type": "obstacle_1", "start_second": 32, "end_second": 78, "event": "阻碍"},
+            {"beat_type": "obstacle_2", "start_second": 78, "end_second": 132, "event": "升级"},
+            {"beat_type": "resolution_or_reversal", "start_second": 132, "end_second": 186, "event": "反转"},
+            {"beat_type": "next_crisis", "start_second": 186, "end_second": 210, "event": "尾钩"},
+        ],
+        "information_beats": [
+            {"at_second": second, "information": f"信息 {second}", "consequence": "推进剧情"}
+            for second in (3, 18, 32, 48, 64, 78, 96, 114, 132, 150, 168, 186, 198, 210)
+        ],
+    }
+    episode.save(
+        update_fields=[
+            "plan_payload",
+            "pacing_payload",
+            "updated_at",
+        ]
+    )
+
+    response = client.get(
+        reverse("studio:episode_script", args=[workspace["id"], 1])
+    )
+
+    content = response.content.decode("utf-8")
+    assert response.status_code == 200
+    assert 'class="detail-modal script-detail-modal"' in content
+    assert 'class="script-modal-body" data-script-modal-scroll' in content
+    assert 'class="episode-story-grid" aria-label="本集剧情概览"' in content
+    assert 'class="episode-story-item episode-story-summary"' in content
+    assert 'data-pacing-duration="210"' in content
+    assert content.count('role="listitem"') == 6
+    assert content.count('class="pacing-marker"') == 14
+    assert 'class="pacing-legend-item"' in content
+    assert 'id="episode-script-content-title-1"' in content
+
+
 def test_generate_characters_starts_background_task(client, monkeypatch):
     workspace = write_workspace(
         script_plan=script_payload()["script_plan"],

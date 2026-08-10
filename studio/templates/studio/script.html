@@ -257,87 +257,99 @@
           </article>
 
           {% if episode.has_script %}
-            <div class="detail-modal" id="episode-script-{{ episode.episode }}" {% if selected_episode.episode == episode.episode %}data-auto-open{% endif %} hidden>
+            <div class="detail-modal script-detail-modal" id="episode-script-{{ episode.episode }}" {% if selected_episode.episode == episode.episode %}data-auto-open{% endif %} hidden>
               <div class="modal-scrim" data-modal-close></div>
               <section class="modal-panel script-modal-panel" role="dialog" aria-modal="true" aria-labelledby="episode-title-{{ episode.episode }}">
                 <div class="modal-head"><div><p class="eyebrow">Episode {{ episode.episode }}</p><h3 id="episode-title-{{ episode.episode }}">第 {{ episode.episode }} 集 · {{ episode.title }}</h3></div><button class="icon-button" type="button" data-modal-close aria-label="关闭剧本"><span aria-hidden="true">&times;</span></button></div>
-                <dl class="three-column-list">
-                  <div><dt>摘要</dt><dd>{{ episode.summary }}</dd></div><div><dt>冲突</dt><dd>{{ episode.key_conflict }}</dd></div><div><dt>悬念</dt><dd>{{ episode.cliffhanger }}</dd></div>
-                  {% if episode.episode_goal %}<div><dt>本集目标</dt><dd>{{ episode.episode_goal }}</dd></div>{% endif %}
-                  {% if episode.obstacle_1 %}<div><dt>第一次阻碍</dt><dd>{{ episode.obstacle_1 }}</dd></div>{% endif %}
-                  {% if episode.obstacle_2 %}<div><dt>第二次阻碍</dt><dd>{{ episode.obstacle_2 }}</dd></div>{% endif %}
-                  {% if episode.resolution_or_reversal %}<div><dt>解决 / 反转</dt><dd>{{ episode.resolution_or_reversal }}</dd></div>{% endif %}
-                  {% if episode.next_crisis %}<div><dt>下集危机</dt><dd>{{ episode.next_crisis }}</dd></div>{% endif %}
-                </dl>
-                {% if episode.pacing_payload %}
-                  <section
-                    class="pacing-overview"
-                    aria-labelledby="episode-pacing-title-{{ episode.episode }}"
-                    data-pacing-track
-                    data-pacing-duration="{{ episode.pacing_payload.duration_seconds }}"
-                  >
-                    <div class="pacing-overview-head">
-                      <div>
-                        <p class="eyebrow">Pacing</p>
-                        <h4 id="episode-pacing-title-{{ episode.episode }}">{{ episode.pacing_payload.duration_seconds }} 秒节奏轨</h4>
-                      </div>
-                      <div class="pacing-overview-status">
-                        <span>{{ episode.pacing_payload.information_beats|length }} 个信息点</span>
-                        {% if episode.cold_open_payload.source_shot_number %}
-                          <span class="status-pill success">片花已绑定镜头 {{ episode.cold_open_payload.source_shot_number }}</span>
-                        {% elif episode.pacing_payload.cold_open.source_beat_id %}
-                          <span class="status-pill warning">片花待分镜绑定</span>
-                        {% endif %}
-                      </div>
-                    </div>
-                    {% if episode.pacing_payload.beats %}
-                      <div class="pacing-timeline">
-                        <div class="pacing-segments" aria-label="剧情节拍">
-                          {% for beat in episode.pacing_payload.beats %}
-                            <span
-                              class="pacing-segment pacing-segment-{{ beat.beat_type }}"
-                              data-pacing-start="{{ beat.start_second }}"
-                              data-pacing-end="{{ beat.end_second }}"
-                              aria-label="{{ beat.start_second }} 到 {{ beat.end_second }} 秒，{{ beat.event }}"
-                              title="{{ beat.start_second }}–{{ beat.end_second }} 秒 · {{ beat.event }}"
-                            >
-                              <b class="pacing-segment-label">
-                                {% if beat.beat_type == "crisis_open" %}片花{% elif beat.beat_type == "protagonist_goal" %}目标{% elif beat.beat_type == "obstacle_1" %}阻碍{% elif beat.beat_type == "obstacle_2" %}升级{% elif beat.beat_type == "resolution_or_reversal" %}反转{% elif beat.beat_type == "next_crisis" %}尾钩{% else %}{{ beat.beat_type }}{% endif %}
-                              </b>
-                              <small>{{ beat.start_second }}–{{ beat.end_second }}s</small>
-                            </span>
-                          {% endfor %}
+                <div class="script-modal-body" data-script-modal-scroll>
+                  <dl class="episode-story-grid" aria-label="本集剧情概览">
+                    <div class="episode-story-item episode-story-summary"><dt>摘要</dt><dd>{{ episode.summary }}</dd></div>
+                    <div class="episode-story-item"><dt>冲突</dt><dd>{{ episode.key_conflict }}</dd></div>
+                    <div class="episode-story-item"><dt>悬念</dt><dd>{{ episode.cliffhanger }}</dd></div>
+                    {% if episode.episode_goal %}<div class="episode-story-item"><dt>本集目标</dt><dd>{{ episode.episode_goal }}</dd></div>{% endif %}
+                    {% if episode.obstacle_1 %}<div class="episode-story-item"><dt>第一次阻碍</dt><dd>{{ episode.obstacle_1 }}</dd></div>{% endif %}
+                    {% if episode.obstacle_2 %}<div class="episode-story-item"><dt>第二次阻碍</dt><dd>{{ episode.obstacle_2 }}</dd></div>{% endif %}
+                    {% if episode.resolution_or_reversal %}<div class="episode-story-item"><dt>解决 / 反转</dt><dd>{{ episode.resolution_or_reversal }}</dd></div>{% endif %}
+                    {% if episode.next_crisis %}<div class="episode-story-item"><dt>下集危机</dt><dd>{{ episode.next_crisis }}</dd></div>{% endif %}
+                  </dl>
+                  {% if episode.pacing_payload %}
+                    <section
+                      class="pacing-overview"
+                      aria-labelledby="episode-pacing-title-{{ episode.episode }}"
+                      data-pacing-track
+                      data-pacing-duration="{{ episode.pacing_payload.duration_seconds }}"
+                    >
+                      <div class="pacing-overview-head">
+                        <div>
+                          <p class="eyebrow">Pacing</p>
+                          <h4 id="episode-pacing-title-{{ episode.episode }}">{{ episode.pacing_payload.duration_seconds }} 秒节奏轨</h4>
                         </div>
-                        {% if episode.pacing_payload.information_beats %}
-                          <div class="pacing-markers" aria-label="信息点">
-                            {% for item in episode.pacing_payload.information_beats %}
+                        <div class="pacing-overview-status">
+                          <span class="pacing-legend-item"><i class="pacing-legend-swatch" aria-hidden="true"></i>{{ episode.pacing_payload.cold_open.duration_seconds|default:"3" }} 秒片花</span>
+                          <span>{{ episode.pacing_payload.information_beats|length }} 个信息点</span>
+                          {% if episode.cold_open_payload.source_shot_number %}
+                            <span class="status-pill success">片花已绑定镜头 {{ episode.cold_open_payload.source_shot_number }}</span>
+                          {% elif episode.pacing_payload.cold_open.source_beat_id %}
+                            <span class="status-pill warning">片花待分镜绑定</span>
+                          {% endif %}
+                        </div>
+                      </div>
+                      {% if episode.pacing_payload.beats %}
+                        <div class="pacing-timeline">
+                          <div class="pacing-segments" role="list" aria-label="剧情节拍">
+                            {% for beat in episode.pacing_payload.beats %}
                               <span
-                                class="pacing-marker"
-                                data-pacing-at="{{ item.at_second }}"
-                                title="{{ item.at_second }} 秒 · {{ item.information }} · {{ item.consequence }}"
-                              ><span class="sr-only">{{ item.at_second }} 秒：{{ item.information }}，{{ item.consequence }}</span></span>
+                                class="pacing-segment pacing-segment-{{ beat.beat_type }}"
+                                data-pacing-start="{{ beat.start_second }}"
+                                data-pacing-end="{{ beat.end_second }}"
+                                role="listitem"
+                                aria-label="{{ beat.start_second }} 到 {{ beat.end_second }} 秒，{{ beat.event }}"
+                                title="{{ beat.start_second }}–{{ beat.end_second }} 秒 · {{ beat.event }}"
+                              >
+                                <b class="pacing-segment-label">
+                                  {% if beat.beat_type == "crisis_open" %}片花{% elif beat.beat_type == "protagonist_goal" %}目标{% elif beat.beat_type == "obstacle_1" %}阻碍{% elif beat.beat_type == "obstacle_2" %}升级{% elif beat.beat_type == "resolution_or_reversal" %}反转{% elif beat.beat_type == "next_crisis" %}尾钩{% else %}{{ beat.beat_type }}{% endif %}
+                                </b>
+                                <small>{{ beat.start_second }}–{{ beat.end_second }}s</small>
+                              </span>
                             {% endfor %}
                           </div>
-                        {% endif %}
-                      </div>
-                    {% endif %}
-                  </section>
-                {% endif %}
-                <pre class="script-block modal-script">{{ episode.full_script }}</pre>
-                <div class="episode-automation-actions">
-                  {% if episode.workflow.status == 'queued' or episode.workflow.status == 'running' %}
-                    <button class="primary-button" type="button" disabled>&#27491;&#22312;&#29983;&#25104;&#25104;&#29255; {{ episode.workflow.progress_percent }}%</button>
-                  {% elif episode.workflow.status == 'failed' %}
-                    <form method="post" action="{% url 'studio:retry_episode_workflow' episode.workflow.id %}" data-submit-guard>{% csrf_token %}<button class="primary-button" type="submit">&#20174;&#22833;&#36133;&#27493;&#39588;&#32487;&#32493;</button></form>
-                  {% elif episode.workflow.status == 'succeeded' %}
-                    <a class="primary-button" href="{% url 'studio:video_script_episode' workspace.id workspace.script_id episode.episode %}?tab=assembly">&#26597;&#30475;&#25104;&#29255;</a>
-                  {% else %}
-                    <form method="post" action="{% url 'studio:start_episode_workflow' workspace.id episode.episode %}" data-submit-guard>
-                      {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
-                      <label class="workflow-caption-option"><input type="checkbox" name="generate_captioned_video" value="1" {% if workspace.workflow_generate_captioned_video %}checked{% endif %}>&#29983;&#25104;&#23383;&#24149;&#29256;</label>
-                      <button class="primary-button" type="submit" data-loading-text="&#27491;&#22312;&#21551;&#21160;...">&#19968;&#38190;&#29983;&#25104;&#25104;&#29255;</button>
-                    </form>
+                          {% if episode.pacing_payload.information_beats %}
+                            <div class="pacing-markers" aria-label="信息点">
+                              {% for item in episode.pacing_payload.information_beats %}
+                                <span
+                                  class="pacing-marker"
+                                  data-pacing-at="{{ item.at_second }}"
+                                  title="{{ item.at_second }} 秒 · {{ item.information }} · {{ item.consequence }}"
+                                ><span class="sr-only">{{ item.at_second }} 秒：{{ item.information }}，{{ item.consequence }}</span></span>
+                              {% endfor %}
+                            </div>
+                          {% endif %}
+                        </div>
+                      {% endif %}
+                    </section>
                   {% endif %}
+                  <section class="script-modal-script-section" aria-labelledby="episode-script-content-title-{{ episode.episode }}">
+                    <div class="script-modal-section-head">
+                      <p class="eyebrow">Script</p>
+                      <h4 id="episode-script-content-title-{{ episode.episode }}">完整剧本</h4>
+                    </div>
+                    <pre class="script-block modal-script">{{ episode.full_script }}</pre>
+                  </section>
+                  <div class="episode-automation-actions">
+                    {% if episode.workflow.status == 'queued' or episode.workflow.status == 'running' %}
+                      <button class="primary-button" type="button" disabled>&#27491;&#22312;&#29983;&#25104;&#25104;&#29255; {{ episode.workflow.progress_percent }}%</button>
+                    {% elif episode.workflow.status == 'failed' %}
+                      <form method="post" action="{% url 'studio:retry_episode_workflow' episode.workflow.id %}" data-submit-guard>{% csrf_token %}<button class="primary-button" type="submit">&#20174;&#22833;&#36133;&#27493;&#39588;&#32487;&#32493;</button></form>
+                    {% elif episode.workflow.status == 'succeeded' %}
+                      <a class="primary-button" href="{% url 'studio:video_script_episode' workspace.id workspace.script_id episode.episode %}?tab=assembly">&#26597;&#30475;&#25104;&#29255;</a>
+                    {% else %}
+                      <form method="post" action="{% url 'studio:start_episode_workflow' workspace.id episode.episode %}" data-submit-guard>
+                        {% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}">
+                        <label class="workflow-caption-option"><input type="checkbox" name="generate_captioned_video" value="1" {% if workspace.workflow_generate_captioned_video %}checked{% endif %}>&#29983;&#25104;&#23383;&#24149;&#29256;</label>
+                        <button class="primary-button" type="submit" data-loading-text="&#27491;&#22312;&#21551;&#21160;...">&#19968;&#38190;&#29983;&#25104;&#25104;&#29255;</button>
+                      </form>
+                    {% endif %}
+                  </div>
                 </div>
                 <div class="modal-actions"><form method="post" action="{% url 'studio:generate_episode_script' workspace.id episode.episode %}" data-submit-guard>{% csrf_token %}<input type="hidden" name="script_id" value="{{ workspace.script_id }}"><button class="secondary-button" type="submit">重新生成</button></form><a class="primary-button" href="{% url 'studio:storyboard_script_episode' workspace.id workspace.script_id episode.episode %}">进入分镜</a></div>
               </section>

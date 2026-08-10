@@ -129,7 +129,9 @@ document.addEventListener("DOMContentLoaded", () => {
     document.body.appendChild(modal);
     if (trigger instanceof HTMLElement) modalTriggers.set(modal, trigger);
     modal.hidden = false;
-    const scrollArea = modal.querySelector("[data-outline-detail-scroll], .modal-script, .llm-request-view");
+    const scrollArea = modal.querySelector(
+      "[data-script-modal-scroll], [data-outline-detail-scroll], .modal-script, .llm-request-view",
+    );
     if (scrollArea instanceof HTMLElement) scrollArea.scrollTop = 0;
     syncModalState();
     const initialFocus = modal.querySelector(
@@ -529,7 +531,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const start = Number(segment.dataset.pacingStart);
       const end = Number(segment.dataset.pacingEnd);
       if (!Number.isFinite(start) || !Number.isFinite(end)) return;
-      segment.style.setProperty("--pacing-span", String(Math.max(1, end - start)));
+      const span = Math.max(1, end - start);
+      segment.style.setProperty("--pacing-span", String(span));
+      segment.classList.toggle(
+        "is-compact",
+        segment.classList.contains("pacing-segment-crisis_open") && span / duration < 0.08,
+      );
     });
     track.querySelectorAll("[data-pacing-at]").forEach((marker) => {
       const at = Number(marker.dataset.pacingAt);
